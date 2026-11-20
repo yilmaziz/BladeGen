@@ -19,12 +19,16 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-# the bladegen package lives in <build>/python (cmake --preset python); BLADEGEN_PY overrides
+# the bladegen package lives in <build>/python (cmake --preset python): found on PYTHONPATH,
+# else in $BLADEGEN_PY, else in the default build folder of this checkout
 REPO = Path.cwd().resolve().parents[1]
-for cand in [os.environ.get("BLADEGEN_PY", ""), REPO / "build" / "python" / "python"]:
-    if cand and Path(cand).is_dir() and str(cand) not in sys.path:
-        sys.path.insert(0, str(cand))
-import bladegen as bg
+try:
+    import bladegen as bg
+except ImportError:
+    for cand in [os.environ.get("BLADEGEN_PY", ""), REPO / "build" / "python" / "python"]:
+        if cand and Path(cand).is_dir():
+            sys.path.insert(0, str(cand))
+    import bladegen as bg
 import bladegen.notebook as nb
 OUT = Path(os.environ.get("BLADEGEN_TEST_OUTPUT", REPO / "build" / "notebook_output"))
 OUT.mkdir(parents=True, exist_ok=True)

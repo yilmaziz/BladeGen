@@ -264,23 +264,59 @@ FilletResult rolling_ball_fillet(const TopoDS_Shape& blade, const TopoDS_Face& b
     const int ns = opt.stations;
     std::vector<Vec3> spine, pb, ph;
     std::vector<Vec2> uvb;
-    for (int i = 0; i < ns; ++i) {
-        const double u = u1 + (u2 - u1) * i / ns;
-        auto g = [&](double v) {
-            const auto [p, n] = point_normal(u, v);
-            return gap(p + r * side * n);
-        };
-        const double vs = Math::first_root(g, v1, v1 + 0.7 * (v2 - v1), 140, 1e-15);
-        if (!std::isfinite(vs)) {
-            res.message = "no ball position at blade station u = " + std::to_string(u);
+    auto stations = [&](const std::vector<double>& us) {
+        spine.clear();
+        pb.clear();
+        ph.clear();
+        uvb.clear();
+        for (double u : us) {
+            auto g = [&](double v) {
+                const auto [p, n] = point_normal(u, v);
+                return gap(p + r * side * n);
+            };
+            const double vs = Math::first_root(g, v1, v1 + 0.7 * (v2 - v1), 140, 1e-15);
+            if (!std::isfinite(vs)) return u;  // failed station
+            const auto [p, n] = point_normal(u, vs);
+            const Vec3 c = p + r * side * n;
+            spine.push_back(c);
+            pb.push_back(p);
+            ph.push_back(hub_foot(c));
+            uvb.emplace_back(u, vs);
+        }
+        return std::numeric_limits<double>::quiet_NaN();
+    };
+    // pass 1: uniform in blade u; pass 2: half uniform in u, half uniform along the ball-centre /
+    // blade-contact paths, so stations follow the ball where it wraps a sharp edge quickly
+    std::vector<double> us(static_cast<std::size_t>(ns));
+    for (int i = 0; i < ns; ++i) us[static_cast<std::size_t>(i)] = u1 + (u2 - u1) * i / ns;
+    double failed = stations(us);
+    if (std::isfinite(failed)) {
+        res.message = "no ball position at blade station u = " + std::to_string(failed);
+        return res;
+    }
+    {
+        std::vector<double> s(static_cast<std::size_t>(ns) + 1, 0.0), uu(us);
+        uu.push_back(u2);
+        for (std::size_t i = 1; i <= static_cast<std::size_t>(ns); ++i) {
+            const std::size_t j = i % static_cast<std::size_t>(ns);
+            s[i] = s[i - 1] + 0.5 * ((spine[j] - spine[i - 1]).norm() + (pb[j] - pb[i - 1]).norm());
+        }
+        // blend with the uniform-u distribution (half each): robust for blunt and sharp edges
+        for (std::size_t i = 0; i < s.size(); ++i) s[i] = 0.5 * s[i] / s.back() + 0.5 * static_cast<double>(i) / ns;
+        std::vector<double> un(static_cast<std::size_t>(ns));
+        for (int i = 0; i < ns; ++i) {
+            const double target = s.back() * i / ns;
+            const auto it = std::upper_bound(s.begin(), s.end(), target);
+            const std::size_t k = std::clamp<std::size_t>(static_cast<std::size_t>(it - s.begin()), 1, s.size() - 1);
+            const double w = (target - s[k - 1]) / (s[k] - s[k - 1]);
+            un[static_cast<std::size_t>(i)] = uu[k - 1] + w * (uu[k] - uu[k - 1]);
+        }
+        un[0] = u1;  // the first station stays on the seam
+        failed = stations(un);
+        if (std::isfinite(failed)) {
+            res.message = "no ball position at blade station u = " + std::to_string(failed);
             return res;
         }
-        const auto [p, n] = point_normal(u, vs);
-        const Vec3 c = p + r * side * n;
-        spine.push_back(c);
-        pb.push_back(p);
-        ph.push_back(hub_foot(c));
-        uvb.emplace_back(u, vs);
     }
     // ── arcs and the fillet surface ──────────────────────────────────────────
     const int M = opt.arc_rows;

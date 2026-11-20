@@ -32,7 +32,7 @@ struct FilletOptions
 {
     double radius = 0.0;    ///< ball radius [m]
     int stations = 1440;    ///< ball positions around the root (G1 error ~0.2 deg at 1440)
-    int arc_rows = 9;       ///< points across each arc (>= 3)
+    int arc_rows = 15;      ///< points across each arc (>= 3)
     double tolerance = 1e-6;
 };
 

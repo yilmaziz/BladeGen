@@ -87,7 +87,7 @@ jobs:
 
   macos:
     name: macOS AppleClang Release (OCCT 7.9, conda-forge) + Python
-    runs-on: macos-14
+    runs-on: macos-latest
     defaults:
       run:
         shell: bash -el {0}

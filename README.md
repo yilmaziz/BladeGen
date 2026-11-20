@@ -65,7 +65,7 @@ bash tools/linux_dev.sh linux-release         # Linux (or: macos-release on macO
 |---|---|---|---|---|
 | Windows 10 / 11 x64 | MSVC 19.4x (VS 2022), 19.5x (VS 2026) | 7.9 (conda-forge) | ✓ `windows-2022` | ✓ |
 | Linux x86-64 (Ubuntu 24.04) | GCC 13 (apt), GCC 16 (conda) | 7.6 (apt), 7.9 (conda) | ✓ `ubuntu-24.04`, also ASan + UBSan | ✓ |
-| macOS arm64 (Apple Silicon) | AppleClang (Xcode 15) | 7.9 (conda-forge) | ✓ `macos-14` | ✓ |
+| macOS arm64 (Apple Silicon) | AppleClang | 7.9 (conda-forge) | ✓ `macos-latest` | ✓ |
 
 All builds use `-Wall -Wextra -Wpedantic -Wconversion …` / `/W4` with warnings as errors.
 

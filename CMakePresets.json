@@ -32,6 +32,12 @@
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "BLADEGEN_ENABLE_ASAN": "ON", "BLADEGEN_TEST_SPEC": "~[slow]" }
     },
     {
+      "name": "macos-release",
+      "displayName": "macOS · Release (AppleClang)",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
       "name": "windows-msvc-debug",
       "displayName": "Windows · MSVC Debug (run from a VS developer shell)",
       "inherits": "base",
@@ -54,6 +60,7 @@
     { "name": "linux-debug", "configurePreset": "linux-debug" },
     { "name": "linux-release", "configurePreset": "linux-release" },
     { "name": "linux-asan", "configurePreset": "linux-asan" },
+    { "name": "macos-release", "configurePreset": "macos-release" },
     { "name": "windows-msvc-debug", "configurePreset": "windows-msvc-debug" },
     { "name": "windows-msvc-release", "configurePreset": "windows-msvc-release" },
     { "name": "python", "configurePreset": "python" }
@@ -62,6 +69,7 @@
     { "name": "linux-debug", "configurePreset": "linux-debug", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "linux-release", "configurePreset": "linux-release", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "linux-asan", "configurePreset": "linux-asan", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "macos-release", "configurePreset": "macos-release", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "windows-msvc-debug", "configurePreset": "windows-msvc-debug", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "windows-msvc-release", "configurePreset": "windows-msvc-release", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "python", "configurePreset": "python", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } }

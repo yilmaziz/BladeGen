@@ -347,18 +347,22 @@ for s, f in zip(data.sections, fits):
     print(f" {s.index:3d}  {np.degrees(f['frame']['stagger']):6.2f}   {100 * f['fit']['rms']:9.4f}   {100 * f['fit']['max']:9.4f}"
           f"   {1e6 * f['rms_3d']:10.2f}  {1e6 * f['max_3d']:10.2f}   {q['errors']} err / {q['warnings']} warn")"""),
     md("""## Published vs rebuilt sections (hub, mid, tip) and their curvature"""),
-    code("""fig, axes = plt.subplots(3, 3, figsize=(16, 12))
+    code("""fig = plt.figure(figsize=(17, 12))
+gs = fig.add_gridspec(3, 3, width_ratios=[2.6, 1.0, 1.5], hspace=0.45, wspace=0.25)
 for row, k in enumerate([0, 6, 13]):
     f = fits[k]; prof = bg.Profile2D(f["fit"]["params"]); q = bg.check_quality(prof)
-    fr = f["frame"]
-    a = axes[row, 0]; nb.draw_profile(a, prof, q, control=False, points=False)
+    fr = f["frame"]; color = "red" if q["errors"] else ("darkorange" if q["warnings"] else "green")
+    a = fig.add_subplot(gs[row, 0]); nb.draw_profile(a, prof, q, control=False, points=False, adjustable="box")
     a.plot(*fr["ss"].T, "o", mfc="none", mec="k", ms=2.5); a.plot(*fr["ps"].T, "o", mfc="none", mec="k", ms=2.5)
-    nb._badge(a, q); a.set_title(f"section {data.sections[k].index}: published (o) vs BladeGen")
-    a = axes[row, 1]; nb.draw_profile(a, prof, q, control=False, points=False)
+    a.set_title(f"section {data.sections[k].index}: published (o) vs BladeGen — RMS {1e6 * f['rms_3d']:.1f} µm; "
+                f"{q['errors']} errors, {q['warnings']} warnings", fontsize=9, color=color)
+    a = fig.add_subplot(gs[row, 1]); nb.draw_profile(a, prof, q, control=False, points=False, adjustable="box")
     a.plot(*fr["ss"].T, "o", mfc="none", mec="k", ms=4); a.plot(*fr["ps"].T, "o", mfc="none", mec="k", ms=4)
-    r = f["fit"]["params"].le.radius; a.set_xlim(-2 * r, 8 * r); a.set_ylim(-5 * r, 5 * r); a.set_title("LE zoom")
-    nb.draw_curvature(axes[row, 2], q, prof)
-plt.tight_layout(); plt.show()"""),
+    r = f["fit"]["params"].le.radius; a.set_xlim(-2 * r, 8 * r); a.set_ylim(-5 * r, 5 * r); a.set_title("LE zoom", fontsize=9)
+    nb.draw_curvature(fig.add_subplot(gs[row, 2]), q, prof)
+plt.show()
+for k in (0, 6, 13):
+    print(f"section {data.sections[k].index}:", bg.check_quality(bg.Profile2D(fits[k]["fit"]["params"]))["summary"])"""),
     md("""## The 3-D blade: C2 NURBS skin through the 14 fitted sections
 
 The definition is written to JSON (exact B-spline stream lines) so the CLI (`bladegen build`) reproduces the

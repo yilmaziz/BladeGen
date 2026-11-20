@@ -208,7 +208,8 @@ def _issue_markers(ax, q: dict, where_key="where"):
             ax.plot(*i[where_key], "^", color="darkorange", ms=9, mfc="none", mew=2, zorder=40)
 
 
-def draw_profile(ax, prof: "bg.Profile2D", q: dict | None = None, control=True, points=True, lw=2.0):
+def draw_profile(ax, prof: "bg.Profile2D", q: dict | None = None, control=True, points=True, lw=2.0,
+                 adjustable="datalim"):
     pcs = prof.pieces(300)
     ax.plot(*pcs["ss"].T, color=C_SS, lw=lw, label="suction side")
     ax.plot(*pcs["ps"].T, color=C_PS, lw=lw, label="pressure side")
@@ -224,7 +225,7 @@ def draw_profile(ax, prof: "bg.Profile2D", q: dict | None = None, control=True, 
                 ax.plot(*p, "ko", ms=3.5)
     if q is not None:
         _issue_markers(ax, q)
-    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_aspect("equal", adjustable=adjustable)
     ax.grid(alpha=0.25)
     ax.set_xlabel("m' / chord")
     ax.set_ylabel(r"$\theta$ / chord")
@@ -235,8 +236,10 @@ def _zoom(ax, center, half):
     ax.set_ylim(center[1] - half, center[1] + half)
 
 
-def draw_curvature(ax, q: dict, prof: "bg.Profile2D"):
-    """Curvature along both sides, LE point -> TE point, vs normalised arc length."""
+def draw_curvature(ax, q: dict, prof: "bg.Profile2D", window: str | None = None):
+    """Curvature along both sides, LE point -> TE point, vs normalised arc length.
+
+    window = "LE" / "TE" zooms on the edge connector (three connector lengths)."""
     for side, c, lbl in (("ss", C_SS, "suction side"), ("ps", C_PS, "pressure side")):
         s = q[side]
         x = s["s"] / s["s"][-1]
@@ -257,6 +260,17 @@ def draw_curvature(ax, q: dict, prof: "bg.Profile2D"):
     ax.set_xlabel("arc length from the LE point / side length")
     ax.set_ylabel(r"curvature $\kappa$ [1/chord] (symlog)")
     ax.set_title("Curvature: LE point → TE point (dotted: junctions)", fontsize=10)
+    if window in ("LE", "TE"):
+        edges = []
+        for side in ("ss", "ps"):
+            sd = q[side]
+            x = sd["s"] / sd["s"][-1]
+            j = np.flatnonzero(np.diff(sd["piece"]) != 0)
+            if len(j):
+                edges.append(x[j[0] + 1] if window == "LE" else 1.0 - x[j[-1] + 1])
+        w = 3.0 * max(edges) if edges else 0.05
+        ax.set_xlim((0.0, w) if window == "LE" else (1.0 - w, 1.0))
+        ax.set_title(f"curvature near the {window} (connector + 2 connector lengths)", fontsize=10)
     ax.grid(alpha=0.25, which="both")
     ax.legend(fontsize=8, loc="upper center")
 
@@ -282,9 +296,9 @@ def profile_dashboard(params: "bg.ProfileParams", fig=None, title: str | None = 
     prof = bg.Profile2D(params)  # never throws for a bad shape; only for invalid input
     q = bg.check_quality(prof)
     if fig is None:
-        fig = plt.figure(figsize=(15, 10.5))
+        fig = plt.figure(figsize=(15, 14))
     fig.clf()
-    gs = fig.add_gridspec(3, 3, height_ratios=[1.15, 1.0, 1.0], hspace=0.42, wspace=0.28)
+    gs = fig.add_gridspec(4, 3, height_ratios=[1.15, 1.0, 0.9, 0.9], hspace=0.5, wspace=0.28)
     ax = fig.add_subplot(gs[0, :])
     draw_profile(ax, prof, q)
     _badge(ax, q)
@@ -292,26 +306,29 @@ def profile_dashboard(params: "bg.ProfileParams", fig=None, title: str | None = 
     ax.set_title(title or f"Profile in the unstaggered (m', θ) plane — connector {str(params.connector).split('.')[-1]}",
                  fontsize=11)
     cp = prof.characteristic_points()
-    for col, (name, c, center) in enumerate((("LE", C_LE, cp["P_LE"]), ("TE", C_TE, cp["P_TE"]))):
+    for col, (name, center) in enumerate((("LE", cp["P_LE"]), ("TE", cp["P_TE"]))):
         a = fig.add_subplot(gs[1, col])
-        draw_profile(a, prof, q, lw=1.8)
+        draw_profile(a, prof, q, lw=1.8, adjustable="box")
         r = (params.le if name == "LE" else params.te).radius
-        _zoom(a, center + np.array([0.6 * (1 if name == "LE" else -1) * r * 3, 0.0]), max(6 * r, 0.004))
+        half = max(6 * r, 0.004)
+        _zoom(a, center + np.array([(0.5 if name == "LE" else -0.5) * half, 0.0]), half)
         a.set_title(f"{name} zoom", fontsize=10)
     a = fig.add_subplot(gs[1, 2])
     draw_thickness(a, prof)
-    a = fig.add_subplot(gs[2, :2])
+    a = fig.add_subplot(gs[2, :])
     draw_curvature(a, q, prof)
-    a = fig.add_subplot(gs[2, 2])
+    for col, w in enumerate(("LE", "TE")):
+        draw_curvature(fig.add_subplot(gs[3, col]), q, prof, window=w)
+    a = fig.add_subplot(gs[3, 2])
     a.axis("off")
     j = prof.junctions()
-    rows = [f"{x['name']:<20} gap {x['gap']:.1e}  angle {np.degrees(x['tangent_angle']):.1e}°  Δκ {x['curvature_jump']:.1e}"
+    rows = [f"{x['name']:<19} gap {x['gap']:.0e} angle {np.degrees(x['tangent_angle']):.0e}° Δκ {x['curvature_jump']:.0e}"
             for x in j]
-    a.text(0.0, 1.0, "Junction continuity (G2 = gap, angle, Δκ ≈ 0)\n\n" + "\n".join(rows) +
-           f"\n\nmax curvature    {q['max_curvature']:.1f}\nmin thickness    {q['min_thickness']:.4f}"
-           f"\nSS / PS inflections {q['ss_inflections']} / {q['ps_inflections']}"
-           f"\nself-intersections  {q['self_intersections']}",
-           va="top", ha="left", family="monospace", fontsize=8)
+    a.text(-0.05, 1.0, "Junction continuity (G2: gap, angle, Δκ ≈ 0)\n\n" + "\n".join(rows) +
+           f"\n\nmax curvature        {q['max_curvature']:.1f}\nmin thickness        {q['min_thickness']:.4f}"
+           f"\nSS / PS inflections  {q['ss_inflections']} / {q['ps_inflections']}"
+           f"\nself-intersections   {q['self_intersections']}",
+           va="top", ha="left", family="monospace", fontsize=7.5)
     return fig, prof, q
 
 
@@ -329,7 +346,7 @@ def interactive_profile(params: "bg.ProfileParams"):
     def redraw(p):
         with out:
             out.clear_output(wait=True)
-            fig = plt.figure(figsize=(15, 10.5))
+            fig = plt.figure(figsize=(15, 14))
             try:
                 profile_dashboard(p, fig)
             except ValueError as e:  # invalid input (e.g. a radius <= 0): say why
@@ -358,9 +375,11 @@ def _have_plotly() -> bool:
 def mesh_traces(shape, color="lightsteelblue", name="blade", deflection=2e-4, opacity=1.0, scale=1000.0):
     """Plotly Mesh3d of an OCCT shape (coordinates in mm)."""
     import plotly.graph_objects as go
+    from matplotlib.colors import to_hex
 
     v, f, _ = shape.tessellate(deflection)
     v = v * scale
+    color = to_hex(color)  # plotly does not take matplotlib shorthands such as '0.8'
     return go.Mesh3d(x=v[:, 0], y=v[:, 1], z=v[:, 2], i=f[:, 0], j=f[:, 1], k=f[:, 2], color=color, name=name,
                      opacity=opacity, flatshading=False, showlegend=True,
                      lighting=dict(ambient=0.35, diffuse=0.8, specular=0.3, roughness=0.6, fresnel=0.2))

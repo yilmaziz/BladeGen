@@ -29,22 +29,29 @@ ConnectorMode connector_mode_from_string(const std::string& s)
 
 ProfileParams ProfileParams::naca65_1210()
 {
-    // blade2d naca65/naca65_1210_blade_params.json (inverse fit to NACA 65-(12)10).
+    // BladeGen's own inverse fit of NACA 65-(12)10 (blade2d naca65_1210_XY_dense241.csv)
+    // with Fair connectors and fairness weight 1: RMS 0.0104 % chord, no geometry
+    // errors (the blade2d fit below has an S-shaped TE connector).
     ProfileParams p;
-    p.le = {0.012073, 1.198788, 0.003422, 15.561637, 22.417183, 15.638344, 1.0};
-    p.te = {0.000255, 4.0, -0.000526, 24.659155, 6.386629, 0.0, 1.0};
-    p.ss = {0.092724, 0.52168, 0.177553, 0.041191};
-    p.thickness = {0.11027, 0.405561, 0.035922, 0.002126, 0.685326, 1.145254, false};
-    p.ps = {0.006057, 0.05123, {0.2, 0.45, 0.8}};
+    p.le = {0.012627, 1.257999, 0.004407, 13.058742, 24.067893, 11.360914, 1.0};
+    p.te = {0.0002, 4.0, -0.000125, 26.350313, 11.924809, 0.0, 1.0};
+    p.ss = {0.094282, 0.52934, 0.178684, 0.026252};
+    p.thickness = {0.110394, 0.40528, 0.036028, 0.001928, 0.683756, 1.147683, false};
+    p.ps = {0.010024, 0.048277, {0.2, 0.45, 0.8}};
     return p;
 }
 
 ProfileParams ProfileParams::naca65_1210_blade2d()
 {
-    auto p = naca65_1210();
-    p.connector = ConnectorMode::G2Legacy;
-    p.le.tension = 0.28;  // blade2d ProfileC2ConnectParams le_alpha_* / te_alpha_* defaults
-    p.te.tension = 0.20;
+    // blade2d naca65/naca65_1210_blade_params.json (inverse fit to NACA 65-(12)10)
+    // with the blade2d connector: the geometry of the Python engine.
+    ProfileParams p;
+    p.le = {0.012073, 1.198788, 0.003422, 15.561637, 22.417183, 15.638344, 0.28};
+    p.te = {0.000255, 4.0, -0.000526, 24.659155, 6.386629, 0.0, 0.20};
+    p.ss = {0.092724, 0.52168, 0.177553, 0.041191};
+    p.thickness = {0.11027, 0.405561, 0.035922, 0.002126, 0.685326, 1.145254, false};
+    p.ps = {0.006057, 0.05123, {0.2, 0.45, 0.8}};
+    p.connector = ConnectorMode::G2Legacy;  // le_alpha_* = 0.28, te_alpha_* = 0.20
     return p;
 }
 

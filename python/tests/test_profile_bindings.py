@@ -36,7 +36,7 @@ def test_profile_passes_through_edge_points_and_is_g2():
 
 def test_quality_flags_but_still_builds():
     prm = bg.ProfileParams.naca65_1210()
-    prm.le.tension = 3.0
+    prm.le.tension = 6.0
     prof = bg.Profile2D(prm)  # bad shape: no exception
     q = bg.check_quality(prof)
     assert not q["ok"] and q["errors"] >= 1

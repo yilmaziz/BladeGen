@@ -195,10 +195,10 @@ TEST_CASE("generic parameter access round-trips", "[profile]")
     REQUIRE(v.size() == param_table().size());
     set_param(p, "le.radius", 0.02);
     REQUIRE(p.le.radius == 0.02);
-    REQUIRE(get_param(p, "thickness.t_max") == Approx(0.11027));
+    REQUIRE(get_param(p, "thickness.t_max") == Approx(0.110394));
     auto q = p;
     from_vector(q, v);
-    REQUIRE(q.le.radius == Approx(0.012073));
+    REQUIRE(q.le.radius == Approx(0.012627));
     const auto m = blend(ProfileParams::naca65_1210(), ProfileParams::cda_start(), 0.5);
-    REQUIRE(m.le.radius == Approx(0.5 * (0.012073 + 0.010)));
+    REQUIRE(m.le.radius == Approx(0.5 * (0.012627 + 0.010)));
 }

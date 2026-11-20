@@ -100,11 +100,12 @@ struct ProfileParams
     PressureSideParams ps{};
     ConnectorMode connector = ConnectorMode::Fair;
 
-    /// The NACA 65-(12)10 inverse fit of the blade2d engine
-    /// (naca65/naca65_1210_blade_params.json, RMS 0.0079 % chord), Fair connectors.
+    /// NACA 65-(12)10, BladeGen's fairness-weighted inverse fit (Fair connectors,
+    /// RMS 0.0104 % chord, no geometry errors).  Default profile.
     [[nodiscard]] static ProfileParams naca65_1210();
-    /// The same fit with the blade2d connector (G2Legacy, alpha 0.28 / 0.20): the
-    /// geometry of the Python engine.
+    /// The blade2d fit of the same section (naca65_1210_blade_params.json) with the
+    /// blade2d connector (G2Legacy, alpha 0.28 / 0.20): the Python engine's geometry.
+    /// Its TE connector is S-shaped (found by Profile::check_quality).
     [[nodiscard]] static ProfileParams naca65_1210_blade2d();
     /// The CDA starting point used by blade2d's fit_cda_c2.py (SPEC x0).
     [[nodiscard]] static ProfileParams cda_start();

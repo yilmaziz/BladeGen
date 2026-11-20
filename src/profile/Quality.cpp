@@ -113,43 +113,54 @@ void side_checks(QualityReport& rep, const CurveSample& c, int side, const Quali
 /// The LE / TE connector must rise from one junction curvature to a single peak
 /// near the edge point and fall to the other: a dip below both junction values is
 /// an S-bend (overshoot / loop), a second peak a bump.
-void connector_checks(QualityReport& rep, const Profile2D& prof, int k, const QualityOptions& opt)
+/// The LE / TE edge must rise from one junction curvature to a single peak near the edge
+/// point and fall to the other: a dip below both junction values to a concave curvature is
+/// an S-bend (overshoot / loop), a second peak a bump.  kap: convexity-signed curvature
+/// along the edge from one side's junction to the other's; side: 0 / 1 per point.
+void edge_zone_checks(QualityReport& rep, const std::vector<double>& kap, const std::vector<Vec2>& pts,
+                      const std::vector<int>& side, const std::string& edge, const std::string& what)
 {
-    const std::string edge = k == 0 ? "LE" : "TE";
-    const double ta = prof.breaks()[static_cast<std::size_t>(k)];
-    const double tb = prof.breaks()[static_cast<std::size_t>(k + 1)];
-    const int n = 4 * opt.n_edge + 1;
-    std::vector<double> kap(static_cast<std::size_t>(n));
-    std::vector<double> tt(static_cast<std::size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        const double t = ta + (tb - ta) * i / (n - 1);
-        tt[static_cast<std::size_t>(i)] = t;
-        kap[static_cast<std::size_t>(i)] = prof.curvature(t, i == n - 1);
-    }
+    if (kap.size() < 3) return;
     const double kend = std::min(kap.front(), kap.back());
     const auto imin = static_cast<std::size_t>(std::distance(kap.begin(), std::min_element(kap.begin(), kap.end())));
     const double kpeak = *std::max_element(kap.begin(), kap.end());
     const double range = kpeak - kend;
     auto add = [&](std::size_t i, Severity sv, const std::string& code, const std::string& msg) {
-        const double t = tt[i];
-        const bool ss_half = (k == 0) ? t > prof.t_le_point() : t < prof.t_te_point();
-        rep.issues.push_back({sv, code, msg, prof.point(t), ss_half ? 0 : 1, 0.0});
+        rep.issues.push_back({sv, code, msg, pts[i], side[i], 0.0});
     };
     if (kap[imin] < kend - 0.02 * range) {
         if (kap[imin] < 0.0)
             add(imin, Severity::Error, "edge_inflection",
-                edge + " connector is S-shaped (curvature dips to " + std::to_string(kap[imin]) +
-                    "): the edge overshoots or loops; change the " + edge + " radius, stretch, wedge angles or tension");
+                edge + " " + what + " is S-shaped (curvature dips to " + std::to_string(kap[imin]) +
+                    "): the edge overshoots or loops; not manufacturable as designed");
         else
             add(imin, Severity::Warning, "edge_curvature_dip",
-                edge + " connector curvature dips below its junction values (flat spot on the edge)");
+                edge + " " + what + " curvature dips below its junction values (flat spot on the edge)");
     }
     const auto ex = extrema(kap, 0.05 * range);
     int maxima = 0;
     for (std::size_t e : ex) if (e > 0 && e + 1 < kap.size() && kap[e] >= kap[e - 1] && kap[e] >= kap[e + 1]) ++maxima;
     if (maxima > 1)
         add(ex.front(), Severity::Warning, "edge_double_peak",
-            edge + " connector curvature has " + std::to_string(maxima) + " peaks (bumpy edge)");
+            edge + " " + what + " curvature has " + std::to_string(maxima) + " peaks (bumpy edge)");
+}
+
+void connector_checks(QualityReport& rep, const Profile2D& prof, int k, const QualityOptions& opt)
+{
+    const double ta = prof.breaks()[static_cast<std::size_t>(k)];
+    const double tb = prof.breaks()[static_cast<std::size_t>(k + 1)];
+    const int n = 4 * opt.n_edge + 1;
+    std::vector<double> kap(static_cast<std::size_t>(n));
+    std::vector<Vec2> pts(static_cast<std::size_t>(n));
+    std::vector<int> side(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        const double t = ta + (tb - ta) * i / (n - 1);
+        const auto ui = static_cast<std::size_t>(i);
+        kap[ui] = prof.curvature(t, i == n - 1);
+        pts[ui] = prof.point(t);
+        side[ui] = ((k == 0) ? t > prof.t_le_point() : t < prof.t_te_point()) ? 0 : 1;
+    }
+    edge_zone_checks(rep, kap, pts, side, k == 0 ? "LE" : "TE", "connector");
 }
 
 }  // namespace
@@ -164,6 +175,51 @@ int count_self_intersections(const std::vector<Vec2>& closed)
             if (segments_cross(closed[i], closed[i + 1], closed[j], closed[j + 1])) ++cnt;
         }
     return cnt;
+}
+
+void check_samples(QualityReport& rep, const std::vector<Vec2>& loop, const QualityOptions& opt, bool te_edge)
+{
+    const int le = static_cast<int>(Piece::LeadingEdge), te = static_cast<int>(Piece::TrailingEdge);
+    double kmax = 0.0, le_kmax = 0.0;
+    for (const auto* c : {&rep.ss, &rep.ps})
+        for (std::size_t i = 0; i < c->kappa.size(); ++i) {
+            kmax = std::max(kmax, std::abs(c->kappa[i]));
+            if (c->piece[i] == le) le_kmax = std::max(le_kmax, c->kappa[i]);
+        }
+    rep.max_curvature = std::max(rep.max_curvature, kmax);
+    // edge zones from the samples: PS half reversed, then the SS half (LE); SS half, PS half reversed (TE)
+    for (int edge : {le, te}) {
+        if (edge == te && !te_edge) continue;
+        std::vector<double> kap;
+        std::vector<Vec2> pts;
+        std::vector<int> side;
+        auto take = [&](const CurveSample& c, int sd, bool reverse) {
+            std::vector<std::size_t> idx;
+            for (std::size_t i = 0; i < c.piece.size(); ++i) if (c.piece[i] == edge) idx.push_back(i);
+            if (reverse) std::reverse(idx.begin(), idx.end());
+            for (std::size_t i : idx) {
+                if (!pts.empty() && (c.xy[i] - pts.back()).norm() < 1e-14) continue;
+                kap.push_back(c.kappa[i]);
+                pts.push_back(c.xy[i]);
+                side.push_back(sd);
+            }
+        };
+        if (edge == le) { take(rep.ps, 1, true); take(rep.ss, 0, false); }
+        else { take(rep.ss, 0, false); take(rep.ps, 1, true); }
+        edge_zone_checks(rep, kap, pts, side, edge == le ? "LE" : "TE", "edge");
+    }
+    side_checks(rep, rep.ss, 0, opt, le_kmax);
+    side_checks(rep, rep.ps, 1, opt, le_kmax);
+    double area = 0.0;
+    for (std::size_t i = 0; i + 1 < loop.size(); ++i) area += Math::cross2(loop[i], loop[i + 1]);
+    if (!(0.5 * area < 0.0))
+        rep.issues.push_back({Severity::Error, "orientation",
+                              "profile loop is not clockwise: the pressure side lies above the suction side", Vec2(0.5, 0.0)});
+    rep.self_intersections = count_self_intersections(loop);
+    if (rep.self_intersections > 0)
+        rep.issues.push_back({Severity::Error, "self_intersection",
+                              "profile self-intersects (" + std::to_string(rep.self_intersections) + " crossings)",
+                              Vec2(0.5, 0.0)});
 }
 
 QualityReport check_quality(const Profile2D& prof, const QualityOptions& opt)

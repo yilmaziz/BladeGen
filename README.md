@@ -2,7 +2,9 @@
 
 **Parametric C2 turbomachinery blade generator in C++23 on OpenCASCADE** — the C++ successor of the
 `blade2d` Python engine, with curvature-quality checks, inverse design from published coordinates, C2
-NURBS blades, a rolling-ball hub fillet, Python bindings and interactive notebooks.
+NURBS blades, a rolling-ball hub fillet, Python bindings and interactive notebooks. Since v1.0.1 it also
+generates the **parametric NACA 65 series** (the geometry of the TURBOlenza solver) and has a **desktop
+designer window** with live suction / pressure side curvature.
 
 [![CI](https://github.com/yilmaziz/BladeGen/actions/workflows/ci.yml/badge.svg)](https://github.com/yilmaziz/BladeGen/actions/workflows/ci.yml)
 ![C++23](https://img.shields.io/badge/C%2B%2B-23-blue) ![OCCT](https://img.shields.io/badge/OpenCASCADE-7.6%20%7C%207.9-green)
@@ -29,8 +31,47 @@ cd BladeGen
 conda env create -f environment.yml        # OCCT 7.9, Eigen, Catch2, pybind11, Ninja, JupyterLab, ...
 ```
 
-**Open the notebooks (the best way to see what BladeGen does).** The launcher builds the Python module the
-first time (a few minutes), then starts JupyterLab in `python/notebooks`:
+**Open the section designer window.** One command builds the Python module the first time (a few
+minutes; again automatically when the module is older than the GUI), then opens the window:
+
+```bat
+:: Windows (cmd or PowerShell, from the repository folder)
+tools\gui.cmd                      :: optional: a saved design.json; --rebuild after changing C++ code
+```
+
+```bash
+# Linux / macOS (needs a desktop session)
+conda activate bladegen
+bash tools/gui.sh                  # or: PYTHONPATH=build/python/python python -m bladegen.gui
+```
+
+<p align="center">
+  <img src="assets/gui.png" width="95%" alt="BladeGen section designer"/>
+  <br/><em>The designer: hub / mid / tip stations, construction method NACA 65, Custom or NACA 65 + Custom
+  (here custom parameters fitted to NACA 65-(15A10)10, the NACA curvature dashed), knobs by family, the
+  profile with LE / TE zooms, the curvature of both sides from the LE point to the TE point with LE / TE
+  zooms, the cascade, and the quality badge (red with ✗ marks and "not manufacturable as designed" for an
+  S-shaped or looping edge).</em>
+</p>
+
+In the window:
+
+1. pick the **station** (Hub, Mid, Tip; each keeps its own section, *overlay all stations* compares them);
+2. pick the **construction method**:
+   * **NACA 65**: design lift Cl0, thickness t/c and the variant (Kovach–Sandercock round TE or Emery sharp TE);
+   * **Custom**: the BladeGen profile, every parameter under its family tab (LE, TE, SS, thickness, PS, connector);
+   * **NACA 65 + Custom**: press *Fit custom parameters to this NACA 65* (3–5 s); the custom knobs then edit
+     the NACA geometry, which stays dashed in the plots with the deviation shown;
+   * DCA and C4 are listed as planned;
+3. watch the curvature plots while you move a knob: errors (S-shaped / looping LE or TE, self-intersection)
+   turn the badge and the title red, warnings are orange;
+4. set stagger and solidity for the cascade view; *Save design*, *Export coordinates* (CSV, with curvature),
+   *Export TURBOlenza CascadeSpec* (the NACA 65 stations, ready for `CascadeSpec(**entry)`), *Save figure*.
+
+There is no flowpath, span or 3-D in the window (the 3-D blade stays in notebook `02_blade_3d`).
+
+**Open the notebooks.** The launcher builds the Python module the first time (a few minutes), then starts
+JupyterLab in `python/notebooks`:
 
 ```bat
 :: Windows (cmd or PowerShell, from the repository folder)
@@ -61,11 +102,13 @@ bash tools/linux_dev.sh linux-release         # Linux (or: macos-release on macO
 
 ## Platforms
 
-| platform | compiler | OpenCASCADE | tested in CI | Python + notebooks |
-|---|---|---|---|---|
-| Windows 10 / 11 x64 | MSVC 19.4x (VS 2022), 19.5x (VS 2026) | 7.9 (conda-forge) | ✓ `windows-2022` | ✓ |
-| Linux x86-64 (Ubuntu 24.04) | GCC 13 (apt), GCC 16 (conda) | 7.6 (apt), 7.9 (conda) | ✓ `ubuntu-24.04`, also ASan + UBSan | ✓ |
-| macOS arm64 (Apple Silicon) | AppleClang | 7.9 (conda-forge) | ✓ `macos-latest` | ✓ |
+| platform | compiler | OpenCASCADE | tested in CI | Python + notebooks | designer window |
+|---|---|---|---|---|---|
+| Windows 10 / 11 x64 | MSVC 19.4x (VS 2022), 19.5x (VS 2026) | 7.9 (conda-forge) | ✓ `windows-2022` | ✓ | ✓ (high-DPI aware) |
+| Linux x86-64 (Ubuntu 24.04) | GCC 13 (apt), GCC 16 (conda) | 7.6 (apt), 7.9 (conda) | ✓ `ubuntu-24.04`, also ASan + UBSan | ✓ | ✓ (CI under Xvfb) |
+| macOS arm64 (Apple Silicon) | AppleClang | 7.9 (conda-forge) | ✓ `macos-latest` | ✓ | ✓ |
+
+The window is Tkinter + matplotlib from the conda environment: nothing else to install.
 
 All builds use `-Wall -Wextra -Wpedantic -Wconversion …` / `/W4` with warnings as errors.
 
@@ -73,6 +116,8 @@ All builds use `-Wall -Wextra -Wpedantic -Wconversion …` / `/W4` with warnings
 
 | | |
 |---|---|
+| NACA 65 series | parametric NACA 65-(Cl0 A10) t/c, Kovach–Sandercock and Emery variants, C2 monotone-curvature LE; migrated from TURBOlenza and equal to its frozen C2 geometry to 5·10⁻⁸ c (Emery) |
+| Designer window | `tools/gui.cmd` / `tools/gui.sh`: hub / mid / tip, NACA 65 / Custom / NACA 65 + Custom, live SS / PS curvature, error marks, TURBOlenza export |
 | Profile engine | port of blade2d (DLR-style characteristic points, SS B-spline, thickness-coupled PS), verified against the Python engine to 2·10⁻⁶ chord |
 | Continuity | curvature-continuous (G2) at all four junctions by construction, C4 inside the connectors; a parametric-C2 mode is available |
 | Quality check | curvature of SS and PS **from the LE point to the TE point**, S-shaped edges, inflections, curvature oscillation, self-intersection, thickness — reported as errors / warnings, the geometry is still built |
@@ -168,6 +213,47 @@ errors, orange ▲ warnings) with a summary badge.
 
 ---
 
+## NACA 65 series (migrated from TURBOlenza)
+
+`src/naca/Naca65` is the parametric NACA 65-(Cl0 A10) t/c section of TURBOlenza's blade-to-blade solver
+(its frozen C2 design geometry), ported to C++ after a review of what in the Python construction is sound
+and what is not:
+
+| kept (published or verified) | dropped | BladeGen's own |
+|---|---|---|
+| Table 4-1 (Aungier 2003) with the 2.5 % misprint corrected (3.480 → 3.148 %) | PCHIP thickness (C1, curvature sawtooth at every station) | Kovach start: C2 quintic blend of the 0.08° table / taper corner over station 0.60 ± 0.005 |
+| closed-form A10 mean line, thickness along the camber arc length s/S | the legacy LE circle with a polar fair | Kovach TE: a G2 minimum-jerk connector through (1, 0) with the TE circle's tangent and curvature (the PS is concave there, so no monotone fair reaches it) |
+| thickness as a quintic in √station with h‴ = h⁗ = 0 at both ends (C4, exact at every station) | kernel smoothing and the least-squares C2 refit | Emery TE: a C2 closing piece from x = 0.995 to the sharp TE |
+| R_LE = 0.00687 (t/0.1)², centre on the mean-line tangent at x = 0.005 | | NNLS / LDP / LSEI in C++ (Lawson–Hanson, with the anti-cycling safeguard) |
+| the C2 monotone-curvature Whewell LE fair (curvature falls from 1/R_LE, no overshoot or S-bend; anchor scan, bisection, +0.5 R_LE) | | |
+| both variants: Emery (sharp TE) and Kovach–Sandercock (taper from station 0.60 to an R = 0.008 TE circle) | | |
+| equivalent circular-arc angles tan(camber/4) = 0.1103 Cl0 | | |
+
+Agreement with TURBOlenza's `make_cascade(... surface_continuity="C2")` on five reference sections
+(`tests/data/turbolenza_naca65_reference.csv`, generated by `tools/reference/make_turbolenza_naca65_reference.py`):
+
+| zone | Emery | Kovach–Sandercock |
+|---|---|---|
+| body (0.04 < x < 0.97) | ≤ 5·10⁻⁸ c | ≤ 3·10⁻⁶ c (the blend at station 0.60) |
+| LE (x < 0.04) | ≤ 4·10⁻⁸ c | ≤ 5·10⁻⁸ c |
+| TE (x > 0.97) | ≤ 1.1·10⁻⁵ c | ≤ 1.9·10⁻⁴ c (BladeGen's G2 TE connector) |
+
+A section takes about 0.25 s to build and check. **NACA 65 + Custom** (`fit_naca65`) fits the BladeGen custom
+parameters to it, starting from the 65-(12)10 fit scaled to Cl0 and t: RMS ≈ 0.011 % c for Kovach in 3–5 s;
+an Emery section is matched to ≈ 0.07 % c only, because the custom TE is round.
+
+```bash
+bladegen naca65 1.2 0.10 --variant kovach_sandercock --csv sides.csv --fit custom.json
+```
+
+```python
+sec = bg.Naca65Section(bg.Naca65Params(1.2, 0.10, "kovach_sandercock"))
+q = bg.check_quality(sec)                        # the same checks as for a custom profile
+custom = bg.fit_naca65(sec)["params"]           # NACA 65 + Custom: now editable with every custom knob
+```
+
+---
+
 ## NASA Rotor 67
 
 `apps/rotor67` (and notebook 04) read the TP-2879 tables (`data/rotor67`), construct every section as
@@ -225,6 +311,7 @@ Presets: `linux-debug`, `linux-release`, `linux-asan` (ASan + UBSan, skips the s
 bladegen demo out/                                   # demo rotor: JSON + STEP (with a 3 mm hub fillet)
 bladegen build out/demo_rotor.json out/blade.step --fillet 2.0     # any blade JSON → STEP / IGES / STL / BREP
 bladegen profile my_profile.json --csv curvature.csv               # quality report (blade2d JSON accepted)
+bladegen naca65 1.2 0.10 --variant emery_base --csv sides.csv      # NACA 65-(12A10)10 section, curvature CSV
 bladegen fit published.csv fitted.json --ss upper_x,upper_y --ps lower_x,lower_y
 ```
 
@@ -259,8 +346,8 @@ The `.ipynb` files are generated by `python/notebooks/build_notebooks.py` and co
 
 ## Tests
 
-51 ctest entries (Catch2, pytest, notebooks, CLI) on every platform; every public function is tested against a
-closed form or its defining equation, plus invalid input:
+67 ctest entries in the `python` preset (Catch2, pytest, notebooks, CLI) on every platform; every public
+function is tested against a closed form, a published value or its defining equation, plus invalid input:
 
 * math: B-spline vs Bernstein form and finite differences, interpolation exact on cubics, end conditions,
   quintic constraints, Gauss–Legendre exactness, Brent, bounded LM (Rosenbrock with active bound);
@@ -273,10 +360,18 @@ closed form or its defining equation, plus invalid input:
 * OCCT: skin interpolation 10⁻¹⁶, cone reproduction, C2 across the seam, valid solids, STEP round trip,
   fillet ball and G1 checks;
 * fit / IO: NACA 65 RMS < 0.02 %, Rotor 67 against the published tables and the Python construction, JSON
-  round trips, blade2d JSON import.
+  round trips, blade2d JSON import;
+* NACA 65: Table 4-1 and its misprint, A10 against the table (2.3·10⁻⁵) and finite differences, the thickness
+  exact at all 26 stations, maximum 0.99961 t at station 0.4098, LE apex curvature 1/R_LE, monotone along the
+  fair and G2 at the anchor, the Kovach circle and the G2 TE connector, the Emery closing piece, no geometry
+  errors over Cl0 0–1.8 × t 0.06–0.12 × both variants, **TURBOlenza reference within the table above**,
+  NNLS / LSEI against hand solutions, NACA 65 + Custom accuracy;
+* GUI: every construction method evaluated, station JSON round trip, the window driven headless (S-shaped
+  LE reported as an error, TURBOlenza export fields).
 
-CI (`.github/workflows/ci.yml`): Linux GCC Release with OCCT 7.6 from apt + Python, Linux Debug with
-ASan/UBSan, Windows MSVC Release with OCCT 7.9 from conda-forge + Python and notebooks.
+CI (`.github/workflows/ci.yml`): Linux GCC Release with OCCT 7.6 from apt + Python (GUI test under Xvfb),
+Linux Debug with ASan/UBSan, Windows MSVC Release and macOS AppleClang Release with OCCT 7.9 from conda-forge +
+Python, notebooks and the GUI test.
 
 ---
 
@@ -324,6 +419,12 @@ geometry                                                                  mesher
   so a blade designed (or inverse-designed) in BladeGen can be meshed by ENIGMAgrid and analysed by TURBOlenza
   from one parameter set.
 
+**v1.0.1 is the first integration step.** TURBOlenza's blade geometry, the C2 NACA 65 cascade section, now
+lives in BladeGen (`src/naca`) and agrees with TURBOlenza's own construction to the tolerances above.
+ENIGMAgrid's planned geometry workstream ports the same section, so the three tools can share one geometry
+definition. The designer exports TURBOlenza `CascadeSpec` entries (blade type, Cl0, t/c, variant, stagger,
+solidity, C2) for the NACA 65 stations, and coordinates (CSV) for any station.
+
 ## Releases
 
 See [CHANGELOG.md](CHANGELOG.md) for the release notes, known limitations and planned work.
@@ -340,16 +441,19 @@ The Rotor 67 tables in `data/rotor67` are transcribed from NASA TP-2879 (a US go
 ## Layout
 
 ```
-src/math      B-splines, interpolation, fair (minimum-jerk) B-splines, quadrature, roots, least squares
+src/math      B-splines, interpolation, fair (minimum-jerk) B-splines, quadrature, roots, least squares,
+              NNLS / LDP / LSEI
 src/profile   ProfileParams (families, presets, generic access), Profile2D, Quality
+src/naca      Naca65 (parametric NACA 65 series, C2 LE fair, Kovach / Emery TE; from TURBOlenza)
 src/blade     Meridional (m, m′, channel), Blade (placement, sections, spanwise interpolation)
-src/fit       InverseFit (side-aware LM fit, contour normalisation), SectionFit (sections on stream surfaces)
+src/fit       InverseFit (side-aware LM fit, contour normalisation), SectionFit (sections on stream surfaces),
+              NacaFit (NACA 65 + Custom)
 src/occt      OcctBlade (C2 periodic skin, solid, export, tessellation), Fillet (rolling ball)
 src/io        BladeJson (blade / profile JSON, blade2d import), Rotor67 (TP-2879 tables)
 apps/         bladegen CLI, rotor67, development probes
-python/       pybind11 module, bladegen.notebook helpers, notebooks, pytest
+python/       pybind11 module, bladegen.notebook helpers, bladegen.gui (designer window), notebooks, pytest
 tests/        Catch2 tests per layer, reference data (blade2d, NACA 65, Rotor 67)
 data/rotor67  NASA TP-2879 blade sections and flowpath (transcribed)
-tools/        jupyter.cmd / jupyter.sh (notebook launchers), win_dev.cmd, linux_dev.sh, render_rotor67.py, reference generators
+tools/        gui.cmd / gui.sh (designer), jupyter.cmd / jupyter.sh (notebooks), win_dev.cmd, linux_dev.sh, render_rotor67.py, reference generators
 assets/       README images
 ```

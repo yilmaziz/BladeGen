@@ -1,5 +1,5 @@
 # apps/CMakeLists.txt — command-line tools
-#   bladegen      profile check, blade build (STEP/IGES/STL), inverse fit, demo
+#   bladegen      profile check, NACA 65 sections, blade build (STEP/IGES/STL), inverse fit, demo
 #   rotor67       NASA Rotor 67 reconstruction (fit of the 14 published sections, solid, fillet)
 #   profile_dump  development: side samples of a built-in profile as CSV
 #   fillet_lab    development: fillet resolution study
@@ -8,6 +8,7 @@ foreach(_app bladegen_cli rotor67 profile_dump fillet_lab)
     target_link_libraries(${_app} PRIVATE bladegen::lib bladegen::compiler_flags)
 endforeach()
 set_target_properties(bladegen_cli PROPERTIES OUTPUT_NAME bladegen)
+target_compile_definitions(bladegen_cli PRIVATE BLADEGEN_VERSION="${PROJECT_VERSION}")
 
 if(BLADEGEN_BUILD_TESTS)
     set(_env "")
@@ -17,13 +18,18 @@ if(BLADEGEN_BUILD_TESTS)
     endif()
     set(_out ${CMAKE_BINARY_DIR}/test_output/cli)
     add_test(NAME cli_version COMMAND bladegen_cli version)
+    set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION "BladeGen ${PROJECT_VERSION}")
     add_test(NAME cli_profile COMMAND bladegen_cli profile ${PROJECT_SOURCE_DIR}/tests/data/naca65_1210_blade_params.json --csv ${_out}_curvature.csv)
     # the blade2d NACA fit has an S-shaped TE connector: built, exit code 3 (geometry errors)
     set_tests_properties(cli_profile PROPERTIES WILL_FAIL FALSE PASS_REGULAR_EXPRESSION "S-shaped")
     add_test(NAME cli_demo COMMAND bladegen_cli demo ${_out})
     add_test(NAME cli_build COMMAND bladegen_cli build ${_out}/demo_rotor.json ${_out}/rebuilt.stp --unit m)
     set_tests_properties(cli_build PROPERTIES DEPENDS cli_demo)
+    add_test(NAME cli_naca65 COMMAND bladegen_cli naca65 1.2 0.10 --variant emery_base --csv ${_out}_naca65.csv)
+    set_tests_properties(cli_naca65 PROPERTIES PASS_REGULAR_EXPRESSION "NACA 65-.12A10.10 .emery_base.*[^1-9]0 errors")
+    add_test(NAME cli_naca65_bad COMMAND bladegen_cli naca65 1.2 0.10 --variant dca)
+    set_tests_properties(cli_naca65_bad PROPERTIES WILL_FAIL TRUE)
     add_test(NAME cli_bad_usage COMMAND bladegen_cli frobnicate)
     set_tests_properties(cli_bad_usage PROPERTIES WILL_FAIL TRUE)
-    set_tests_properties(cli_version cli_profile cli_demo cli_build cli_bad_usage PROPERTIES ENVIRONMENT "${_env}")
+    set_tests_properties(cli_version cli_profile cli_naca65 cli_naca65_bad cli_demo cli_build cli_bad_usage PROPERTIES ENVIRONMENT "${_env}")
 endif()

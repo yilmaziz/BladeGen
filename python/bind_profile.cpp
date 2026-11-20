@@ -9,8 +9,6 @@ namespace bladegen_py {
 
 using namespace BladeGen::Profile;
 
-namespace {
-
 py::dict sample_dict(const CurveSample& c)
 {
     py::dict d;
@@ -21,6 +19,8 @@ py::dict sample_dict(const CurveSample& c)
     d["piece"] = to_np(c.piece);
     return d;
 }
+
+namespace {
 
 py::dict issue_dict(const Issue& i)
 {
@@ -35,6 +35,26 @@ py::dict issue_dict(const Issue& i)
 }
 
 }  // namespace
+
+py::dict quality_dict(const QualityReport& r)
+{
+    py::dict d;
+    py::list issues;
+    for (const auto& i : r.issues) issues.append(issue_dict(i));
+    d["issues"] = issues;
+    d["ss"] = sample_dict(r.ss);
+    d["ps"] = sample_dict(r.ps);
+    d["ok"] = r.ok();
+    d["errors"] = r.count(Severity::Error);
+    d["warnings"] = r.count(Severity::Warning);
+    d["summary"] = r.summary();
+    d["max_curvature"] = r.max_curvature;
+    d["min_thickness"] = r.min_thickness;
+    d["self_intersections"] = r.self_intersections;
+    d["ss_inflections"] = r.ss_inflections;
+    d["ps_inflections"] = r.ps_inflections;
+    return d;
+}
 
 void bind_profile(py::module_& m)
 {
@@ -219,23 +239,7 @@ void bind_profile(py::module_& m)
         .def_readwrite("n_body", &QualityOptions::n_body);
 
     m.def("check_quality", [](const Profile2D& p, const QualityOptions& o) {
-        const auto r = check_quality(p, o);
-        py::dict d;
-        py::list issues;
-        for (const auto& i : r.issues) issues.append(issue_dict(i));
-        d["issues"] = issues;
-        d["ss"] = sample_dict(r.ss);
-        d["ps"] = sample_dict(r.ps);
-        d["ok"] = r.ok();
-        d["errors"] = r.count(Severity::Error);
-        d["warnings"] = r.count(Severity::Warning);
-        d["summary"] = r.summary();
-        d["max_curvature"] = r.max_curvature;
-        d["min_thickness"] = r.min_thickness;
-        d["self_intersections"] = r.self_intersections;
-        d["ss_inflections"] = r.ss_inflections;
-        d["ps_inflections"] = r.ps_inflections;
-        return d;
+        return quality_dict(check_quality(p, o));
     }, py::arg("profile"), py::arg("options") = QualityOptions{},
        "Curvature along both sides (LE point -> TE point) and every geometry check; never throws on a bad shape");
 }

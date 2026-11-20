@@ -63,6 +63,12 @@ struct QualityReport
 
 [[nodiscard]] QualityReport check_quality(const Profile2D& prof, const QualityOptions& opt = {});
 
+/// The checks that need only side samples: rep.ss and rep.ps (LE point -> TE point,
+/// pieces labelled as in Profile2D) must be filled; loop is the closed profile.  Edge
+/// zones, both sides, orientation, self-intersection.  te_edge = false skips the TE zone
+/// (a sharp TE by design).  Used for sections that are not Profile2D (NACA 65).
+void check_samples(QualityReport& rep, const std::vector<Vec2>& loop, const QualityOptions& opt, bool te_edge = true);
+
 /// Number of crossings between non-adjacent segments of a closed polyline
 /// (the last point must repeat the first).
 [[nodiscard]] int count_self_intersections(const std::vector<Vec2>& closed);

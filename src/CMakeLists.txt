@@ -18,8 +18,10 @@ set(BLADEGEN_SOURCES
     occt/Fillet.cpp
     fit/InverseFit.cpp
     fit/SectionFit.cpp
+    fit/NacaFit.cpp
     io/Rotor67.cpp
     io/BladeJson.cpp
+    naca/Naca65.cpp
 )
 
 add_library(bladegen_lib STATIC ${BLADEGEN_SOURCES})

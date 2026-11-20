@@ -6,10 +6,15 @@
 //       C2 NURBS blade, trimmed solid, optional hub fillet; writes the blade and hub+blade
 //   bladegen fit <sides.csv> <out.json> [--ss x,y] [--ps x,y] [--negate-y] [--fairness w]
 //       inverse design from published coordinates (unstaggered frame)
+//   bladegen naca65 <cl0> <t_max/c> [--variant kovach_sandercock|emery_base] [--csv sides.csv] [--fit out.json]
+//       parametric NACA 65-(cl0 A10) t/c section: quality report, side coordinates and curvature,
+//       optionally the custom profile parameters fitted to it (NACA 65 + Custom)
 //   bladegen demo <out dir>
 //       writes the demo rotor definition and its STEP files
 //   bladegen version
 #include "fit/InverseFit.hpp"
+#include "fit/NacaFit.hpp"
+#include "naca/Naca65.hpp"
 #include "io/BladeJson.hpp"
 #include "occt/OcctBlade.hpp"
 #include "profile/Quality.hpp"
@@ -35,6 +40,7 @@ int usage()
                  "  bladegen profile <profile.json> [--csv curvature.csv]\n"
                  "  bladegen build <blade.json> <out.step> [--fillet R_mm] [--unit mm|m]\n"
                  "  bladegen fit <sides.csv> <out.json> [--ss x,y] [--ps x,y] [--negate-y] [--fairness w]\n"
+                 "  bladegen naca65 <cl0> <t_max/c> [--variant kovach_sandercock|emery_base] [--csv sides.csv] [--fit out.json]\n"
                  "  bladegen demo <out dir>\n"
                  "  bladegen version\n");
     return 2;
@@ -158,6 +164,39 @@ int cmd_fit(int argc, char** argv)
     return 0;
 }
 
+int cmd_naca65(int argc, char** argv)
+{
+    if (argc < 4) return usage();
+    const auto opt = options(argc, argv, 4);
+    Naca::Naca65Params p{std::stod(argv[2]), std::stod(argv[3]),
+                         Naca::variant_from_string(opt.count("--variant") ? opt.at("--variant") : "kovach_sandercock")};
+    const Naca::Naca65Section s(p);
+    const auto& m = s.metadata();
+    const auto q = Naca::check_quality(s);
+    std::printf("%s (%s): t_max %.6f c at station %.4f, R_LE %.6f c, R_TE %.4f c\n", m.designation.c_str(),
+                Naca::to_string(p.variant).c_str(), m.max_thickness, m.max_thickness_station, m.le_radius, m.te_radius);
+    std::printf("equivalent arc: camber %.3f deg, chi_LE %.3f deg, chi_TE %.3f deg\n%s\n", Math::rad2deg(m.camber_angle),
+                Math::rad2deg(m.chi_le), Math::rad2deg(m.chi_te), q.summary().c_str());
+    if (opt.count("--csv")) {
+        std::ofstream f(opt.at("--csv"));
+        f << "side,x,y,kappa,piece\n";
+        f.precision(12);
+        for (int sd = 0; sd < 2; ++sd) {
+            const auto& c = sd == 0 ? q.ss : q.ps;
+            for (std::size_t i = 0; i < c.xy.size(); ++i)
+                f << (sd == 0 ? "SS" : "PS") << "," << c.xy[i].x() << "," << c.xy[i].y() << "," << c.kappa[i] << ","
+                  << Profile::to_string(static_cast<Profile::Piece>(c.piece[i])) << "\n";
+        }
+    }
+    if (opt.count("--fit")) {
+        const auto r = Fit::fit_naca65(s);
+        std::printf("NACA 65 + Custom: RMS %.4f %% c, max %.4f %% c (%.1f s)\n", 100.0 * r.rms, 100.0 * r.max, r.seconds);
+        IO::write_profile_json(r.params, opt.at("--fit"));
+        std::printf("wrote %s\n", opt.at("--fit").c_str());
+    }
+    return q.ok() ? 0 : 3;
+}
+
 int cmd_demo(int argc, char** argv)
 {
     if (argc < 3) return usage();
@@ -182,9 +221,10 @@ int main(int argc, char** argv)
         if (cmd == "profile") return cmd_profile(argc, argv);
         if (cmd == "build") return cmd_build(argc, argv);
         if (cmd == "fit") return cmd_fit(argc, argv);
+        if (cmd == "naca65") return cmd_naca65(argc, argv);
         if (cmd == "demo") return cmd_demo(argc, argv);
         if (cmd == "version") {
-            std::printf("BladeGen 1.0.0\n");
+            std::printf("BladeGen %s\n", BLADEGEN_VERSION);
             return 0;
         }
     } catch (const std::exception& e) {

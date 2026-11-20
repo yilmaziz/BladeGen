@@ -1,5 +1,102 @@
 # Changelog
 
+## v1.0.1 — NACA 65 series and the section designer window
+
+The first integration step of the BladeGen → ENIGMAgrid → TURBOlenza chain: TURBOlenza's blade geometry, the C2
+NACA 65 cascade section, now lives in BladeGen, and a desktop window designs hub / mid / tip sections with live
+curvature plots.
+
+### New
+
+**Parametric NACA 65 series** (`src/naca/Naca65`, migrated from TURBOlenza `b2b/geometry.py`)
+- NACA 65-(Cl0 A10) t/c for Cl0 0–2.5 and t/c 0.02–0.20, both variants: **Kovach–Sandercock** (taper from
+  station 0.60 to an R = 0.008 c TE circle) and **Emery** (sharp TE).
+- Reviewed before porting. **Kept:**
+  - Table 4-1 with the 2.5 % misprint corrected;
+  - the closed-form A10 mean line and the arc-length thickness station;
+  - the C4 quintic thickness in √station;
+  - the nose circle;
+  - the C2 **monotone-curvature leading edge** (Whewell-form fair, the curvature falls from 1/R_LE without
+    overshoot or S-bend);
+  - the equivalent-arc angles.
+
+  **Dropped:**
+  - the PCHIP thickness (curvature sawtooth);
+  - the legacy LE circle with its polar fair;
+  - kernel smoothing and the least-squares C2 refit.
+
+  **Replaced by BladeGen's own constructions:**
+  - a C2 blend at the Kovach start;
+  - a G2 minimum-jerk TE connector through the TE circle's point with its tangent and curvature;
+  - a C2 closing piece to the sharp Emery TE.
+- Agreement with TURBOlenza's frozen C2 geometry on five reference sections:
+
+  | variant | body | LE | TE | difference at the TE |
+  |---|---|---|---|---|
+  | Emery | ≤ 5·10⁻⁸ c | ≤ 4·10⁻⁸ c | ≤ 1.1·10⁻⁵ c | |
+  | Kovach | ≤ 3·10⁻⁶ c | ≤ 5·10⁻⁸ c | ≤ 1.9·10⁻⁴ c | the different, G2 TE connector |
+- About 0.25 s per section including the quality check (the same checks as custom profiles; the sharp Emery
+  TE is reported as information).
+- `math/Constrained.hpp`: Lawson–Hanson NNLS (with the anti-cycling safeguard; without it the LE fair took 7 s),
+  least-distance programming, LSEI, Gauss–Legendre of any order.
+
+**NACA 65 + Custom** (`fit/NacaFit`, `fit_naca65`)
+- The custom BladeGen parameters are inverse-fitted to a NACA 65 section, starting from the 65-(12)10 fit scaled
+  to Cl0 and t. The result is an ordinary `ProfileParams`, so every custom knob then edits the NACA geometry.
+- Accuracy and time: RMS ≈ 0.011 % c for Kovach sections in 3–5 s.
+
+**Section designer window** (`python -m bladegen.gui`; `tools/gui.cmd`, `tools/gui.sh`)
+- Hub / mid / tip stations, each with its own construction method: **NACA 65**, **Custom** or **NACA 65 +
+  Custom** (DCA and C4 shown as planned).
+- Knobs grouped by family. The profile is shown with LE / TE zooms, the **curvature of the suction and
+  pressure side** from the LE point to the TE point with LE / TE zooms, and a cascade view (stagger,
+  solidity). Everything is redrawn on every change in a worker thread.
+- The geometry is always built. S-shaped or looping LE / TE connectors and self-intersections are **errors**:
+  red ✗ marks on the profile and the curvature, a red badge and the title "NOT MANUFACTURABLE AS DESIGNED".
+- Overlay of all stations; save / open a design (JSON); export coordinates with curvature (CSV), **TURBOlenza
+  CascadeSpec** entries for the NACA 65 stations (checked with `CascadeSpec(**entry)` and `make_cascade`), and
+  the figure.
+- Runs wherever the repository and its conda environment are: Tkinter + matplotlib, nothing else to install.
+  The launchers build the Python module when it is missing or older than the GUI. High-DPI aware on Windows.
+- By design there is no flowpath, span or 3-D in the window; the 3-D blade stays in the notebooks.
+
+**Other**
+- CLI: `bladegen naca65 <cl0> <t> [--variant …] [--csv sides.csv] [--fit custom.json]`; `bladegen version` now
+  reports the CMake project version.
+- Python: `Naca65Params`, `Naca65Section` (metadata, samples, camber line), `check_quality(section)`,
+  `naca65_start`, `fit_naca65`.
+- Tests:
+  - Catch2 (NACA 65 and the solvers): Table 4-1, A10, the thickness law, the LE fair (monotone, G2), both TEs,
+    the quality check over a Cl0 × t × variant grid, the TURBOlenza reference, NACA 65 + Custom, the solvers,
+    invalid input.
+  - pytest: the bindings, every GUI method, and the window driven headless.
+  - CLI tests.
+  - Linux CI runs the GUI test under Xvfb.
+
+### Known limitations (v1.0.1)
+- **Kovach station 0.60:** the table/taper corner (0.08°) is blended over ±0.005 in station. This keeps the
+  surface within 3·10⁻⁶ c of TURBOlenza's, but the curvature has a short excursion there (TURBOlenza's frozen
+  C2 surface has the same, κ −0.8…1.9 on the suction side), reported as suction-side inflection warnings. A
+  wider blend removes it but moves away from TURBOlenza's geometry.
+- **Pressure-side waviness:** the curvature of the thin NACA 65 pressure side changes sign a few times. This is
+  inherited from the tabulated thickness and reported as a warning, not an error.
+- **Emery in NACA 65 + Custom:** a sharp Emery TE cannot be matched by the round custom TE (RMS ≈ 0.07 % c,
+  locally up to 0.36 % c at the TE).
+- **The window:**
+  - sections are 2-D (cascade plane), so there are no flowpath, span or 3-D in it;
+  - a design has exactly three stations;
+  - the TURBOlenza export covers NACA 65 stations only (TURBOlenza has no custom-profile input yet);
+  - the fit runs 3–5 s and is not cancellable.
+- **DCA and C4** profiles are not implemented yet (listed as planned in the window).
+- All v1.0.0 limitations still apply.
+
+### Next steps
+- DCA and C4 sections (the next construction methods in the window), and the NACA 65 section as a 3-D
+  station profile.
+- An option for a curvature-fair Kovach start (wider blend) and a sharp / cusped TE in the custom profile, so
+  NACA 65 + Custom can match the Emery TE.
+- Export of stations in ENIGMAgrid's geometry format, and a TURBOlenza run from the window (solver option).
+
 ## v1.0.0 — first release
 
 The C++23 / OpenCASCADE successor of the `blade2d` Python blade generator: a parametric C2 blade engine

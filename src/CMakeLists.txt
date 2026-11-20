@@ -12,6 +12,10 @@ set(BLADEGEN_SOURCES
     profile/ProfileParams.cpp
     profile/Profile2D.cpp
     profile/Quality.cpp
+    blade/Meridional.cpp
+    blade/Blade.cpp
+    occt/OcctBlade.cpp
+    occt/Fillet.cpp
 )
 
 add_library(bladegen_lib STATIC ${BLADEGEN_SOURCES})

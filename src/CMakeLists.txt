@@ -28,4 +28,4 @@ target_include_directories(bladegen_lib PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT
 target_link_libraries(bladegen_lib
     PUBLIC  Eigen3::Eigen bladegen::occt bladegen::json
     PRIVATE bladegen::compiler_flags)
-set_target_properties(bladegen_lib PROPERTIES OUTPUT_NAME bladegen)
+set_target_properties(bladegen_lib PROPERTIES OUTPUT_NAME bladegen_core)

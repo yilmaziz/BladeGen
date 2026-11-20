@@ -29,11 +29,14 @@ option(BLADEGEN_ENABLE_ASAN   "Enable AddressSanitizer + UBSan (GCC/Clang)"     
 include(CompilerFlags)
 include(Dependencies)
 
+if(BLADEGEN_BUILD_TESTS)
+    enable_testing()
+endif()
+
 add_subdirectory(src)
 add_subdirectory(apps)
 
 if(BLADEGEN_BUILD_TESTS)
-    enable_testing()
     add_subdirectory(tests)
 endif()
 

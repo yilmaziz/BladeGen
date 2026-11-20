@@ -35,8 +35,9 @@ public:
     [[nodiscard]] static MeridionalCurve line(const Vec2& a, const Vec2& b);
 
     [[nodiscard]] const Math::BSpline2& curve() const noexcept { return c_; }
-    [[nodiscard]] double length() const noexcept { return m_.back(); }        ///< total m
-    [[nodiscard]] double mprime_length() const noexcept { return mp_.back(); } ///< total m'
+    [[nodiscard]] bool empty() const noexcept { return m_.empty(); }
+    [[nodiscard]] double length() const noexcept { return m_.empty() ? 0.0 : m_.back(); }         ///< total m
+    [[nodiscard]] double mprime_length() const noexcept { return mp_.empty() ? 0.0 : mp_.back(); } ///< total m'
 
     /// Point at meridional distance m from the start (extrapolated outside [0, length]).
     [[nodiscard]] Vec2 at_m(double m) const;

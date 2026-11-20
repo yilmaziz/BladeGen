@@ -83,7 +83,7 @@ double thickness_law(double xi, const ThicknessParams& t, double xi_max)
     const double shp_le = std::max(t.shape_le, 1e-6);
     double shp_te = std::max(t.shape_te, 1e-6);
     if (t.enforce_c1) {
-        // dt/dxi continuous at the peak:
+        // blade2d: equal slope MAGNITUDES at the peak (a symmetric peak, not C1):
         //   shape_le (t_max - t_le) / xi_max = shape_te (t_max - t_te) / (1 - xi_max)
         const double num = shp_le * (t.t_max - t.t_le) * (1.0 - xi_max);
         const double den = (t.t_max - t.t_te) * xi_max;
@@ -286,6 +286,7 @@ std::array<Vec2, 4> Profile2D::derivs(double t, bool from_left) const
         if (t < 0.0) t += T;
     }
     if (from_left && t == 0.0) t = T;
+    if (!from_left && t == T) t = 0.0;  // the period is the start of the LE connector
     int k = 3;
     for (int j = 0; j < 4; ++j) {
         const double a = breaks_[static_cast<std::size_t>(j)], b = breaks_[static_cast<std::size_t>(j + 1)];

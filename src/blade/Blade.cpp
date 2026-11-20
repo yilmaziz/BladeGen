@@ -67,7 +67,12 @@ void BladeDefinition::validate() const
     }
     const bool explicit_sl = std::all_of(stations.begin(), stations.end(),
                                          [](const BladeStation& s) { return s.streamline.has_value(); });
-    require(explicit_sl || channel.hub().length() > 0.0, "a channel is needed when a station has no streamline");
+    const bool any_sl = std::any_of(stations.begin(), stations.end(),
+                                    [](const BladeStation& s) { return s.streamline.has_value(); });
+    require(explicit_sl || !any_sl, "either every station has its own streamline or none has");
+    require(explicit_sl || !channel.hub().empty(), "a channel is needed when the stations have no streamline");
+    for (const auto& s : stations)
+        require(s.placement.mirror == stations.front().placement.mirror, "all stations must have the same mirror flag");
     require(n_blades >= 1, "n_blades >= 1");
     require(n_sections >= 2, "n_sections >= 2");
     require(span_extension >= 0.0 && span_extension < 0.5, "span_extension must be in [0, 0.5)");

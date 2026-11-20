@@ -68,8 +68,8 @@ private:
 [[nodiscard]] SkinResult skin_loops(const std::vector<std::vector<Vec3>>& loops,
                                     const std::vector<double>& u = {});
 
-/// Loops extended past the first / last one: quadratic (C2) extrapolation of the
-/// skin along its span parameter by `before` / `after` times the mean section spacing.
+/// Loops extended past the first / last one: second-order Taylor extrapolation of the
+/// skin along its span parameter (linear where the spanwise end condition is natural) by `before` / `after` times the mean section spacing.
 [[nodiscard]] std::vector<std::vector<Vec3>> extend_loops(const std::vector<std::vector<Vec3>>& loops,
                                                           double before, double after);
 

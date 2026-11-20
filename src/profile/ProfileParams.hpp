@@ -78,7 +78,7 @@ struct ThicknessParams
     double t_te = 0.006;        ///< thickness at the SS end (TE side)
     double shape_le = 1.0;      ///< exponent of the forward branch (>1 flatter at LE)
     double shape_te = 1.5;      ///< exponent of the aft branch
-    bool enforce_c1 = false;    ///< derive shape_te so dt/dxi is continuous at the peak
+    bool enforce_c1 = false;    ///< blade2d option: derive shape_te so |dt/dxi| is equal on both sides of the peak (not C1)
 };
 
 /// Pressure-side coupling family.

@@ -107,3 +107,13 @@ TEST_CASE("hub fillet on the demo rotor", "[occt][fillet]")
     REQUIRE(fil.fillet_g1_deg < 0.5);
     Occt::write_shape(fil.blade_on_hub, out("demo_blade_fillet.step"));
 }
+
+TEST_CASE("periodic interpolation stays well posed for many points", "[occt]")
+{
+    std::vector<double> u;
+    for (int i = 0; i <= 2000; ++i) u.push_back(i / 2000.0);
+    const Occt::PeriodicInterpolator P(u);  // det underflows at this size; rcond does not
+    const auto c = P.curve(circle(1.0, 0.0, 2000));
+    REQUIRE(c->IsPeriodic());
+    REQUIRE(std::abs(c->Value(0.25).X() - std::cos(Math::kPi / 2)) < 1e-9);
+}

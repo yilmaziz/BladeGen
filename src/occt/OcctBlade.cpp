@@ -161,7 +161,7 @@ PeriodicInterpolator::PeriodicInterpolator(const std::vector<double>& u)
         c->SetPole(i, gp_Pnt(0, 0, 0));
     }
     lu_.compute(A);
-    if (!(std::abs(lu_.determinant()) > 0.0)) throw std::runtime_error("PeriodicInterpolator: singular system");
+    if (!(lu_.rcond() > 1e-13)) throw std::runtime_error("PeriodicInterpolator: singular or ill-conditioned system");
 }
 
 Handle(Geom_BSplineCurve) PeriodicInterpolator::curve(const std::vector<Vec3>& pts) const
@@ -300,13 +300,16 @@ BladeShapes build_shapes(const std::vector<std::vector<Vec3>>& loops, const Soli
 
     // annulus sector around the blade
     double xmin = std::numeric_limits<double>::infinity(), xmax = -xmin, tmin = xmin, tmax = -xmin;
+    const double tref = theta_of(loops.front().front());  // angles relative to it: no wrap at +-pi
     for (const auto& l : loops)
         for (const auto& p : l) {
             xmin = std::min(xmin, p.x());
             xmax = std::max(xmax, p.x());
-            tmin = std::min(tmin, theta_of(p));
-            tmax = std::max(tmax, theta_of(p));
+            const double th = tref + std::remainder(theta_of(p) - tref, 2.0 * Math::kPi);
+            tmin = std::min(tmin, th);
+            tmax = std::max(tmax, th);
         }
+    if (tmax - tmin > 1.5 * Math::kPi) throw std::invalid_argument("blade spans more than 270 deg in theta");
     const double cx = xmax - xmin;
     const double xa = xmin - opt.axial_margin * cx, xb = xmax + opt.axial_margin * cx;
     const double marg = Math::deg2rad(opt.sector_margin_deg);

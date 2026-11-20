@@ -104,7 +104,7 @@ json to_json(const Blade::BladeDefinition& d)
               {"span_extension", d.span_extension},
               {"n_sections", d.n_sections},
               {"stations", st}};
-    if (d.channel.hub().length() > 0.0) j["channel"] = {{"hub", to_json(d.channel.hub())}, {"shroud", to_json(d.channel.shroud())}};
+    if (!d.channel.hub().empty()) j["channel"] = {{"hub", to_json(d.channel.hub())}, {"shroud", to_json(d.channel.shroud())}};
     return j;
 }
 

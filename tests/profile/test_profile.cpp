@@ -202,3 +202,10 @@ TEST_CASE("generic parameter access round-trips", "[profile]")
     const auto m = blend(ProfileParams::naca65_1210(), ProfileParams::cda_start(), 0.5);
     REQUIRE(m.le.radius == Approx(0.5 * (0.012627 + 0.010)));
 }
+
+TEST_CASE("derivatives at t = period equal those at t = 0", "[profile]")
+{
+    const Profile2D p(ProfileParams::naca65_1210());
+    const auto a = p.derivs(p.period(), false), b = p.derivs(0.0, false);
+    for (std::size_t k = 0; k < 4; ++k) REQUIRE((a[k] - b[k]).norm() < 1e-12 * (1.0 + b[k].norm()));
+}

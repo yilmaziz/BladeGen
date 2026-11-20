@@ -123,3 +123,16 @@ TEST_CASE("demo rotor: stations reproduced, sections closed and on their stream 
     REQUIRE(secs.front().span < 0.0);
     REQUIRE(secs.back().span > 1.0);
 }
+
+TEST_CASE("invalid blade definitions throw instead of misbehaving", "[blade]")
+{
+    auto d = BladeDefinition::demo_rotor();
+    d.channel = MeridionalChannel{};  // no channel, no stream lines
+    REQUIRE_THROWS_AS(d.validate(), std::invalid_argument);
+    d = BladeDefinition::demo_rotor();
+    d.stations[1].streamline = d.channel.streamline(0.5);  // only one station with its own stream line
+    REQUIRE_THROWS_AS(d.validate(), std::invalid_argument);
+    d = BladeDefinition::demo_rotor();
+    d.stations[2].placement.mirror = true;
+    REQUIRE_THROWS_AS(d.validate(), std::invalid_argument);
+}

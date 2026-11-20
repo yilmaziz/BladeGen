@@ -1,0 +1,22 @@
+name: bladegen
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - occt=7.9
+  - eigen=3.4
+  - nlohmann_json
+  - catch2=3
+  - pybind11
+  - ninja
+  - cmake
+  - numpy
+  - scipy
+  - matplotlib
+  - ipywidgets
+  - jupyterlab
+  - notebook
+  - nbclient
+  - ipykernel
+  - plotly
+  - pytest

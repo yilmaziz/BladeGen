@@ -324,6 +324,10 @@ geometry                                                                  mesher
   so a blade designed (or inverse-designed) in BladeGen can be meshed by ENIGMAgrid and analysed by TURBOlenza
   from one parameter set.
 
+## Releases
+
+See [CHANGELOG.md](CHANGELOG.md) for the release notes, known limitations and planned work.
+
 ## License
 
 BladeGen is free software under the **GNU General Public License v3.0 or later** ([LICENSE](LICENSE)), the same

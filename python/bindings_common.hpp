@@ -64,5 +64,6 @@ void bind_naca(py::module_& m);
 void bind_blade(py::module_& m);
 void bind_fit(py::module_& m);
 void bind_occt(py::module_& m);
+void bind_design(py::module_& m);
 
 }  // namespace bladegen_py

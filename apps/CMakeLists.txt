@@ -8,6 +8,7 @@ foreach(_app bladegen_cli rotor67 profile_dump fillet_lab)
     target_link_libraries(${_app} PRIVATE bladegen::lib bladegen::compiler_flags)
 endforeach()
 set_target_properties(bladegen_cli PROPERTIES OUTPUT_NAME bladegen)
+add_subdirectory(designer)
 target_compile_definitions(bladegen_cli PRIVATE BLADEGEN_VERSION="${PROJECT_VERSION}")
 
 if(BLADEGEN_BUILD_TESTS)

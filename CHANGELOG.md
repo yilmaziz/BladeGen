@@ -1,5 +1,130 @@
 # Changelog
 
+## v1.0.2 — BladeGen Designer: meridional channel, five layers, conformal 3-D blade
+
+BladeGen gets a native **C++ / Qt designer** with the layout of a professional blade-design program: MDI views
+whose content is picked from a right-click menu, live plots in thin lines, and a meshed 3-D blade. The 3-D
+part follows the DLR BladeGen parameterization (Voß et al., Computers and Fluids 292 (2025) 106588):
+profiles in the (m′, θ) plane, stacked on the stream surfaces of a meridional channel. v1.0.1 stays on the
+branch `release/v1.0.1`.
+
+### New
+
+**Initial meridional configuration** (`src/blade/FlowPath`)
+- Eight cylindrical coordinates of an axial compressor: hub and casing (Z, R) at the LE and the TE.
+- Per wall, **Bell & Mehta** or **Linear**:
+  - Bell & Mehta (NASA CR-182747, 1988): the fifth-order contour R = R_LE + ΔR (6ξ⁵ − 15ξ⁴ + 10ξ³) between
+    the LE and TE, with zero slope and curvature at both ends, joining cylinders upstream and downstream (G2);
+  - Linear: the straight line through the LE and TE points, continued straight.
+- Inlet and outlet extensions as fractions of each wall's axial length.
+- The walls are **exact** degree-5 B-splines; layer streamlines are their exact blend, so every layer's LE and
+  TE lie on the straight LE / TE lines.
+
+**Five layers**: Hub, 25 %, Mid, 75 % and Tip (the 25 % and 75 % layers are new), each with its own
+construction method (NACA 65, Custom, NACA 65 + Custom) and its placement (stagger, lean θ_LE, 2-D solidity).
+
+**Conformal mapping to 3-D** (`StreamSurface`): m′ = ∫ dm / r measured from the layer LE.
+- **Cylindrical wrapping** (closed form x = x_LE + r m′) on constant-radius layers (straight walls).
+- **Mapping onto the surface of revolution** r(z) everywhere else.
+- (m′, θ) is the main design coordinate system; the blade-to-blade view also shows (m, rθ).
+
+**Metal angle and thickness** (`src/profile/Camber`): the camber line is the locus of the centres of the
+inscribed circles, smoothed by a least-squares cubic B-spline pinned at the LE / TE points. It gives:
+- the local metal angle β along the chord of every layer;
+- θ along the camber;
+- the thickness t/c along the chord;
+- the **metal-angle contour in the meridional cut** (and a thickness contour) on the (Z, R) plane.
+
+**Meshed 3-D geometry** (`src/design/BladeDesign`) instead of a rendered OCCT solid:
+- structured blade rows between the layers, clustered toward hub and tip (two-sided tanh, Vinokur 1983);
+- hub and casing grids over one pitch;
+- exports: OBJ mesh, layer CSV, and the OCCT blade solid as STEP / IGES / BREP / STL.
+
+**BladeGen Designer** (`apps/designer`, `bladegen_designer`, Qt 6 Widgets)
+- MDI sub-windows. **Right-click a view** for:
+  - its content: 3D View, Blade-to-Blade View, Profile Section, Meridional Contour, Meridional Metal Angle /
+    Thickness Contour, Meridional Curvature, Blade-to-Blade Curvature (SS / PS), LE/TE Theta, LE/TE Beta,
+    LE/TE Parameters, Airfoil Area, Blade Information Table (current / all layers), Blade Angles, Beta / Theta /
+    Beta vs. Theta / Thickness of all layers;
+  - its layer;
+  - the horizontal axis of the angle / thickness plots;
+  - the blade-to-blade coordinates;
+  - the plot options: legend, points, status strip, swap / proportional / flipped axes, symmetric-log scale;
+  - Number of Points, Save Graph Data, Copy View Image, Zoom Fit.
+- The plots are drawn in C++ (QPainter), so there is no matplotlib:
+  - thin antialiased lines: **suction side blue, pressure side red, LE / TE closures green**;
+  - wheel zoom, drag pan, double-click fit;
+  - the cursor position is shown bottom left.
+- The 3-D view (no OpenGL needed):
+  - shaded or wireframe blade (red), hub (green) and casing (black) grids, tip cap (magenta), rotation axis;
+  - drag to rotate.
+- Parameter panel:
+  - *Initial Meridional Configuration*, with the Bell & Mehta / Linear buttons per wall;
+  - *Layers and Profiles*: the layer buttons, the method, knobs by family and the NACA 65 + Custom *Fit*;
+  - *Blade and Mesh*.
+- The *Geometry checks* dock lists errors and warnings per layer.
+- Geometry runs on a worker thread; the newest request replaces a pending one. The five layers are built in
+  parallel, and unchanged layer sections come from a cache.
+- Files: `bladegen-design-2` JSON. v1.0.1 `bladegen-design-1` files open, with the 25 % and 75 % layers
+  blended.
+- Launchers: `tools\designer.cmd` (Windows) and `tools/designer.sh` (Linux / macOS) build the designer on
+  first use, then open it.
+- `--screenshot out.png` and `--self-test dir`: CI renders every view content for every layer offscreen.
+
+**Python**:
+- `MeridionalConfig`, `WallPoints`, `WallLaw`, `FlowPath`, `StreamSurface`, `bell_mehta`;
+- `DesignEvaluator.evaluate(design_json)`, which returns layers, mesh and fields as numpy arrays, and
+  `DesignEvaluator.write_step(...)`;
+- `design_defaults()`, `design_normalize()`.
+
+**Build / CI**:
+- Qt 6 in `environment.yml` (`qt6-main`) and in all CI jobs (apt `qt6-base-dev` on Linux);
+- `BLADEGEN_BUILD_DESIGNER=AUTO|ON|OFF`: without Qt, everything else still builds;
+- version 1.0.2.
+
+### Tests
+90 ctest entries in the `python` preset.
+
+New C++ tests:
+- the Bell & Mehta polynomial and its derivatives;
+- the wall B-splines against the closed form, with G2 at their joins;
+- linear walls;
+- layer LE / TE on the LE / TE lines;
+- the cylindrical wrap in closed form;
+- m′ of a cone in closed form;
+- the Hermite map against the adaptive integral (< 10⁻⁶ mm);
+- conformality in 3-D (10⁻⁵ °);
+- camber of concentric arcs, of a symmetric section and of a NACA 65 section;
+- natural-spline weights and tanh rows;
+- five layers placed and meshed onto hub and casing;
+- the metal angle re-measured on the 3-D surface;
+- cylindrical layers;
+- JSON round trip and v1.0.1 import;
+- invalid input;
+- the section cache;
+- NACA 65 + Custom inside a design.
+
+Also new:
+- pytest for the new bindings;
+- the designer self-test and a bad-file test.
+
+### Known limitations
+- The metal angle is the slope of the inscribed-circle camber line. On NACA 65 (A10) layers it is steep at the
+  LE and TE, because the A10 slope is logarithmic there. The information table also lists the equivalent
+  circular-arc angles.
+- Stacking is at the LE point on the LE line (prescribed radial edges, Voß et al. Sec. 4.2, straight lines).
+  Stacking at the centre of gravity, bow and sweep are not yet inputs. Lean is θ_LE per layer.
+- The mesh rows interpolate the layer profiles pointwise in span. The STEP export skins those rows, so it
+  matches the mesh but not a parametric spanwise law.
+- The STEP export takes a few seconds and blocks the window.
+- DCA and C4 are still listed as planned.
+- The v1.0.1 Tk section window still has three stations and no flowpath.
+
+### Next steps
+- DCA and C4 profiles; stacking options (centre of gravity, bow, sweep, curved LE / TE lines).
+- Tip clearance and the hub fillet in the designer's solid export.
+- The ENIGMAgrid structured grid from the designer's stream surfaces; TURBOlenza export of all five layers.
+
 ## v1.0.1 — NACA 65 series and the section designer window
 
 The first integration step of the BladeGen → ENIGMAgrid → TURBOlenza chain: TURBOlenza's blade geometry, the C2

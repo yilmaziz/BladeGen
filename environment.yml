@@ -14,6 +14,7 @@ dependencies:
   - scipy
   - matplotlib
   - tk
+  - qt6-main            # the C++ designer (bladegen_designer)
   - ipywidgets
   - jupyterlab
   - notebook

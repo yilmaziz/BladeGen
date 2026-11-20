@@ -21,4 +21,5 @@ PYBIND11_MODULE(_core, m)
     bladegen_py::bind_blade(m);
     bladegen_py::bind_fit(m);
     bladegen_py::bind_occt(m);
+    bladegen_py::bind_design(m);
 }

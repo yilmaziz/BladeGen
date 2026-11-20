@@ -48,7 +48,7 @@ TEST_CASE("Rotor 67 tables: sections, flowpath and notes", "[rotor67]")
         REQUIRE(std::atan(s.r.front() * sl) == Approx(s.beta1.front()).margin(1e-12));
         // tangency points lie on the circles
         const double mt = s.m_tan[0][0];
-        REQUIRE(std::hypot(mt - s.le.mc, s.le.rc * (s.theta(1, mt) - s.le.thc)) == Approx(s.le.rho).epsilon(1e-4));  // radius tabulated to 5 digits
+        REQUIRE(std::hypot(mt - s.le.mc, s.le.rc * (s.theta(1, mt) - s.le.thc)) == Approx(s.le.rho).margin(1e-6));  // published circle and surface tangent to < 1 um
     }
     REQUIRE_THROWS(IO::read_rotor67(src("no/such/file.txt")));
 }

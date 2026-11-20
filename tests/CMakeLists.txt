@@ -1,5 +1,7 @@
 # tests/CMakeLists.txt — one Catch2 executable per layer.
 include(Catch)
+# BLADEGEN_TEST_SPEC: a Catch2 test spec, e.g. "~[slow]" (the ASan preset skips the slow fits)
+set(BLADEGEN_TEST_SPEC "" CACHE STRING "Catch2 test spec for test discovery")
 
 function(bladegen_add_test name)
     add_executable(${name} ${ARGN})
@@ -11,7 +13,7 @@ function(bladegen_add_test name)
         set(_env "PATH=${BLADEGEN_OCCT_BIN_DIR}\;$ENV{PATH}")
         string(REPLACE ";" "\;" _env "${_env}")
     endif()
-    catch_discover_tests(${name} DISCOVERY_MODE PRE_TEST PROPERTIES ENVIRONMENT "${_env}")
+    catch_discover_tests(${name} DISCOVERY_MODE PRE_TEST TEST_SPEC "${BLADEGEN_TEST_SPEC}" PROPERTIES ENVIRONMENT "${_env}")
 endfunction()
 
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/test_output)
@@ -19,3 +21,5 @@ bladegen_add_test(test_math    math/test_bspline.cpp math/test_numerics.cpp)
 bladegen_add_test(test_profile profile/test_profile.cpp profile/test_quality.cpp profile/test_blade2d_reference.cpp)
 bladegen_add_test(test_blade   blade/test_blade.cpp)
 bladegen_add_test(test_occt    occt/test_occt.cpp)
+bladegen_add_test(test_fit     fit/test_fit.cpp)
+bladegen_add_test(test_io      io/test_io.cpp)

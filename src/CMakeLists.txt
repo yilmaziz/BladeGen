@@ -16,6 +16,10 @@ set(BLADEGEN_SOURCES
     blade/Blade.cpp
     occt/OcctBlade.cpp
     occt/Fillet.cpp
+    fit/InverseFit.cpp
+    fit/SectionFit.cpp
+    io/Rotor67.cpp
+    io/BladeJson.cpp
 )
 
 add_library(bladegen_lib STATIC ${BLADEGEN_SOURCES})

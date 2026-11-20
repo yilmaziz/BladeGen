@@ -1,9 +1,10 @@
-"""Render NASA Rotor 67 as rebuilt by BladeGen (assets/rotor67.png, assets/rotor67_blade.png).
+"""Render NASA Rotor 67 as rebuilt by BladeGen (assets/rotor67.png).
 
     python tools/render_rotor67.py            (bladegen module on PYTHONPATH: build preset 'python')
 
 Uses the fitted definition data/rotor67/rotor67_bladegen.json (written by apps/rotor67), builds the
-C2 blade with the 1.78 mm hub fillet, copies it 22 times around the axis and renders it with VTK
+C2 blade with the 1.78 mm hub fillet on its hub sector, draws the 14 fitted stations on it and renders
+the scene of notebook 04 with VTK, on a transparent background
 (off-screen; VTK ships with the conda-forge OCCT build).
 """
 import sys
@@ -71,13 +72,19 @@ def actor(pd, rgb, spec=0.25):
 def render(actors, path, size, cam):
     ren = vtk.vtkRenderer()
     ren.SetBackground(1, 1, 1)
+    ren.SetBackgroundAlpha(0.0)  # transparent PNG: blends with light and dark page themes
+    ren.UseFXAAOn()
+    kit = vtk.vtkLightKit()  # key, fill, back and head lights: even shading like plotly
+    kit.SetKeyLightIntensity(0.9)
+    kit.AddLightsToRenderer(ren)
     for a in actors:
         ren.AddActor(a)
     win = vtk.vtkRenderWindow()
     win.SetOffScreenRendering(1)
     win.AddRenderer(ren)
     win.SetSize(*size)
-    win.SetMultiSamples(8)
+    win.SetMultiSamples(0)
+    win.SetAlphaBitPlanes(1)
     c = ren.GetActiveCamera()
     c.SetFocalPoint(0, 0, 0)
     c.SetPosition(*cam["direction"])  # view direction only; ResetCamera frames the scene
@@ -88,6 +95,8 @@ def render(actors, path, size, cam):
     win.Render()
     w2i = vtk.vtkWindowToImageFilter()
     w2i.SetInput(win)
+    w2i.SetInputBufferTypeToRGBA()
+    w2i.ReadFrontBufferOff()
     w2i.Update()
     wr = vtk.vtkPNGWriter()
     wr.SetFileName(str(path))
@@ -96,26 +105,32 @@ def render(actors, path, size, cam):
     print("wrote", path)
 
 
-# hub: surface of revolution of the flowpath hub over the bladed region
-hub = data.hub_curve()
-xr = np.array([hub.at_m(m) for m in np.linspace(0, hub.length, 600)]) * 1000
-z = np.linspace(-20, 105, 140)
-rh = np.interp(z, xr[:, 0], xr[:, 1])
-th = np.linspace(0, 2 * np.pi, 361)
-Z, T = np.meshgrid(z, th, indexing="ij")
-R = np.interp(Z, z, rh) - 0.2  # 0.2 mm inside: no z-fighting with the blade footprints
-hv = np.stack([Z, R * np.sin(T), R * np.cos(T)], axis=-1).reshape(-1, 3)
-nz, nt = Z.shape
-idx = np.arange(nz * nt).reshape(nz, nt)
-q = np.stack([idx[:-1, :-1], idx[1:, :-1], idx[1:, 1:], idx[:-1, 1:]], axis=-1).reshape(-1, 4)
-hf = np.vstack([q[:, [0, 1, 2]], q[:, [0, 2, 3]]])
+def tube(points, rgb, radius):
+    pts = vtk.vtkPoints()
+    pts.SetData(numpy_to_vtk(np.ascontiguousarray(points, dtype=float), deep=True))
+    line = vtk.vtkPolyLine()
+    line.GetPointIds().SetNumberOfIds(len(points))
+    for i in range(len(points)):
+        line.GetPointIds().SetId(i, i)
+    cells = vtk.vtkCellArray()
+    cells.InsertNextCell(line)
+    pd = vtk.vtkPolyData()
+    pd.SetPoints(pts)
+    pd.SetLines(cells)
+    tf = vtk.vtkTubeFilter()
+    tf.SetInputData(pd)
+    tf.SetRadius(radius)
+    tf.SetNumberOfSides(12)
+    tf.Update()
+    return actor(tf.GetOutput(), rgb, 0.1)
 
-blades = []
-for k in range(data.n_blades):
-    blades.append(actor(polydata(rot_x(v, 2 * np.pi * k / data.n_blades), f), (0.30, 0.50, 0.80)))
-hub_actor = actor(polydata(hv, hf), (0.70, 0.70, 0.72), 0.1)
-render([hub_actor] + blades, REPO / "assets" / "rotor67.png", (1600, 1200),
-       {"direction": (-1.0, -0.85, 0.55), "up": (0, 0, 1), "zoom": 1.5})
-# one blade with its fillet, close up near the root
-render([actor(polydata(v, f), (0.30, 0.50, 0.80))], REPO / "assets" / "rotor67_blade.png", (1200, 1200),
-       {"direction": (-1.0, 0.35, 0.3), "up": (0, 0, 1), "zoom": 1.1})
+
+# the same scene as notebook 04: blade (with fillet) on its hub sector, plus the 14 fitted stations
+hv, hf, _ = sh.hub.tessellate(2e-4, 0.25)
+scene = [actor(polydata(v, f), (0.69, 0.77, 0.87)),          # plotly 'lightsteelblue'
+         actor(polydata(hv * 1000.0, hf), (0.80, 0.80, 0.80), 0.1)]
+for s in blade.sections(60, 200):
+    xyz = s["xyz"] * 1000.0
+    scene.append(tube(xyz, (0.10, 0.12, 0.18), 0.22))
+render(scene, REPO / "assets" / "rotor67.png", (1600, 1300),
+       {"direction": (-0.35, 1.0, 0.45), "up": (0, 0, 1), "zoom": 1.25})

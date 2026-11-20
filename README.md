@@ -10,11 +10,11 @@ NURBS blades, a rolling-ball hub fillet, Python bindings and interactive noteboo
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src="assets/rotor67.png" width="62%" alt="NASA Rotor 67 rebuilt with BladeGen"/>
-  <img src="assets/rotor67_blade.png" width="34%" alt="one Rotor 67 blade with the hub fillet"/>
-  <br/><em>NASA Rotor 67 rebuilt by BladeGen from the 14 published sections (TP-2879): 22 C2 NURBS blades,
-  1.016 mm tip clearance, 1.78 mm rolling-ball hub fillet (right: one blade, the fillet at its root).
-  Rendered by <code>tools/render_rotor67.py</code>.</em>
+  <img src="assets/rotor67.png" width="60%" alt="NASA Rotor 67 blade rebuilt with BladeGen"/>
+  <br/><em>NASA Rotor 67 rebuilt by BladeGen from its 14 published sections (NASA TP-2879): the C2 NURBS blade
+  solid on its hub sector with the 1.78 mm rolling-ball hub fillet; black lines are the 14 fitted stations
+  (the top one is the casing contour, the tip sits 1.016 mm below it). The 3-D model of notebook
+  <code>04_rotor67</code>, rendered by <code>tools/render_rotor67.py</code>.</em>
 </p>
 
 ## Quick start

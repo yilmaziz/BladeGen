@@ -5,6 +5,71 @@
 NURBS blades, a rolling-ball hub fillet, Python bindings and interactive notebooks.
 
 [![CI](https://github.com/yilmaziz/BladeGen/actions/workflows/ci.yml/badge.svg)](https://github.com/yilmaziz/BladeGen/actions/workflows/ci.yml)
+![C++23](https://img.shields.io/badge/C%2B%2B-23-blue) ![OCCT](https://img.shields.io/badge/OpenCASCADE-7.6%20%7C%207.9-green)
+![platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
+<p align="center">
+  <img src="assets/rotor67.png" width="60%" alt="NASA Rotor 67 blade rebuilt with BladeGen"/>
+  <br/><em>NASA Rotor 67 rebuilt by BladeGen from its 14 published sections (NASA TP-2879): the C2 NURBS blade
+  solid on its hub sector with the 1.78 mm rolling-ball hub fillet; black lines are the 14 fitted stations
+  (the top one is the casing contour, the tip sits 1.016 mm below it). The 3-D model of notebook
+  <code>04_rotor67</code>, rendered by <code>tools/render_rotor67.py</code>.</em>
+</p>
+
+## Quick start
+
+You need [Miniconda / Miniforge](https://conda-forge.org/download/) (any platform) and a C++ compiler:
+Visual Studio 2022+ with the *Desktop development with C++* workload on Windows, GCC 13+ on Linux, Xcode
+command-line tools on macOS.
+
+```bash
+git clone https://github.com/yilmaziz/BladeGen.git
+cd BladeGen
+conda env create -f environment.yml        # OCCT 7.9, Eigen, Catch2, pybind11, Ninja, JupyterLab, ...
+```
+
+**Open the notebooks (the best way to see what BladeGen does).** The launcher builds the Python module the
+first time (a few minutes), then starts JupyterLab in `python/notebooks`:
+
+```bat
+:: Windows (cmd or PowerShell, from the repository folder)
+tools\jupyter.cmd                  :: later runs start at once; --rebuild after changing C++ code
+```
+
+```bash
+# Linux / macOS
+conda activate bladegen
+bash tools/jupyter.sh               # --rebuild after changing C++ code, --port N for another port
+```
+
+Then open, in order: `01_profile_designer` (knobs by family, live curvature and error badge),
+`02_blade_3d` (3-D blade, **Add hub fillet** button, STEP export), `03_inverse_fit` (NACA 65 from published
+coordinates), `04_rotor67` (the rotor above). Stop the server with Ctrl+C in the terminal (closing the browser
+tab leaves it running).
+
+**Build and test the C++ library and the CLI:**
+
+```bat
+tools\win_dev.cmd windows-msvc-release        :: Windows: configure, build, run all tests
+```
+
+```bash
+bash tools/linux_dev.sh linux-release         # Linux (or: macos-release on macOS)
+./build/linux-release/bin/bladegen demo out/  # demo rotor -> out/demo_rotor.json, STEP files
+```
+
+## Platforms
+
+| platform | compiler | OpenCASCADE | tested in CI | Python + notebooks |
+|---|---|---|---|---|
+| Windows 10 / 11 x64 | MSVC 19.4x (VS 2022), 19.5x (VS 2026) | 7.9 (conda-forge) | ✓ `windows-2022` | ✓ |
+| Linux x86-64 (Ubuntu 24.04) | GCC 13 (apt), GCC 16 (conda) | 7.6 (apt), 7.9 (conda) | ✓ `ubuntu-24.04`, also ASan + UBSan | ✓ |
+| macOS arm64 (Apple Silicon) | AppleClang | 7.9 (conda-forge) | ✓ `macos-latest` | ✓ |
+
+All builds use `-Wall -Wextra -Wpedantic -Wconversion …` / `/W4` with warnings as errors.
+
+## At a glance
 
 | | |
 |---|---|
@@ -15,7 +80,7 @@ NURBS blades, a rolling-ball hub fillet, Python bindings and interactive noteboo
 | Hub fillet | constant-radius **rolling-ball fillet** (OCCT's `BRepFilletAPI` fails on this junction), exact shared edges, G1 ≈ 0.2° |
 | Inverse design | bounded Levenberg–Marquardt on side-aware residuals; NACA 65-(12)10: RMS 0.0095 % chord in 5 s |
 | NASA Rotor 67 | all 14 published sections rebuilt: 3-D RMS **1.6–16 µm**, max ≤ 51 µm; STEP with 1.016 mm tip gap and 1.78 mm hub fillet |
-| Platforms | Windows (MSVC, OCCT 7.9) and Linux (GCC, OCCT 7.6 and 7.9), zero warnings with `-Werror` / `/WX`, CI on both |
+| Platforms | Windows (MSVC), Linux (GCC, OCCT 7.6 and 7.9), macOS (AppleClang), zero warnings with `-Werror` / `/WX`, CI on all three |
 
 ---
 
@@ -242,6 +307,36 @@ Python). The fit is the only place that needs derivatives.
 
 ---
 
+## Relation to ENIGMAgrid and TURBOlenza
+
+BladeGen is the **geometry** stage of a three-part toolchain developed together:
+
+```
+BladeGen  ──(blade sections, NURBS skin, hub / casing, STEP / JSON)──▶  ENIGMAgrid  ──(structured grid)──▶  TURBOlenza
+geometry                                                                  mesher                               solver
+```
+
+* **ENIGMAgrid** (C++20, separate repository) is a structured multi-block blade-to-blade mesher. Its
+  geometry layer needs exactly what BladeGen produces: C2 section curves on stream surfaces, the conformal
+  (m′, θ) frame and the hub / casing contours. BladeGen's `BladeDefinition` JSON (exact B-spline stream lines)
+  and its section loops are meant as ENIGMAgrid's geometry input.
+* **TURBOlenza** is the flow solver of the chain; it is to be added as a solver option behind these modules,
+  so a blade designed (or inverse-designed) in BladeGen can be meshed by ENIGMAgrid and analysed by TURBOlenza
+  from one parameter set.
+
+## Releases
+
+See [CHANGELOG.md](CHANGELOG.md) for the release notes, known limitations and planned work.
+
+## License
+
+BladeGen is free software under the **GNU General Public License v3.0 or later** ([LICENSE](LICENSE)), the same
+license as the ITU-TUMAM BladeGen it follows. Third-party libraries keep their own licenses: OpenCASCADE
+(LGPL 2.1 with exception), Eigen (MPL 2.0), nlohmann/json (MIT), Catch2 (BSL 1.0), pybind11 (BSD).
+The Rotor 67 tables in `data/rotor67` are transcribed from NASA TP-2879 (a US government publication).
+
+---
+
 ## Layout
 
 ```
@@ -255,5 +350,6 @@ apps/         bladegen CLI, rotor67, development probes
 python/       pybind11 module, bladegen.notebook helpers, notebooks, pytest
 tests/        Catch2 tests per layer, reference data (blade2d, NACA 65, Rotor 67)
 data/rotor67  NASA TP-2879 blade sections and flowpath (transcribed)
-tools/        win_dev.cmd, linux_dev.sh, reference-data generators
+tools/        jupyter.cmd / jupyter.sh (notebook launchers), win_dev.cmd, linux_dev.sh, render_rotor67.py, reference generators
+assets/       README images
 ```

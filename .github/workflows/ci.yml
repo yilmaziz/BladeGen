@@ -84,3 +84,28 @@ jobs:
         run: |
           $env:PATH = "$env:MAMBA_ROOT_PREFIX\envs\bladegen\Library\bin;$env:MAMBA_ROOT_PREFIX\envs\bladegen;$env:PATH"
           ctest --test-dir build/windows-msvc-release --output-on-failure
+
+  macos:
+    name: macOS AppleClang Release (OCCT 7.9, conda-forge) + Python
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: bladegen
+          create-args: >-
+            python=3.12 occt=7.9 eigen=3.4 nlohmann_json catch2=3 pybind11 ninja cmake
+            numpy matplotlib pytest nbclient ipykernel ipywidgets
+          init-shell: bash
+          cache-environment: true
+      - name: Configure
+        run: cmake --preset macos-release -DBLADEGEN_BUILD_PYTHON=ON -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" -DPython_EXECUTABLE="$CONDA_PREFIX/bin/python"
+      - name: Build
+        run: cmake --build build/macos-release --parallel
+      - name: Test
+        env:
+          MPLBACKEND: Agg
+        run: ctest --test-dir build/macos-release --output-on-failure

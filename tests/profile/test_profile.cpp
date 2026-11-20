@@ -97,14 +97,16 @@ TEST_CASE("C2Parametric mode: the closed loop is parametrically C2 at all four j
             INFO(j.name);
             REQUIRE(j.gap < 1e-13);
             REQUIRE(j.d1_jump < 1e-10);
-            REQUIRE(j.d2_jump < 1e-7);
+            // the 7x7 connector solve of a tiny TE (r = 0.0002 chord) is ill-conditioned:
+            // its round-off is ~1e-7 and CPU dependent (x86-64 5e-8, arm64 3e-7)
+            REQUIRE(j.d2_jump < 1e-6);
             REQUIRE(j.tangent_angle < 1e-9);
         }
         // and also periodic: the end of the PS meets the start of the LE connector
         const auto a = p.derivs(p.period(), true), b = p.derivs(0.0, false);
         REQUIRE((a[0] - b[0]).norm() < 1e-13);
         REQUIRE((a[1] - b[1]).norm() < 1e-10 * a[1].norm());
-        REQUIRE((a[2] - b[2]).norm() < 1e-7 * a[1].squaredNorm());
+        REQUIRE((a[2] - b[2]).norm() < 1e-6 * a[1].squaredNorm());
     }
 }
 

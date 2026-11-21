@@ -63,3 +63,15 @@ def test_design_json_v1_import_and_errors():
     bad["meridional"]["hub"]["z_te"] = -20.0
     with pytest.raises(ValueError):
         bg.DesignEvaluator().evaluate(json.dumps(bad))
+
+
+def test_rotor67_default_layers():
+    lay = bg.rotor67_layer(0.0)
+    assert lay["stagger_deg"] == pytest.approx(11.6406, abs=1e-3)
+    assert bg.rotor67_layer(1.0)["stagger_deg"] > bg.rotor67_layer(0.5)["stagger_deg"]
+    d = json.loads(bg.design_defaults())
+    assert all(layer["method"] == "Custom" for layer in d["layers"])
+    n = json.loads(bg.design_naca65_defaults())
+    assert all(layer["method"] == "NACA 65" for layer in n["layers"])
+    with pytest.raises(ValueError):
+        bg.rotor67_layer(1.5)

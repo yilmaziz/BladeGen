@@ -44,7 +44,7 @@ private:
     void onResult();
     void refreshViews(bool refit = false);
     void updateIssues();
-    void newDesign();
+    void newDesign(bool naca);
     void openDialog();
     bool save(bool as);
     void exportStep();

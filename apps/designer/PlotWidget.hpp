@@ -35,6 +35,18 @@ struct PointMarker
     QColor color = Qt::red;
     char shape = 'x';          ///< 'x', '^', 'o', 's'
     QString label;
+    double size = 6.0;         ///< half size [px]
+    double width = 2.0;        ///< line width [px]
+};
+
+/// A point the user can drag (B-spline control points); `fixed` ones are only drawn.
+struct DragHandle
+{
+    int id = 0;
+    QPointF p;
+    QColor color = Qt::black;
+    bool fixed = false;
+    QString tip;
 };
 
 struct Fill
@@ -62,6 +74,8 @@ public:
     void setFills(QVector<Fill> f) { fills_ = std::move(f); }
     void setColorBar(bool on, double lo = 0, double hi = 1, const QString& label = {}, std::function<QColor(double)> map = {});
     void setBadge(const Badge& b) { badge_ = b; }
+    /// While a handle is being dragged it keeps the cursor position (results arrive later).
+    void setHandles(QVector<DragHandle> h);
     /// Repaint with the new data; the view is refitted when `refit` or when the data
     /// left the current view entirely.
     void commit(bool refit = false);
@@ -77,6 +91,8 @@ public:
 
 signals:
     void contextMenuWanted(const QPoint& global);
+    /// A handle was dragged to p (data coordinates); `done` on release.
+    void handleMoved(int id, QPointF p, bool done);
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -93,6 +109,8 @@ private:
     [[nodiscard]] QPointF toScreen(const QPointF& t) const;    // transformed -> pixels
     [[nodiscard]] QPointF fromScreen(const QPointF& s) const;  // pixels -> transformed
     [[nodiscard]] double untransformY(double y) const;
+    [[nodiscard]] QPointF dataAt(const QPointF& screen) const;  // pixels -> data
+    [[nodiscard]] int handleAt(const QPointF& screen) const;
     [[nodiscard]] QRectF dataBounds() const;
     [[nodiscard]] QRect plotRect() const;
     [[nodiscard]] int badgeHeight() const;
@@ -103,6 +121,8 @@ private:
     QVector<Series> series_;
     QVector<PointMarker> markers_;
     QVector<Fill> fills_;
+    QVector<DragHandle> handles_;
+    int drag_handle_ = -1;  // index into handles_ while dragging one
     Badge badge_;
     bool colorbar_ = false;
     double cb_lo_ = 0, cb_hi_ = 1;

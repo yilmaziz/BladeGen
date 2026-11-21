@@ -5,8 +5,7 @@
 BladeGen gets a native **C++ / Qt designer** with the layout of a professional blade-design program: MDI views
 whose content is picked from a right-click menu, live plots in thin lines, and a meshed 3-D blade. The 3-D
 part follows the DLR BladeGen parameterization (Voß et al., Computers and Fluids 292 (2025) 106588):
-profiles in the (m′, θ) plane, stacked on the stream surfaces of a meridional channel. v1.0.1 stays on the
-branch `release/v1.0.1`.
+profiles in the (m′, θ) plane, stacked on the stream surfaces of a meridional channel.
 
 ### New
 
@@ -65,7 +64,7 @@ inscribed circles, smoothed by a least-squares cubic B-spline pinned at the LE /
 - The *Geometry checks* dock lists errors and warnings per layer.
 - Geometry runs on a worker thread; the newest request replaces a pending one. The five layers are built in
   parallel, and unchanged layer sections come from a cache.
-- Files: `bladegen-design-2` JSON. v1.0.1 `bladegen-design-1` files open, with the 25 % and 75 % layers
+- Files: `bladegen-design-2` JSON. `bladegen-design-1` files (the former section window) open, with the 25 % and 75 % layers
   blended.
 - Launchers: `tools\designer.cmd` (Windows) and `tools/designer.sh` (Linux / macOS) build the designer on
   first use, then open it.
@@ -82,8 +81,42 @@ inscribed circles, smoothed by a least-squares cubic B-spline pinned at the LE /
 - `BLADEGEN_BUILD_DESIGNER=AUTO|ON|OFF`: without Qt, everything else still builds;
 - version 1.0.2.
 
+### Designer refinements: draggable control points, thickness law, Rotor 67 default layers
+
+**New**
+- **Profile Section view: B-spline control points.** For Custom layers the control polygons of the suction
+  side, the pressure side and both edge connectors are drawn (dotted), and the control points can be
+  **dragged with the mouse**. Each drag changes the corresponding parameter, and the knobs follow on release:
+  - SS: the LE and TE handles move along their fixed directions (`ss.handle_le_frac`, `ss.handle_te_frac`);
+    CP2 moves freely (`ss.ctrl2_mprime`, `ss.ctrl2_theta`);
+  - PS: the LE and TE handles (`ps.handle_*_frac`); a free PS point moves its m′ station (`ps.mprime_ctrl`),
+    because its height is the thickness law;
+  - edge points and connector control points follow from the edge parameters and are shown fixed.
+- **Thickness plots show the thickness law** of a Custom layer with the layer's numbers:
+  - t(ξ) = t_LE + (t_max − t_LE)(ξ/ξ_max)^a forward of ξ_max and t_TE + (t_max − t_TE)((1 − ξ)/(1 − ξ_max))^b
+    aft of it;
+  - the law is drawn as a dashed curve next to the measured inscribed-circle thickness.
+- **Default design: NASA Rotor 67 custom layers.** The five layers start from the 14 TP-2879 sections fitted
+  with the custom profile (`data/rotor67/rotor67_bladegen.json`), blended to 0 / 25 / 50 / 75 / 100 % span,
+  with their stagger and LE angle. The profiles are chord-normalised, so they scale with the chosen
+  meridional path (c′ cos γ = Δm′ of each layer; angles are kept). *File → New design (NACA 65 layers)*
+  gives the v1.0.2 NACA 65 default.
+- Python: `rotor67_layer(span)`, `design_naca65_defaults()`.
+
+**Changed**
+- Geometry-check markers are small x marks, black for warnings and red for errors (no more large orange
+  triangles).
+
+**Tests**
+- Rotor 67 layers exact at the 14 sections, blended between them, with stagger rising toward the tip and
+  invalid spans rejected.
+- The default design builds without errors on every layer. Its control polygons match the parameters, and
+  the law maximum equals t_max.
+- Doubling the axial chord doubles the tip chord and keeps the angles. The NACA 65 default still evaluates.
+- The designer self-test drags CP2 of the mid layer and checks that the design and the geometry follow.
+
 ### Tests
-90 ctest entries in the `python` preset.
+92 ctest entries in the `python` preset.
 
 New C++ tests:
 - the Bell & Mehta polynomial and its derivatives;
@@ -99,7 +132,7 @@ New C++ tests:
 - five layers placed and meshed onto hub and casing;
 - the metal angle re-measured on the 3-D surface;
 - cylindrical layers;
-- JSON round trip and v1.0.1 import;
+- JSON round trip and the bladegen-design-1 import;
 - invalid input;
 - the section cache;
 - NACA 65 + Custom inside a design.
@@ -118,20 +151,19 @@ Also new:
   matches the mesh but not a parametric spanwise law.
 - The STEP export takes a few seconds and blocks the window.
 - DCA and C4 are still listed as planned.
-- The v1.0.1 Tk section window still has three stations and no flowpath.
 
 ### Next steps
 - DCA and C4 profiles; stacking options (centre of gravity, bow, sweep, curved LE / TE lines).
 - Tip clearance and the hub fillet in the designer's solid export.
 - The ENIGMAgrid structured grid from the designer's stream surfaces; TURBOlenza export of all five layers.
 
-## v1.0.1 — NACA 65 series and the section designer window
+### NACA 65 series (from TURBOlenza)
 
 The first integration step of the BladeGen → ENIGMAgrid → TURBOlenza chain: TURBOlenza's blade geometry, the C2
-NACA 65 cascade section, now lives in BladeGen, and a desktop window designs hub / mid / tip sections with live
-curvature plots.
+NACA 65 cascade section, now lives in BladeGen (it was prepared as v1.0.1, which was never released and is
+withdrawn: its Tk / matplotlib section window is replaced by BladeGen Designer).
 
-### New
+#### New
 
 **Parametric NACA 65 series** (`src/naca/Naca65`, migrated from TURBOlenza `b2b/geometry.py`)
 - NACA 65-(Cl0 A10) t/c for Cl0 0–2.5 and t/c 0.02–0.20, both variants: **Kovach–Sandercock** (taper from
@@ -170,21 +202,6 @@ curvature plots.
   to Cl0 and t. The result is an ordinary `ProfileParams`, so every custom knob then edits the NACA geometry.
 - Accuracy and time: RMS ≈ 0.011 % c for Kovach sections in 3–5 s.
 
-**Section designer window** (`python -m bladegen.gui`; `tools/gui.cmd`, `tools/gui.sh`)
-- Hub / mid / tip stations, each with its own construction method: **NACA 65**, **Custom** or **NACA 65 +
-  Custom** (DCA and C4 shown as planned).
-- Knobs grouped by family. The profile is shown with LE / TE zooms, the **curvature of the suction and
-  pressure side** from the LE point to the TE point with LE / TE zooms, and a cascade view (stagger,
-  solidity). Everything is redrawn on every change in a worker thread.
-- The geometry is always built. S-shaped or looping LE / TE connectors and self-intersections are **errors**:
-  red ✗ marks on the profile and the curvature, a red badge and the title "NOT MANUFACTURABLE AS DESIGNED".
-- Overlay of all stations; save / open a design (JSON); export coordinates with curvature (CSV), **TURBOlenza
-  CascadeSpec** entries for the NACA 65 stations (checked with `CascadeSpec(**entry)` and `make_cascade`), and
-  the figure.
-- Runs wherever the repository and its conda environment are: Tkinter + matplotlib, nothing else to install.
-  The launchers build the Python module when it is missing or older than the GUI. High-DPI aware on Windows.
-- By design there is no flowpath, span or 3-D in the window; the 3-D blade stays in the notebooks.
-
 **Other**
 - CLI: `bladegen naca65 <cl0> <t> [--variant …] [--csv sides.csv] [--fit custom.json]`; `bladegen version` now
   reports the CMake project version.
@@ -194,11 +211,10 @@ curvature plots.
   - Catch2 (NACA 65 and the solvers): Table 4-1, A10, the thickness law, the LE fair (monotone, G2), both TEs,
     the quality check over a Cl0 × t × variant grid, the TURBOlenza reference, NACA 65 + Custom, the solvers,
     invalid input.
-  - pytest: the bindings, every GUI method, and the window driven headless.
+  - pytest: the bindings.
   - CLI tests.
-  - Linux CI runs the GUI test under Xvfb.
 
-### Known limitations (v1.0.1)
+#### Known limitations (NACA 65)
 - **Kovach station 0.60:** the table/taper corner (0.08°) is blended over ±0.005 in station. This keeps the
   surface within 3·10⁻⁶ c of TURBOlenza's, but the curvature has a short excursion there (TURBOlenza's frozen
   C2 surface has the same, κ −0.8…1.9 on the suction side), reported as suction-side inflection warnings. A
@@ -207,20 +223,14 @@ curvature plots.
   inherited from the tabulated thickness and reported as a warning, not an error.
 - **Emery in NACA 65 + Custom:** a sharp Emery TE cannot be matched by the round custom TE (RMS ≈ 0.07 % c,
   locally up to 0.36 % c at the TE).
-- **The window:**
-  - sections are 2-D (cascade plane), so there are no flowpath, span or 3-D in it;
-  - a design has exactly three stations;
-  - the TURBOlenza export covers NACA 65 stations only (TURBOlenza has no custom-profile input yet);
-  - the fit runs 3–5 s and is not cancellable.
-- **DCA and C4** profiles are not implemented yet (listed as planned in the window).
+- **DCA and C4** profiles are not implemented yet (listed as planned in the designer).
 - All v1.0.0 limitations still apply.
 
-### Next steps
-- DCA and C4 sections (the next construction methods in the window), and the NACA 65 section as a 3-D
-  station profile.
+#### Next steps (NACA 65)
+- DCA and C4 sections.
 - An option for a curvature-fair Kovach start (wider blend) and a sharp / cusped TE in the custom profile, so
   NACA 65 + Custom can match the Emery TE.
-- Export of stations in ENIGMAgrid's geometry format, and a TURBOlenza run from the window (solver option).
+- Export of stations in ENIGMAgrid's geometry format, and a TURBOlenza run from the designer (solver option).
 
 ## v1.0.0 — first release
 

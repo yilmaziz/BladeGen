@@ -62,6 +62,35 @@ void addPieces(QVector<Series>& out, const std::vector<QPointF>& pts, const std:
     }
 }
 
+/// Geometry-check location: a small x, red for an error, black for a warning.
+PointMarker issueMarker(const QPointF& p, Profile::Severity sev)
+{
+    PointMarker m;
+    m.p = p;
+    m.color = sev == Profile::Severity::Error ? QColor(220, 0, 0) : QColor(0, 0, 0);
+    m.shape = 'x';
+    m.size = 3.5;
+    m.width = 1.3;
+    return m;
+}
+
+/// The custom thickness law with the layer's numbers (ProfileParams.hpp, ThicknessParams).
+QString thicknessFormula(const Profile::ProfileParams& p, double xi_max)
+{
+    const auto& t = p.thickness;
+    return QString("thickness law along the SS arc fraction ξ (ξ_max = %1 at m′ = %2):\n"
+                   "ξ ≤ ξ_max:  t = %3 + (%4 − %3) (ξ / ξ_max)^%5\n"
+                   "ξ > ξ_max:  t = %6 + (%4 − %6) ((1 − ξ) / (1 − ξ_max))^%7%8")
+        .arg(xi_max, 0, 'f', 4)
+        .arg(t.mprime_max, 0, 'f', 4)
+        .arg(t.t_le, 0, 'f', 5)
+        .arg(t.t_max, 0, 'f', 5)
+        .arg(t.shape_le, 0, 'f', 4)
+        .arg(t.t_te, 0, 'f', 5)
+        .arg(t.shape_te, 0, 'f', 4)
+        .arg(t.enforce_c1 ? QString("   (shape_te set by the C1 option)") : QString());
+}
+
 QString num(double v, int prec = 4) { return QString::number(v, 'g', prec); }
 
 struct Conf
@@ -174,6 +203,7 @@ ContentView::ContentView(Session& s, Content c, QWidget* parent) : QWidget(paren
     lay->addWidget(stack_);
     connect(plot_, &PlotWidget::contextMenuWanted, this, &ContentView::showMenu);
     connect(view3d_, &View3D::contextMenuWanted, this, &ContentView::showMenu);
+    connect(plot_, &PlotWidget::handleMoved, this, &ContentView::dragControlPoint);
     connect(table_, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& p) { showMenu(table_->viewport()->mapToGlobal(p)); });
     setContent(c);
 }
@@ -188,6 +218,58 @@ void ContentView::setContent(Content c)
     plot_->symlogY = c == Content::ProfileCurvature;
     plot_->showLegend = true;
     refresh(true);
+}
+
+void ContentView::dragControlPoint(int id, QPointF q, bool done)
+{
+    const int k = layerIndex();
+    if (k >= static_cast<int>(s_.design.layers.size())) return;
+    auto& lay = s_.design.layers[static_cast<std::size_t>(k)];
+    if (!lay.uses_custom()) return;
+    auto& p = lay.custom;
+    try {
+        const Profile::Profile2D prof(p);
+        const Math::Vec2 P(q.x(), q.y());
+        if (id >= kSsHandle && id < kPsHandle) {
+            const auto& c = prof.suction_side().ctrl();
+            const int i = id - kSsHandle;
+            const double span = (c.back() - c.front()).norm();
+            if (i == 2) {
+                p.ss.ctrl2_mprime = P.x();
+                p.ss.ctrl2_theta = P.y();
+            } else if (i == 1) {
+                const Math::Vec2 v = Profile::unit_from_beta(p.le.beta_deg + p.le.d_beta_ss_deg, +1.0);
+                p.ss.handle_le_frac = std::max(0.005, (P - c.front()).dot(v) / span);
+            } else if (i == 3) {
+                const Math::Vec2 v = Profile::unit_from_beta(p.te.beta_deg + p.te.d_beta_ss_deg, -1.0);
+                p.ss.handle_te_frac = std::max(0.005, (P - c.back()).dot(v) / span);
+            }
+        } else if (id >= kPsHandle) {
+            const auto& c = prof.pressure_side().ctrl();
+            const int i = id - kPsHandle, n = static_cast<int>(c.size());
+            const double span = (c.back() - c.front()).norm();
+            if (i == 1) {
+                const Math::Vec2 v = Profile::unit_from_beta(p.le.beta_deg - p.le.d_beta_ps_deg, +1.0);
+                p.ps.handle_le_frac = std::max(0.005, (P - c.front()).dot(v) / span);
+            } else if (i == n - 2) {
+                const Math::Vec2 v = Profile::unit_from_beta(p.te.beta_deg - p.te.d_beta_ps_deg, -1.0);
+                p.ps.handle_te_frac = std::max(0.005, (P - c.back()).dot(v) / span);
+            } else if (i >= 2 && i <= n - 3) {
+                // a free PS point sits at the law thickness below the SS point of its station:
+                // dragging moves the station (keeping the point's x offset from it)
+                auto& st = p.ps.mprime_ctrl;
+                const auto j = static_cast<std::size_t>(i - 2);
+                if (j < st.size()) {
+                    const double off = c[static_cast<std::size_t>(i)].x() - st[j];
+                    const double lo = j == 0 ? 0.02 : st[j - 1] + 0.01, hi = j + 1 == st.size() ? 0.98 : st[j + 1] - 0.01;
+                    st[j] = std::clamp(P.x() - off, lo, hi);
+                }
+            }
+        }
+    } catch (const std::exception&) {
+        return;  // an invalid intermediate profile: keep the last valid parameters
+    }
+    emit designEdited(done);
 }
 
 int ContentView::layerIndex() const
@@ -235,6 +317,7 @@ void ContentView::buildPlot(bool refit)
     QVector<Fill> F;
     plot_->setColorBar(false);
     plot_->setBadge({});
+    plot_->setHandles({});
     plot_->setTitle({});
     const auto R = s_.result;
     if (!R) {
@@ -262,6 +345,14 @@ void ContentView::buildPlot(bool refit)
         case HAxis::ChordFraction: return L.xc[i];
         }
         return L.mfrac[i];
+    };
+    // horizontal-axis value at chord fraction x (interpolated along the camber points)
+    auto hOfX = [&](const LayerResult& L, double x) {
+        if (haxis == HAxis::ChordFraction || L.xc.size() < 2) return x;
+        std::size_t i = 1;
+        while (i + 1 < L.xc.size() && L.xc[i] < x) ++i;
+        const double w = std::clamp((x - L.xc[i - 1]) / (L.xc[i] - L.xc[i - 1]), 0.0, 1.0);
+        return hval(L, i - 1) + w * (hval(L, i) - hval(L, i - 1));
     };
     const QString hlabel = haxis == HAxis::MeridionalFraction ? "meridional chord fraction (LE 0 → TE 1)"
                            : haxis == HAxis::MPrime          ? "m' (from the layer LE)"
@@ -310,8 +401,7 @@ void ContentView::buildPlot(bool refit)
         for (const auto& is : L.section->quality.issues) {
             if (is.severity == Profile::Severity::Info) continue;
             const QPointF c = cf(is.where);
-            M << PointMarker{map({c.x(), c.y()}, 0.0), is.severity == Profile::Severity::Error ? QColor(220, 0, 0) : QColor(230, 130, 0),
-                             is.severity == Profile::Severity::Error ? 'x' : '^', {}};
+            M << issueMarker(map({c.x(), c.y()}, 0.0), is.severity);
         }
         M << PointMarker{map({0.0, L.theta_le}, 0.0), Qt::black, 'o', "LE"};
         M << PointMarker{map({L.mprime.back(), Math::deg2rad(L.theta_deg.back())}, 0.0), Qt::black, 'o', "TE"};
@@ -337,11 +427,39 @@ void ContentView::buildPlot(bool refit)
         S << cam;
         for (const auto& is : q.issues) {
             if (is.severity == Profile::Severity::Info) continue;
-            M << PointMarker{QPointF(is.where.x(), is.where.y()), is.severity == Profile::Severity::Error ? QColor(220, 0, 0) : QColor(230, 130, 0),
-                             is.severity == Profile::Severity::Error ? 'x' : '^', {}};
+            M << issueMarker(QPointF(is.where.x(), is.where.y()), is.severity);
+        }
+        if (L.section->control) {
+            const auto& C = *L.section->control;
+            auto polygon = [&](const std::vector<Math::Vec2>& c, const QString& name, QColor col, bool legend) {
+                Series s;
+                s.name = name;
+                s.color = col;
+                s.style = Qt::DotLine;
+                s.legend = legend;
+                for (const auto& v : c) s.pts << QPointF(v.x(), v.y());
+                S << s;
+            };
+            polygon(C.ss, "control polygon (drag the dots)", QColor(25, 80, 225, 150), true);
+            polygon(C.ps, "control polygon (drag the dots)", QColor(220, 30, 30, 150), false);
+            polygon(C.le, "connector control points (fixed)", QColor(0, 150, 60, 150), true);
+            polygon(C.te, "connector control points (fixed)", QColor(0, 150, 60, 150), false);
+            QVector<DragHandle> H;
+            for (std::size_t i = 0; i < C.ss.size(); ++i) {
+                const bool free = i >= 1 && i + 1 < C.ss.size();
+                H << DragHandle{kSsHandle + static_cast<int>(i), QPointF(C.ss[i].x(), C.ss[i].y()), kSS, !free, {}};
+            }
+            for (std::size_t i = 0; i < C.ps.size(); ++i) {
+                const bool free = i >= 1 && i + 1 < C.ps.size();
+                H << DragHandle{kPsHandle + static_cast<int>(i), QPointF(C.ps[i].x(), C.ps[i].y()), kPS, !free, {}};
+            }
+            for (const auto* c : {&C.le, &C.te})
+                for (std::size_t i = 1; i + 1 < c->size(); ++i) H << DragHandle{-1, QPointF((*c)[i].x(), (*c)[i].y()), kEdge, true, {}};
+            plot_->setHandles(H);
         }
         plot_->setLabels("x / c", "y / c");
-        plot_->setBadge(badgeFor(q, QString::fromStdString(L.section->designation)));
+        plot_->setBadge(badgeFor(q, QString::fromStdString(L.section->designation) +
+                                        (L.section->control ? QString("  ·  drag a control point: SS handles / CP2, PS handles / stations") : QString())));
         break;
     }
     case Content::ProfileCurvature: {
@@ -369,8 +487,7 @@ void ContentView::buildPlot(bool refit)
             std::size_t best = 0;
             for (std::size_t i = 0; i < sd.s.size(); ++i)
                 if (std::abs(sd.s[i] / sd.s.back() - is.s) < std::abs(sd.s[best] / sd.s.back() - is.s)) best = i;
-            M << PointMarker{QPointF(is.s, sd.kappa[best]), is.severity == Profile::Severity::Error ? QColor(220, 0, 0) : QColor(230, 130, 0),
-                             is.severity == Profile::Severity::Error ? 'x' : '^', {}};
+            M << issueMarker(QPointF(is.s, sd.kappa[best]), is.severity);
         }
         plot_->setLabels("arc length / side length (LE point → TE point)", "κ [1/chord]  (symlog: linear below 1)");
         plot_->setBadge(badgeFor(q, crange == CurvatureRange::Full ? "curvature = 1 / R, signed (> 0 convex)"
@@ -518,6 +635,8 @@ void ContentView::buildPlot(bool refit)
             S << camberSeries(j, y, QString("%1 @ Span: %2").arg(what).arg(D.layers[j].span, 0, 'f', 4));
         }
         plot_->setLabels(hlabel, content_ == Content::BetaAll ? "Beta [deg]" : content_ == Content::ThetaAll ? "Theta [deg]" : "thickness t / c");
+        if (content_ == Content::ThicknessAll && have_k && R->layers[k].section->thickness_law)
+            plot_->setBadge({QString::fromStdString(D.layers[k].name) + ": " + thicknessFormula(D.layers[k].custom, R->layers[k].section->xi_max), 0});
         break;
     case Content::BetaVsTheta:
         for (std::size_t j = 0; j < R->layers.size(); ++j) {
@@ -536,6 +655,18 @@ void ContentView::buildPlot(bool refit)
         auto s = camberSeries(k, R->layers[k].thickness, "t / c (inscribed circle)");
         s.color = QColor(30, 60, 235);
         S << s;
+        const auto& sec = *R->layers[k].section;
+        if (sec.thickness_law) {
+            Series law;
+            law.name = "law t(ξ), normal to the SS, at the SS point's x";
+            law.color = QColor(220, 30, 30);
+            law.style = Qt::DashLine;
+            const auto& L = R->layers[k];
+            for (std::size_t i = 0; i < sec.thickness_law->law.size(); ++i)
+                law.pts << QPointF(hOfX(L, sec.thickness_law->mprime[i]), sec.thickness_law->law[i]);
+            S << law;
+            plot_->setBadge({thicknessFormula(D.layers[k].custom, sec.xi_max), 0});
+        }
         plot_->setLabels(hlabel, "thickness t / c");
         break;
     }

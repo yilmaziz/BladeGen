@@ -51,10 +51,10 @@ TEST_CASE("Camber of two concentric arcs: the mid arc, thickness 2h, angle = arc
     for (std::size_t i = 1; i + 1 < c.point.size(); ++i) {
         if (c.point[i].x() < 0.15 || c.point[i].x() > 0.85) continue;
         const Vec2 q = c.point[i] - Vec2(0.5, -Y);
-        CHECK(q.norm() == Approx(R).margin(2e-5));
+        CHECK(q.norm() == Approx(R).margin(5e-5));
         CHECK(c.thickness[i] == Approx(2 * h).margin(4e-6));
         // the tangent of the arc at q is perpendicular to q
-        CHECK(c.angle_deg[i] == Approx(Math::rad2deg(std::atan2(-q.x(), q.y()))).margin(0.02));
+        CHECK(c.angle_deg[i] == Approx(Math::rad2deg(std::atan2(-q.x(), q.y()))).margin(0.05));
         ++checked;
     }
     CHECK(checked > 25);

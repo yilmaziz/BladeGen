@@ -24,7 +24,7 @@ set_target_properties(bladegen_py PROPERTIES
 
 file(MAKE_DIRECTORY ${_pkg})
 configure_file(bladegen/_paths.py.in ${_pkg}/_paths.py @ONLY)
-foreach(_f __init__.py notebook.py gui.py)
+foreach(_f __init__.py notebook.py)
     configure_file(bladegen/${_f} ${_pkg}/${_f} COPYONLY)
 endforeach()
 

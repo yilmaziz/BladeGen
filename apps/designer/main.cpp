@@ -73,6 +73,21 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "self-test: a stagger change of 3 deg moved beta_LE by %g\n", after - before);
             return 7;
         }
+        // dragging the free SS control point CP2 of the mid layer moves ss.ctrl2
+        v->layer = 2;
+        v->setContent(Designer::Content::ProfileSection);
+        v->simulateDrag(Designer::ContentView::kSsHandle + 2, QPointF(0.48, 0.11));
+        const auto& c = w.session().design.layers[2].custom.ss;
+        if (std::abs(c.ctrl2_mprime - 0.48) > 1e-12 || std::abs(c.ctrl2_theta - 0.11) > 1e-12) {
+            std::fprintf(stderr, "self-test: the control-point drag did not reach the design\n");
+            return 8;
+        }
+        w.submit();
+        w.settle();
+        if (!w.session().result->ok()) {
+            std::fprintf(stderr, "self-test: the dragged profile did not evaluate\n");
+            return 9;
+        }
         w.grab().save(dir + "/window.png");
         std::printf("self-test: %d view renders OK, geometry %.1f ms\n", n, 1000.0 * w.session().result->seconds);
         return 0;

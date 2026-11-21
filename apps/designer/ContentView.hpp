@@ -59,6 +59,10 @@ public:
     /// Redraw from the session (refit: reset the zoom).
     void refresh(bool refit = false);
     [[nodiscard]] QImage image();
+    /// Profile Section drag targets: kSsHandle + SS control index, kPsHandle + PS control index.
+    static constexpr int kSsHandle = 1000, kPsHandle = 2000;
+    /// As if the user dragged control point `id` to p (self-test).
+    void simulateDrag(int id, QPointF p) { dragControlPoint(id, p, true); }
     int layer = -1;  ///< -1: follow the active layer
     HAxis haxis = HAxis::MeridionalFraction;
     B2BCoords b2b = B2BCoords::MPrimeTheta;
@@ -68,9 +72,12 @@ signals:
     void newViewWanted(Content c);
     void meshPointsWanted();
     void titleChanged(const QString& t);
+    /// The view changed the design (a dragged control point); `done` on release.
+    void designEdited(bool done);
 
 private:
     void showMenu(const QPoint& global);
+    void dragControlPoint(int id, QPointF p, bool done);
     [[nodiscard]] int layerIndex() const;
     void buildPlot(bool refit);
     void build3D(bool refit);

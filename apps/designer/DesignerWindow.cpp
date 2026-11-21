@@ -110,7 +110,8 @@ void DesignerWindow::closeEvent(QCloseEvent* e)
 void DesignerWindow::buildMenus()
 {
     auto* file = menuBar()->addMenu("&File");
-    file->addAction("&New design", QKeySequence::New, this, &DesignerWindow::newDesign);
+    file->addAction("&New design (Rotor 67 custom layers)", QKeySequence::New, this, [this] { newDesign(false); });
+    file->addAction("New design (NACA 65 layers)", this, [this] { newDesign(true); });
     file->addAction("&Open design...", QKeySequence::Open, this, &DesignerWindow::openDialog);
     file->addAction("&Save", QKeySequence::Save, this, [this] { save(false); });
     file->addAction("Save &as...", QKeySequence::SaveAs, this, [this] { save(true); });
@@ -145,7 +146,7 @@ void DesignerWindow::buildMenus()
 
     auto* tb = addToolBar("main");
     tb->setObjectName("toolbar");
-    tb->addAction("New", this, &DesignerWindow::newDesign);
+    tb->addAction("New", this, [this] { newDesign(false); });
     tb->addAction("Open", this, &DesignerWindow::openDialog);
     tb->addAction("Save", this, [this] { save(false); });
     tb->addSeparator();
@@ -164,6 +165,12 @@ ContentView* DesignerWindow::addView(Content c)
     connect(v, &ContentView::titleChanged, sub, &QMdiSubWindow::setWindowTitle);
     connect(v, &ContentView::newViewWanted, this, [this](Content cc) { addView(cc); });
     connect(v, &ContentView::meshPointsWanted, this, &DesignerWindow::meshPointsDialog);
+    connect(v, &ContentView::designEdited, this, [this](bool done) {
+        dirty_ = true;
+        updateTitle();
+        if (done) panel_->sync();  // the knobs follow the dragged control point on release
+        submit();
+    });
     sub->resize(560, 400);
     sub->show();
     return v;
@@ -268,9 +275,9 @@ void DesignerWindow::updateTitle()
     setWindowTitle(QString("BladeGen Designer %1 — %2%3").arg(BLADEGEN_VERSION, f, dirty_ ? " *" : ""));
 }
 
-void DesignerWindow::newDesign()
+void DesignerWindow::newDesign(bool naca)
 {
-    s_.design = Design::BladeDesign::defaults();
+    s_.design = naca ? Design::BladeDesign::naca65_defaults() : Design::BladeDesign::defaults();
     s_.path.clear();
     s_.active_layer = 2;
     dirty_ = false;

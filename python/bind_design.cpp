@@ -5,6 +5,7 @@
 
 #include "design/BladeDesign.hpp"
 #include "design/DesignSolid.hpp"
+#include "io/BladeJson.hpp"
 
 #include <pybind11/stl.h>
 
@@ -176,6 +177,17 @@ void bind_design(py::module_& m)
         }, py::arg("design_json"), py::arg("path"), "OpenCASCADE blade solid (design in mm) to STEP / IGES / BREP / STL");
     m.def("design_defaults", [] { return D::to_json(D::BladeDesign::defaults()).dump(2); },
           "JSON of the default five-layer axial compressor design");
+    m.def("design_naca65_defaults", [] { return D::to_json(D::BladeDesign::naca65_defaults()).dump(2); },
+          "JSON of the five-layer NACA 65 design");
+    m.def("rotor67_layer", [](double span) {
+        const auto l = D::rotor67_layer(span);
+        py::dict d;
+        d["span"] = l.span;
+        d["stagger_deg"] = l.stagger_deg;
+        d["theta_le_deg"] = l.theta_le_deg;
+        d["profile"] = py::module_::import("json").attr("loads")(IO::to_json(l.profile).dump());
+        return d;
+    }, py::arg("span"), "NASA Rotor 67 custom profile, stagger and LE angle at a span fraction (blended fitted sections)");
     m.def("design_normalize", [](const std::string& j) { return D::to_json(D::design_from_json(nlohmann::json::parse(j))).dump(2); },
           py::arg("design_json"), "Validate a design (v2 or the v1.0.1 format) and return its v2 JSON");
 }

@@ -25,7 +25,6 @@ using Design::LayerResult;
 
 namespace {
 
-constexpr int kSsHandle = ContentView::kSsHandle, kPsHandle = ContentView::kPsHandle;
 const QColor kSS(25, 80, 225), kPS(220, 30, 30), kEdge(0, 150, 60), kCamber(120, 120, 120);
 const QColor kLayer[] = {QColor(30, 60, 235), QColor(0, 175, 195), QColor(0, 150, 0), QColor(120, 170, 20), QColor(225, 30, 30)};
 

@@ -725,7 +725,7 @@ void ContentView::showMenu(const QPoint& global)
                                                   {HAxis::Meridional, "Meridional length m"},
                                                   {HAxis::ChordFraction, "Chord fraction x/c"}};
     for (const auto& [h, name] : axes) {
-        auto* a = ha->addAction(name, this, [this, h = h] { haxis = h; refresh(true); });
+        auto* a = ha->addAction(name, this, [this, hv = h] { haxis = hv; refresh(true); });
         a->setCheckable(true);
         a->setChecked(haxis == h);
         hg->addAction(a);
@@ -733,7 +733,7 @@ void ContentView::showMenu(const QPoint& global)
     auto* bc = m.addMenu("Blade-to-Blade Coordinates");
     auto* bg = new QActionGroup(&m);
     for (const auto& [c, name] : {std::pair{B2BCoords::MPrimeTheta, "M-prime, Theta (conformal)"}, std::pair{B2BCoords::MRTheta, "M, R·Theta [mm]"}}) {
-        auto* a = bc->addAction(name, this, [this, c = c] { b2b = c; refresh(true); });
+        auto* a = bc->addAction(name, this, [this, cv = c] { b2b = cv; refresh(true); });
         a->setCheckable(true);
         a->setChecked(b2b == c);
         bg->addAction(a);
@@ -742,7 +742,7 @@ void ContentView::showMenu(const QPoint& global)
     auto* cg = new QActionGroup(&m);
     for (const auto& [c, name] : {std::pair{CurvatureRange::Full, "LE point → TE point"}, std::pair{CurvatureRange::LeadingEdge, "Leading-edge zoom"},
                                   std::pair{CurvatureRange::TrailingEdge, "Trailing-edge zoom"}}) {
-        auto* a = cr->addAction(name, this, [this, c = c] { crange = c; refresh(true); });
+        auto* a = cr->addAction(name, this, [this, cv = c] { crange = cv; refresh(true); });
         a->setCheckable(true);
         a->setChecked(crange == c);
         cg->addAction(a);

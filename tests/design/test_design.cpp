@@ -222,3 +222,64 @@ TEST_CASE("NACA 65 + Custom layer: fitted custom parameters close to the section
     REQUIRE(r.layers[2].section->deviation_rms);
     CHECK(*r.layers[2].section->deviation_rms < 1.5e-3);
 }
+
+TEST_CASE("Rotor 67 layers: exact at the 14 fitted sections, blended between, invalid span rejected", "[design][rotor67]")
+{
+    const auto& t = rotor67_sections();
+    REQUIRE(t.size() == 14);
+    for (std::size_t k = 0; k < t.size(); ++k) {
+        const auto l = rotor67_layer(t[k].span);
+        CHECK(l.stagger_deg == Approx(t[k].stagger_deg).margin(1e-12));
+        CHECK(Profile::to_vector(l.profile) == Profile::to_vector(t[k].profile));
+        if (k > 0) CHECK(t[k].stagger_deg > t[k - 1].stagger_deg);  // stagger rises toward the tip
+    }
+    const double s = 0.5 * (t[3].span + t[4].span);
+    const auto m = rotor67_layer(s);
+    CHECK(m.stagger_deg == Approx(0.5 * (t[3].stagger_deg + t[4].stagger_deg)));
+    CHECK(m.profile.le.radius == Approx(0.5 * (t[3].profile.le.radius + t[4].profile.le.radius)));
+    CHECK_THROWS_AS(rotor67_layer(-0.1), std::invalid_argument);
+    CHECK_THROWS_AS(rotor67_layer(1.1), std::invalid_argument);
+    CHECK_THROWS_AS(rotor67_layer(std::nan("")), std::invalid_argument);
+}
+
+TEST_CASE("Default design: Rotor 67 custom layers, scaled by the meridional path", "[design][rotor67]")
+{
+    // the metal angles of the fitted sections agree with the published surface angles (TP-2879 hub:
+    // surfaces 44 / 32 deg at the LE, -32 / -14 deg at the TE; tip: 68 / 63 and 49 / 59 deg)
+    auto d = BladeDesign::defaults();
+    Evaluator ev;
+    const auto r = ev.evaluate(d);
+    REQUIRE(r.ok());
+    CHECK(r.layers[0].beta_le == Approx(38.0).margin(6.0));
+    CHECK(r.layers[0].beta_te == Approx(-23.0).margin(6.0));
+    CHECK(r.layers[4].beta_le == Approx(65.6).margin(6.0));
+    CHECK(r.layers[4].beta_te == Approx(53.8).margin(6.0));
+    for (std::size_t k = 0; k < 5; ++k) {
+        CHECK(d.layers[k].method == Method::Custom);
+        CHECK(d.layers[k].stagger_deg == Approx(rotor67_layer(d.layers[k].span).stagger_deg));
+        CHECK(r.layers[k].section->quality.count(Profile::Severity::Error) == 0);
+        // control polygons and the thickness law of a custom layer
+        const auto& sec = *r.layers[k].section;
+        REQUIRE(sec.control);
+        REQUIRE(sec.control->ss.size() == 5);
+        CHECK(sec.control->ss[2].x() == Approx(d.layers[k].custom.ss.ctrl2_mprime));
+        CHECK(sec.control->ss[2].y() == Approx(d.layers[k].custom.ss.ctrl2_theta));
+        CHECK(sec.control->ps.size() == 4 + d.layers[k].custom.ps.mprime_ctrl.size());
+        REQUIRE(sec.thickness_law);
+        const auto mx = *std::max_element(sec.thickness_law->law.begin(), sec.thickness_law->law.end());
+        CHECK(mx == Approx(d.layers[k].custom.thickness.t_max).epsilon(1e-2));  // 120 law stations
+    }
+    // the chord follows the channel: twice the axial length, twice the chord (tip layer on the cylinder)
+    REQUIRE(r.layers[4].surface.cylindrical());
+    auto e = d;
+    e.meridional.hub.z_le = e.meridional.casing.z_le = -30.0;
+    e.meridional.hub.z_te = e.meridional.casing.z_te = 30.0;
+    const auto r2 = ev.evaluate(e);
+    REQUIRE(r2.ok());
+    CHECK(r2.layers[4].chord_mprime == Approx(2.0 * r.layers[4].chord_mprime).epsilon(1e-12));  // unrolled chord
+    CHECK(r2.layers[4].beta_le == Approx(r.layers[4].beta_le).margin(1e-9));  // angles do not scale
+    const auto n = BladeDesign::naca65_defaults();
+    for (const auto& l : n.layers) CHECK(l.method == Method::Naca65);
+    CHECK(ev.evaluate(n).ok());
+}
+

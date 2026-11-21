@@ -89,9 +89,14 @@ struct BladeDesign
     bool mirror = false;                     ///< true: suction side toward -theta
     MeshOptions mesh{};
 
-    /// Axial compressor rotor of the default meridional channel: camber and thickness
-    /// fall and stagger rises from hub to tip; five layers (0, 25, 50, 75, 100 % span).
+    /// Default: five Custom layers (0, 25, 50, 75, 100 % span) with the NASA Rotor 67 profiles
+    /// (the 14 TP-2879 sections fitted with the custom profile, blended in span), their stagger
+    /// and LE angle, on the default meridional channel.  The profiles are chord-normalised, so
+    /// they scale with the channel: c' cos(stagger) = m'_TE - m'_LE of each layer.  The NACA 65
+    /// knobs of every layer hold the values of naca65_defaults().
     [[nodiscard]] static BladeDesign defaults();
+    /// Five NACA 65 layers: camber and thickness fall and stagger rises from hub to tip.
+    [[nodiscard]] static BladeDesign naca65_defaults();
     void validate() const;
 };
 
@@ -101,6 +106,16 @@ struct BladeDesign
 [[nodiscard]] BladeDesign design_from_json(const nlohmann::json& j);
 void write_design(const BladeDesign& d, const std::string& path);
 [[nodiscard]] BladeDesign read_design(const std::string& path);
+
+/// NASA Rotor 67 at span fraction s in [0, 1]: the custom profile, stagger and LE angle,
+/// linearly blended between the two neighbouring fitted sections (exact at the 14 sections).
+struct Rotor67Layer
+{
+    double span = 0.0, stagger_deg = 0.0, theta_le_deg = 0.0;
+    Profile::ProfileParams profile{};
+};
+[[nodiscard]] Rotor67Layer rotor67_layer(double span);
+[[nodiscard]] const std::vector<Rotor67Layer>& rotor67_sections();
 
 /// Natural cubic spline weights: f(s) = sum_k w_k f_k through (spans_k, f_k).
 [[nodiscard]] std::vector<double> spline_weights(const std::vector<double>& spans, double s);
@@ -123,6 +138,15 @@ struct Section2D
     /// NACA 65 sections: equivalent circular-arc chi_LE, chi_TE [deg] (Aungier Eq. 4-6).  The
     /// A10 mean line's own slope is logarithmic at its ends, so its LE / TE tangent is steeper.
     std::optional<std::array<double, 2>> equivalent_arc_deg;
+    /// Custom layers: the B-spline control polygons (LE connector, SS, TE connector, PS; the
+    /// sides LE -> TE) and the thickness law t(xi) at its SS stations.
+    struct Control
+    {
+        std::vector<Vec2> le, ss, te, ps;
+    };
+    std::optional<Control> control;
+    std::optional<Profile::ThicknessSample> thickness_law;
+    double xi_max = 0.0;
 };
 
 /// One layer placed on its stream surface.

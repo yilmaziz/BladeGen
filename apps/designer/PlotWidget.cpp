@@ -110,6 +110,29 @@ QPointF PlotWidget::toData(const QPointF& p) const
 
 double PlotWidget::untransformY(double y) const { return symlogY ? symexp(y) : y; }
 
+QPointF PlotWidget::dataAt(const QPointF& screen) const
+{
+    const QPointF t = fromScreen(screen);
+    double x = t.x(), y = t.y();
+    if (swapAxes) std::swap(x, y);
+    return {x, untransformY(y)};
+}
+
+int PlotWidget::handleAt(const QPointF& screen) const
+{
+    int best = -1;
+    double bd = 8.0;  // pick radius [px]
+    for (int i = 0; i < handles_.size(); ++i) {
+        if (handles_[i].fixed) continue;
+        const double d = QLineF(toScreen(toData(handles_[i].p)), screen).length();
+        if (d < bd) {
+            bd = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
 int PlotWidget::badgeHeight() const
 {
     const QFontMetrics fm(font());
@@ -194,8 +217,26 @@ void PlotWidget::zoomFit()
     update();
 }
 
+void PlotWidget::setHandles(QVector<DragHandle> h)
+{
+    if (drag_handle_ >= 0 && drag_handle_ < handles_.size()) {
+        const auto held = handles_[drag_handle_];
+        drag_handle_ = -1;
+        for (int i = 0; i < h.size(); ++i)
+            if (h[i].id == held.id) {
+                h[i].p = held.p;
+                drag_handle_ = i;
+            }
+    }
+    handles_ = std::move(h);
+}
+
 void PlotWidget::commit(bool refit)
 {
+    if (drag_handle_ >= 0) {  // never rescale under the user's hand
+        update();
+        return;
+    }
     if (refit || !fitted_ || !user_view_) {
         zoomFit();
         return;
@@ -328,21 +369,32 @@ void PlotWidget::paintEvent(QPaintEvent*)
     }
     for (const auto& m : markers_) {
         const QPointF c = toScreen(toData(m.p));
-        QPen pen(m.color, 2.0);
+        QPen pen(m.color, m.width);
         pen.setCosmetic(true);
         p.setPen(pen);
         p.setBrush(Qt::NoBrush);
+        const double z = m.size;
         if (m.shape == 'x') {
-            p.drawLine(c + QPointF(-6, -6), c + QPointF(6, 6));
-            p.drawLine(c + QPointF(-6, 6), c + QPointF(6, -6));
+            p.drawLine(c + QPointF(-z, -z), c + QPointF(z, z));
+            p.drawLine(c + QPointF(-z, z), c + QPointF(z, -z));
         } else if (m.shape == '^') {
-            p.drawPolygon(QPolygonF({c + QPointF(0, -7), c + QPointF(6, 5), c + QPointF(-6, 5)}));
+            p.drawPolygon(QPolygonF({c + QPointF(0, -1.15 * z), c + QPointF(z, 0.8 * z), c + QPointF(-z, 0.8 * z)}));
         } else if (m.shape == 's') {
-            p.drawRect(QRectF(c.x() - 4, c.y() - 4, 8, 8));
+            p.drawRect(QRectF(c.x() - 0.7 * z, c.y() - 0.7 * z, 1.4 * z, 1.4 * z));
         } else {
-            p.drawEllipse(c, 5, 5);
+            p.drawEllipse(c, 0.8 * z, 0.8 * z);
         }
         if (!m.label.isEmpty()) p.drawText(c + QPointF(8, -6), m.label);
+    }
+    for (int i = 0; i < handles_.size(); ++i) {
+        const auto& h = handles_[i];
+        const QPointF c = toScreen(toData(h.p));
+        QPen pen(h.color, i == drag_handle_ ? 2.0 : 1.2);
+        pen.setCosmetic(true);
+        p.setPen(pen);
+        p.setBrush(h.fixed ? QBrush(Qt::white) : QBrush(h.color.lighter(170)));
+        if (h.fixed) p.drawRect(QRectF(c.x() - 2.5, c.y() - 2.5, 5, 5));
+        else p.drawEllipse(c, 4.5, 4.5);
     }
     p.restore();
 
@@ -436,6 +488,14 @@ void PlotWidget::wheelEvent(QWheelEvent* e)
 
 void PlotWidget::mousePressEvent(QMouseEvent* e)
 {
+    if (e->button() == Qt::LeftButton) {
+        drag_handle_ = handleAt(e->position());
+        if (drag_handle_ >= 0) {
+            setCursor(Qt::ClosedHandCursor);
+            update();
+            return;
+        }
+    }
     if (e->button() == Qt::LeftButton || e->button() == Qt::MiddleButton) {
         dragging_ = true;
         drag_start_ = e->position();
@@ -449,6 +509,14 @@ void PlotWidget::mousePressEvent(QMouseEvent* e)
 void PlotWidget::mouseMoveEvent(QMouseEvent* e)
 {
     cursor_ = e->position();
+    if (drag_handle_ >= 0) {
+        handles_[drag_handle_].p = dataAt(e->position());
+        emit handleMoved(handles_[drag_handle_].id, handles_[drag_handle_].p, false);
+        update();
+        return;
+    }
+    if (!(e->buttons() & (Qt::LeftButton | Qt::MiddleButton)))
+        setCursor(handleAt(e->position()) >= 0 ? Qt::OpenHandCursor : Qt::CrossCursor);
     if (dragging_) {
         const QRectF r = plotRect();
         double ddx = (e->position().x() - drag_start_.x()) / r.width() * (dx1_ - dx0_);
@@ -464,7 +532,18 @@ void PlotWidget::mouseMoveEvent(QMouseEvent* e)
     update();
 }
 
-void PlotWidget::mouseReleaseEvent(QMouseEvent*) { dragging_ = false; }
+void PlotWidget::mouseReleaseEvent(QMouseEvent* e)
+{
+    if (drag_handle_ >= 0) {
+        const int i = drag_handle_;
+        drag_handle_ = -1;
+        handles_[i].p = dataAt(e->position());
+        emit handleMoved(handles_[i].id, handles_[i].p, true);
+        setCursor(Qt::OpenHandCursor);
+        update();
+    }
+    dragging_ = false;
+}
 
 void PlotWidget::mouseDoubleClickEvent(QMouseEvent*) { zoomFit(); }
 

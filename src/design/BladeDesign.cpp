@@ -97,7 +97,60 @@ Method method_from_string(const std::string& s)
     throw std::invalid_argument("unknown construction method '" + s + "'");
 }
 
+namespace {
+#include "design/Rotor67Stations.inc"
+}  // namespace
+
+const std::vector<Rotor67Layer>& rotor67_sections()
+{
+    static const std::vector<Rotor67Layer> table = [] {
+        std::vector<Rotor67Layer> t;
+        for (const char* txt : kRotor67Stations) {
+            const auto j = json::parse(txt);
+            Rotor67Layer l;
+            l.span = j.at("span").get<double>();
+            l.stagger_deg = j.at("stagger_deg").get<double>();
+            l.theta_le_deg = j.at("theta_le_deg").get<double>();
+            l.profile = IO::profile_from_json(j.at("profile"));
+            t.push_back(std::move(l));
+        }
+        return t;
+    }();
+    return table;
+}
+
+Rotor67Layer rotor67_layer(double span)
+{
+    if (!std::isfinite(span) || span < 0.0 || span > 1.0) throw std::invalid_argument("rotor67_layer: span must be in [0, 1]");
+    const auto& t = rotor67_sections();
+    std::size_t k = 1;
+    while (k + 1 < t.size() && t[k].span < span) ++k;
+    const auto& a = t[k - 1];
+    const auto& b = t[k];
+    const double w = std::clamp((span - a.span) / (b.span - a.span), 0.0, 1.0);
+    Rotor67Layer l;
+    l.span = span;
+    l.stagger_deg = a.stagger_deg + w * (b.stagger_deg - a.stagger_deg);
+    l.theta_le_deg = a.theta_le_deg + w * (b.theta_le_deg - a.theta_le_deg);
+    l.profile = w == 0.0 ? a.profile : w == 1.0 ? b.profile : Profile::blend(a.profile, b.profile, w);
+    return l;
+}
+
 BladeDesign BladeDesign::defaults()
+{
+    BladeDesign d = naca65_defaults();
+    d.name = "rotor67_layers";
+    for (auto& l : d.layers) {
+        const auto r = rotor67_layer(l.span);
+        l.method = Method::Custom;
+        l.custom = r.profile;
+        l.stagger_deg = r.stagger_deg;
+        l.theta_le_deg = r.theta_le_deg;
+    }
+    return d;
+}
+
+BladeDesign BladeDesign::naca65_defaults()
 {
     BladeDesign d;
     d.name = "axial_rotor";
@@ -342,6 +395,10 @@ Section2D build_section2d(const Layer& layer, const Naca::Naca65Section* naca, c
         s.loop = prof.sample_loop(mesh.n_edge, mesh.n_body);
         s.designation = layer.method == Method::Custom ? "Custom" : "NACA 65 + Custom (fitted)";
         s.le_radius = layer.custom.le.radius;
+        s.control = Section2D::Control{prof.le_connector().ctrl(), prof.suction_side().ctrl(), prof.te_connector().ctrl(),
+                                       prof.pressure_side().ctrl()};
+        s.thickness_law = prof.thickness(120);
+        s.xi_max = prof.xi_max();
         s.te_radius = layer.custom.te.radius;
         if (layer.method == Method::Naca65Custom && naca) {
             const auto nq = Naca::check_quality(*naca);

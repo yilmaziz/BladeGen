@@ -99,7 +99,7 @@ CamberLine camber_line(const std::vector<Vec2>& ss, const std::vector<Vec2>& ps,
     }
     if (c.point.size() < 4) throw std::invalid_argument("camber_line: no inscribed circles found (sides crossed?)");
     // The locus is smoothed by a least-squares cubic B-spline y(x) pinned at the LE and TE
-    // points (knots clustered toward both ends), so the camber angle is the derivative of
+    // points (uniform knots), so the camber angle is the derivative of
     // a C2 curve instead of a difference quotient of the bisection results.
     const Vec2 pa = 0.5 * (ss.front() + ps.front()), pb = 0.5 * (ss.back() + ps.back());  // open edges: mid points
     const double x0 = pa.x(), x1 = pb.x();
@@ -114,13 +114,41 @@ CamberLine camber_line(const std::vector<Vec2>& ss, const std::vector<Vec2>& ps,
     constexpr int p = 3;
     const int nc = std::clamp(static_cast<int>(rx.size()) / 4, 6, 18);
     std::vector<double> U(static_cast<std::size_t>(p + 1), 0.0);
-    for (int k = 1; k < nc - p; ++k) U.push_back(0.5 * (1.0 - std::cos(Math::kPi * k / (nc - p))));
+    // uniform knots: clustered ones leave end spans without circle centres, where the end slope swings
+    for (int k = 1; k < nc - p; ++k) U.push_back(static_cast<double>(k) / (nc - p));
     for (int k = 0; k <= p; ++k) U.push_back(1.0);
     auto basis = [&](double t, int nd, int& span) {
         span = Math::find_span(nc - 1, p, t, U);
         return Math::ders_basis_funs(span, t, p, nd, U);
     };
-    const int nf = nc - 2;  // free control values (the first and the last are the LE / TE y)
+    // End slopes: the edge point need not lie on the extension of the centre locus (an asymmetric
+    // or stretched edge), so a spline that is only pinned there bends in its last span.  The slope
+    // at each end is taken from a quadratic least-squares fit of the centres nearest to that edge
+    // (the direction of the mean line where the inscribed circles end) and imposed on the spline.
+    auto end_slope = [&](bool le) {
+        std::vector<std::size_t> idx;
+        const double reach = 0.12 * (rx.back() - rx.front());
+        for (std::size_t i = 0; i < rx.size(); ++i)
+            if (le ? rx[i] <= rx.front() + reach : rx[i] >= rx.back() - reach) idx.push_back(i);
+        for (std::size_t k = idx.size(); idx.size() < 4 && k < rx.size(); ++k)  // at least four centres
+            idx.push_back(le ? k : rx.size() - 1 - k);
+        const double t_end = le ? 0.0 : 1.0, x_ref = le ? rx.front() : rx.back();
+        Eigen::Matrix3d M = Eigen::Matrix3d::Zero();
+        Eigen::Vector3d b = Eigen::Vector3d::Zero();
+        for (std::size_t i : idx) {
+            const double h = rx[i] - x_ref;
+            const Eigen::Vector3d phi(1.0, h, h * h);
+            M += phi * phi.transpose();
+            b += phi * ry[i];
+        }
+        const Eigen::Vector3d co = M.ldlt().solve(b);
+        return co(1) + 2.0 * co(2) * (t_end - x_ref);  // dy/dt at the edge
+    };
+    const double s0 = end_slope(true), s1 = end_slope(false);
+    const auto un = static_cast<std::size_t>(nc);
+    const double y1 = pa.y() + s0 * (U[static_cast<std::size_t>(p) + 1] - U[1]) / p;              // C'(0) = p (P1 - P0) / (u_{p+1} - u_1)
+    const double y2 = pb.y() - s1 * (U[un + static_cast<std::size_t>(p) - 1] - U[un - 1]) / p;    // C'(1) at the other end
+    const int nf = nc - 4;  // free control values: the end values and their neighbours are fixed
     Eigen::MatrixXd A = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(rx.size()), nf);
     Eigen::VectorXd rhs(static_cast<Eigen::Index>(rx.size()));
     for (std::size_t i = 0; i < rx.size(); ++i) {
@@ -131,8 +159,10 @@ CamberLine camber_line(const std::vector<Vec2>& ss, const std::vector<Vec2>& ps,
             const int idx = span - p + j;
             const double w = N[0][static_cast<std::size_t>(j)];
             if (idx == 0) r -= w * pa.y();
+            else if (idx == 1) r -= w * y1;
+            else if (idx == nc - 2) r -= w * y2;
             else if (idx == nc - 1) r -= w * pb.y();
-            else A(static_cast<Eigen::Index>(i), idx - 1) += w;
+            else A(static_cast<Eigen::Index>(i), idx - 2) += w;
         }
         rhs(static_cast<Eigen::Index>(i)) = r;
     }
@@ -144,8 +174,10 @@ CamberLine camber_line(const std::vector<Vec2>& ss, const std::vector<Vec2>& ps,
     const Eigen::VectorXd cy = Q.ldlt().solve(g);
     std::vector<double> P(static_cast<std::size_t>(nc));
     P.front() = pa.y();
+    P[1] = y1;
+    P[un - 2] = y2;
     P.back() = pb.y();
-    for (int j = 0; j < nf; ++j) P[static_cast<std::size_t>(j + 1)] = cy(j);
+    for (int j = 0; j < nf; ++j) P[static_cast<std::size_t>(j + 2)] = cy(j);
 
     CamberLine out;
     const int m = std::max(n, 21);

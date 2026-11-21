@@ -6,6 +6,7 @@
 #include <pybind11/stl.h>
 
 #include "math/Vec.hpp"
+#include "profile/Quality.hpp"
 
 #include <cstddef>
 #include <stdexcept>
@@ -54,9 +55,15 @@ std::vector<BladeGen::Math::Vec<D>> from_np(const InArray& a, const char* what)
 inline py::array_t<double> vec_np(const Vec2& v) { return to_np<2>(std::vector<Vec2>{v}).attr("reshape")(2); }
 inline py::array_t<double> vec_np(const Vec3& v) { return to_np<3>(std::vector<Vec3>{v}).attr("reshape")(3); }
 
+/// A curve sample and a quality report as dicts (bind_profile.cpp).
+py::dict sample_dict(const BladeGen::Profile::CurveSample& c);
+py::dict quality_dict(const BladeGen::Profile::QualityReport& r);
+
 void bind_profile(py::module_& m);
+void bind_naca(py::module_& m);
 void bind_blade(py::module_& m);
 void bind_fit(py::module_& m);
 void bind_occt(py::module_& m);
+void bind_design(py::module_& m);
 
 }  // namespace bladegen_py

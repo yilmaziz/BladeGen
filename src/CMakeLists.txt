@@ -6,20 +6,27 @@
 #   fit      inverse design: profile parameters from published coordinates
 #   occt     OpenCASCADE: NURBS surfaces, solids, hub fillet, STEP/IGES/STL
 #   io       JSON parameter files, published data readers
+#   design   the designer's blade: meridional channel, five layers, mesh and fields
 #   pipeline one-call blade generation (CLI and Python)
 
 set(BLADEGEN_SOURCES
     profile/ProfileParams.cpp
     profile/Profile2D.cpp
     profile/Quality.cpp
+    profile/Camber.cpp
     blade/Meridional.cpp
     blade/Blade.cpp
+    blade/FlowPath.cpp
     occt/OcctBlade.cpp
     occt/Fillet.cpp
     fit/InverseFit.cpp
     fit/SectionFit.cpp
+    fit/NacaFit.cpp
     io/Rotor67.cpp
     io/BladeJson.cpp
+    naca/Naca65.cpp
+    design/BladeDesign.cpp
+    design/DesignSolid.cpp
 )
 
 add_library(bladegen_lib STATIC ${BLADEGEN_SOURCES})

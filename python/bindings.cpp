@@ -17,7 +17,9 @@ PYBIND11_MODULE(_core, m)
     m.doc() = "BladeGen C++ engine: C2 blade profiles, 3-D blades, inverse fitting, OpenCASCADE solids";
     m.attr("__version__") = BLADEGEN_VERSION;
     bladegen_py::bind_profile(m);
+    bladegen_py::bind_naca(m);
     bladegen_py::bind_blade(m);
     bladegen_py::bind_fit(m);
     bladegen_py::bind_occt(m);
+    bladegen_py::bind_design(m);
 }

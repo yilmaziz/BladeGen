@@ -12,7 +12,7 @@ execute_process(COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir
 find_package(pybind11 CONFIG REQUIRED HINTS "${_pybind11_dir}")
 
 set(_pkg ${CMAKE_BINARY_DIR}/python/bladegen)
-pybind11_add_module(bladegen_py MODULE bindings.cpp bind_profile.cpp bind_blade.cpp bind_fit.cpp bind_occt.cpp)
+pybind11_add_module(bladegen_py MODULE bindings.cpp bind_profile.cpp bind_naca.cpp bind_blade.cpp bind_fit.cpp bind_occt.cpp bind_design.cpp)
 target_compile_definitions(bladegen_py PRIVATE BLADEGEN_VERSION="${PROJECT_VERSION}")
 target_link_libraries(bladegen_py PRIVATE bladegen::lib bladegen::compiler_flags)
 set_target_properties(bladegen_py PROPERTIES
@@ -24,7 +24,7 @@ set_target_properties(bladegen_py PROPERTIES
 
 file(MAKE_DIRECTORY ${_pkg})
 configure_file(bladegen/_paths.py.in ${_pkg}/_paths.py @ONLY)
-foreach(_f __init__.py notebook.py)
+foreach(_f __init__.py notebook.py gui.py)
     configure_file(bladegen/${_f} ${_pkg}/${_f} COPYONLY)
 endforeach()
 

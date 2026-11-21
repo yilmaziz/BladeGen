@@ -2,6 +2,7 @@
 #include "bindings_common.hpp"
 
 #include "fit/InverseFit.hpp"
+#include "fit/NacaFit.hpp"
 #include "fit/SectionFit.hpp"
 #include "io/Rotor67.hpp"
 
@@ -67,6 +68,18 @@ void bind_fit(py::module_& m)
         .def_readwrite("n_body", &FitOptions::n_body);
 
     m.def("default_fit_params", &default_fit_params, py::arg("start"));
+    m.def("naca65_start", &naca65_start, py::arg("naca"),
+          "Start parameters for fitting custom parameters to a NACA 65 section");
+    m.def("naca65_fit_options", &naca65_fit_options);
+    m.def("fit_naca65", [](const BladeGen::Naca::Naca65Section& s, const FitOptions& opt, int n_target) {
+        FitResult r;
+        {
+            py::gil_scoped_release nogil;
+            r = fit_naca65(s, opt, n_target);
+        }
+        return fit_dict(r);
+    }, py::arg("section"), py::arg("options") = naca65_fit_options(), py::arg("n_target") = 100,
+       "NACA 65 + Custom: custom profile parameters fitted to a NACA 65 section (3-5 s)");
     m.def("fit_profile", [](const InArray& ss, const InArray& ps, const BladeGen::Profile::ProfileParams& start,
                             const FitOptions& opt) {
         const auto a = from_np<2>(ss, "ss"), b = from_np<2>(ps, "ps");

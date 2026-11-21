@@ -37,7 +37,8 @@ jobs:
             libtbb-dev libfreetype-dev libfontconfig1-dev libx11-dev libgl-dev libxi-dev \
             libeigen3-dev nlohmann-json3-dev catch2 \
             python3-dev python3-pybind11 python3-numpy python3-matplotlib python3-pytest \
-            python3-nbclient python3-ipykernel python3-ipywidgets
+            python3-nbclient python3-ipykernel python3-ipywidgets python3-tk xvfb xauth \
+            qt6-base-dev libgl1-mesa-dev
       - name: Configure
         run: cmake --preset ${{ matrix.preset }} -DBLADEGEN_BUILD_PYTHON=${{ matrix.python }} -DPython_EXECUTABLE=/usr/bin/python3
       - name: Build
@@ -47,7 +48,7 @@ jobs:
           ASAN_OPTIONS: detect_leaks=0:alloc_dealloc_mismatch=0
           UBSAN_OPTIONS: print_stacktrace=1
           MPLBACKEND: Agg
-        run: ctest --test-dir build/${{ matrix.preset }} --output-on-failure
+        run: xvfb-run -a ctest --test-dir build/${{ matrix.preset }} --output-on-failure  # a display for the GUI test
 
   windows:
     name: Windows MSVC Release (OCCT 7.9, conda-forge) + Python
@@ -62,7 +63,7 @@ jobs:
           environment-name: bladegen
           create-args: >-
             python=3.12 occt=7.9 eigen=3.4 nlohmann_json catch2=3 pybind11 ninja cmake
-            numpy matplotlib pytest nbclient ipykernel ipywidgets
+            numpy matplotlib tk qt6-main pytest nbclient ipykernel ipywidgets
           init-shell: powershell
           cache-environment: true
       - uses: ilammy/msvc-dev-cmd@v1
@@ -98,7 +99,7 @@ jobs:
           environment-name: bladegen
           create-args: >-
             python=3.12 occt=7.9 eigen=3.4 nlohmann_json catch2=3 pybind11 ninja cmake
-            numpy matplotlib pytest nbclient ipykernel ipywidgets
+            numpy matplotlib tk qt6-main pytest nbclient ipykernel ipywidgets
           init-shell: bash
           cache-environment: true
       - name: Configure

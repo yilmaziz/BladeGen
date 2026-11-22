@@ -159,6 +159,72 @@ private:
     Handle(Graphic3d_AspectLine3d) wire_, edge_;
 };
 
+/// One OpenGL driver (display connection, shared GL context) and, on Windows, one window class for
+/// every view of the process.  Created on first use and kept to the end of the process: a window
+/// class per view failed once views had been closed ("Unable to register window class").
+struct SharedGl
+{
+    Handle(Aspect_DisplayConnection) disp;
+    Handle(OpenGl_GraphicDriver) driver;
+#if defined(_WIN32)
+    Handle(WNT_WClass) cls;
+#endif
+    // the owner of the driver's shared GL context: a view on a hidden window that lives as long
+    // as the process (the first view's context would die with that view's window)
+    Handle(V3d_Viewer) viewer;
+    Handle(V3d_View) view;
+    Handle(Aspect_Window) native;
+    Handle(Aspect_NeutralWindow) win;
+    QString error;
+};
+
+/// A hidden native window (only its OpenGL context is used; the views render offscreen).
+Handle(Aspect_Window) hiddenWindow(const SharedGl& gl)
+{
+#if defined(_WIN32)
+    return new WNT_Window("BladeGen OCCT", gl.cls, WS_POPUP, 0, 0, 16, 16, Quantity_NOC_BLACK);
+#elif defined(__APPLE__)
+    (void)gl;
+    return new Cocoa_Window("BladeGen OCCT", 0, 0, 16, 16);
+#else
+    return new Xw_Window(gl.disp, "BladeGen OCCT", 0, 0, 16, 16);
+#endif
+}
+
+Handle(Aspect_NeutralWindow) neutralOn(const Handle(Aspect_Window)& native)
+{
+    Handle(Aspect_NeutralWindow) w = new Aspect_NeutralWindow();
+    w->SetNativeHandles(native->NativeHandle(), 0, native->NativeFBConfig());
+    w->SetSize(64, 64);
+    w->SetVirtual(Standard_True);
+    return w;
+}
+
+SharedGl& sharedGl()
+{
+    static SharedGl* g = [] {
+        auto* s = new SharedGl;  // never deleted: no teardown order against Qt or the GL driver at exit
+        try {
+            s->disp = new Aspect_DisplayConnection();
+            s->driver = new OpenGl_GraphicDriver(s->disp);
+#if defined(_WIN32)
+            s->cls = new WNT_WClass("BladeGenOcctView", reinterpret_cast<Standard_Address>(DefWindowProcW), CS_OWNDC);
+#endif
+            s->viewer = new V3d_Viewer(s->driver);
+            s->view = s->viewer->CreateView();
+            s->native = hiddenWindow(*s);
+            s->win = neutralOn(s->native);
+            s->view->SetWindow(s->win);
+        } catch (const Standard_Failure& e) {
+            s->error = QString::fromUtf8(e.GetMessageString());
+        } catch (const std::exception& e) {
+            s->error = QString::fromUtf8(e.what());
+        }
+        return s;
+    }();
+    return *g;
+}
+
 const Quantity_Color& partColor(std::size_t k)
 {
     static const Quantity_Color colors[] = {Quantity_Color(0.74, 0.20, 0.17, Quantity_TOC_sRGB), Quantity_Color(0.36, 0.60, 0.40, Quantity_TOC_sRGB),
@@ -185,31 +251,54 @@ struct OcctView::Impl : public AIS_ViewController
     bool dirty = true;
     double theta_blade = 0.0;
 
+    bool started = false;
+
+    ~Impl() override
+    {
+        // the view's GL resources first, while its hidden window still exists; then the window
+        try {
+            if (!ctx.IsNull())
+                for (auto& p : parts)
+                    if (!p.IsNull()) ctx->Remove(p, Standard_False);
+            parts = {};
+            if (!view.IsNull()) view->Remove();
+        } catch (const Standard_Failure&) {
+        }
+        ctx.Nullify();
+        view.Nullify();
+        viewer.Nullify();
+        win.Nullify();
+        native.Nullify();
+    }
+
     bool ok() const { return reason.isEmpty() && !view.IsNull(); }
+
+    /// Starts the viewer on first use (only views that show the 3D Solid get an OpenGL context).
+    bool ensure()
+    {
+        if (!started) {
+            started = true;
+            init();
+        }
+        return ok();
+    }
 
     void init()
     {
+        auto& gl = sharedGl();
+        if (!gl.error.isEmpty()) {
+            reason = "OpenGL viewer could not start: " + gl.error;
+            return;
+        }
         try {
-            Handle(Aspect_DisplayConnection) disp = new Aspect_DisplayConnection();
-            Handle(OpenGl_GraphicDriver) driver = new OpenGl_GraphicDriver(disp);
-            viewer = new V3d_Viewer(driver);
+            viewer = new V3d_Viewer(gl.driver);
             viewer->SetDefaultLights();
             viewer->SetLightOn();
             ctx = new AIS_InteractiveContext(viewer);
             view = viewer->CreateView();
             view->SetImmediateUpdate(Standard_False);
-#if defined(_WIN32)
-            Handle(WNT_WClass) cls = new WNT_WClass("BladeGenOcctView", reinterpret_cast<Standard_Address>(DefWindowProcW), CS_OWNDC);
-            native = new WNT_Window("BladeGen OCCT", cls, WS_POPUP, 0, 0, 16, 16, Quantity_NOC_BLACK);
-#elif defined(__APPLE__)
-            native = new Cocoa_Window("BladeGen OCCT", 0, 0, 16, 16);
-#else
-            native = new Xw_Window(disp, "BladeGen OCCT", 0, 0, 16, 16);
-#endif
-            win = new Aspect_NeutralWindow();
-            win->SetNativeHandles(native->NativeHandle(), 0, native->NativeFBConfig());
-            win->SetSize(64, 64);
-            win->SetVirtual(Standard_True);
+            native = hiddenWindow(gl);
+            win = neutralOn(native);
             view->SetWindow(win);
             view->SetBgGradientColors(Quantity_Color(0.98, 0.98, 0.99, Quantity_TOC_sRGB), Quantity_Color(0.78, 0.81, 0.87, Quantity_TOC_sRGB),
                                       Aspect_GradientFillMethod_Vertical);
@@ -335,7 +424,7 @@ struct OcctView::Impl : public AIS_ViewController
 
     void setScene(std::shared_ptr<const BladeGen::Design::Scene> s, bool refit)
     {
-        if (!ok()) return;
+        if (!ensure()) return;
         for (auto& p : parts)
             if (!p.IsNull()) ctx->Remove(p, Standard_False);
         scene = std::move(s);
@@ -356,7 +445,7 @@ struct OcctView::Impl : public AIS_ViewController
 
     void setMesh(std::shared_ptr<const BladeGen::Design::SceneMesh> m, bool refit)
     {
-        if (!ok()) return;
+        if (!ensure()) return;
         for (auto& p : parts)
             if (!p.IsNull()) ctx->Remove(p, Standard_False);
         mesh = std::move(m);
@@ -403,6 +492,7 @@ struct OcctView::Impl
     std::array<Look, 3> looks{Look::Solid, Look::Solid, Look::Shaded};
     QString reason = "this build has no OpenCASCADE visualization toolkits (TKV3d, TKOpenGl, TKService)";
     bool ok() const { return false; }
+    bool ensure() { return false; }
 };
 
 #endif
@@ -413,14 +503,11 @@ OcctView::OcctView(QWidget* parent) : QWidget(parent), d_(std::make_unique<Impl>
     setMouseTracking(false);
     setMinimumSize(80, 60);
     setFocusPolicy(Qt::StrongFocus);
-#if defined(BLADEGEN_HAVE_OCCT_VIEWER)
-    d_->init();
-#endif
 }
 
 OcctView::~OcctView() = default;
 
-bool OcctView::available() const { return d_->ok(); }
+bool OcctView::available() const { return d_->ensure(); }
 
 QString OcctView::unavailableReason() const { return d_->reason; }
 
@@ -506,7 +593,7 @@ QImage OcctView::image()
     const double r = devicePixelRatioF();
     const int W = std::max(2, static_cast<int>(std::lround(width() * r))), H = std::max(2, static_cast<int>(std::lround(height() * r)));
 #if defined(BLADEGEN_HAVE_OCCT_VIEWER)
-    if (d_->ok() && d_->render(W, H)) {
+    if (d_->ensure() && d_->render(W, H)) {
         QImage img = d_->frame.convertToFormat(QImage::Format_RGB32);
         if (!message_.isEmpty()) {
             QPainter p(&img);
@@ -528,7 +615,7 @@ void OcctView::paintEvent(QPaintEvent*)
     const double r = devicePixelRatioF();
     const int W = static_cast<int>(std::lround(width() * r)), H = static_cast<int>(std::lround(height() * r));
 #if defined(BLADEGEN_HAVE_OCCT_VIEWER)
-    if (d_->ok()) {
+    if (d_->ensure()) {
         if (d_->dirty || d_->frame.width() != W || d_->frame.height() != H) d_->render(W, H);
         if (!d_->frame.isNull()) {
             QImage f = d_->frame;

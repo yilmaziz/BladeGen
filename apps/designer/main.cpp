@@ -190,6 +190,36 @@ int main(int argc, char** argv)
                 return 14;
             }
         }
+        // a 3D Solid view opened after the layouts closed views still gets its viewer
+        {
+            auto* sv = w.addView(Designer::Content::Solid3D);
+            QApplication::processEvents();
+            const QString err = sv->waitForSolid();
+            const bool first = v->occtView()->available();
+            if (!err.isEmpty() || sv->occtView()->available() != first) {
+                std::fprintf(stderr, "self-test: a new 3D Solid view failed (%s; viewer %s)\n", qPrintable(err),
+                             qPrintable(sv->occtView()->unavailableReason()));
+                return 16;
+            }
+            sv->image().save(dir + "/solid_new_view.png");
+            // closing one 3D Solid view leaves the others working (they share one GL driver)
+            auto* sv2 = w.addView(Designer::Content::Solid3D);
+            (void)sv2->waitForSolid();
+            if (auto* sub = qobject_cast<QMdiSubWindow*>(sv->parentWidget())) sub->close();
+            QApplication::processEvents();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            if (first) {
+                const QImage img = sv2->image();
+                QSet<QRgb> colors;
+                for (int y = 0; y < img.height(); y += 3)
+                    for (int x = 0; x < img.width(); x += 3) colors.insert(img.pixel(x, y));
+                if (colors.size() < 50) {
+                    std::fprintf(stderr, "self-test: a 3D Solid view stopped rendering after another one was closed\n");
+                    return 17;
+                }
+            }
+            w.gridLayout(6);
+        }
         if (auto* box = w.findChild<QToolBox*>()) {  // the meridional page (re-stagger inputs)
             const int page = box->currentIndex();
             box->setCurrentIndex(0);

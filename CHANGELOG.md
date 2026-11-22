@@ -115,6 +115,107 @@ inscribed circles, smoothed by a least-squares cubic B-spline pinned at the LE /
 - Doubling the axial chord doubles the tip chord and keeps the angles. The NACA 65 default still evaluates.
 - The designer self-test drags CP2 of the mid layer and checks that the design and the geometry follow.
 
+### Designer update: OpenCASCADE solid view, re-stagger, equal-size layouts
+
+**New**
+- **3D Solid (OpenCASCADE)**, a view content and a toolbar button. It shows the blade with the hub and casing,
+  drawn by OCCT's own viewer (V3d / AIS, OpenGL), inside the MDI window like the other views.
+  - **Geometry** (right-click):
+    - *Design mesh* (the default) updates with every parameter change, in 3 ms for one blade and 11 ms for
+      24, before a 5–20 ms redraw. It is the design's own mesh rows as triangles with smooth normals and flat
+      hub and tip caps, handed to OpenGL as primitive arrays. There is no OCCT modelling, Boolean or BRepMesh.
+      It passes through every mesh point and is within 0.054 mm of the exact C2 skin through the same rows
+      (1/800 of the chord), and its enclosed volume is within 0.5 % of the exact solid's.
+    - *Exact OCCT solid* is the trimmed B-spline solid of the STEP export, built on a worker thread in about
+      1.5–2 s per change.
+  - **Blades** (right-click): a *single blade* on one pitch of hub and casing, centred on the blade, or the
+    *whole annulus*, all n_blades copies at 2π / n_blades with the hub and casing over 360°. The copies share
+    the blade's geometry and triangulation.
+  - **Blade, Hub and Casing Display** (right-click), each set on its own:
+    - *wireframe*: edges and iso lines;
+    - *solid*: opaque, lit, with the face boundaries;
+    - *shaded*: lit, smooth, see-through;
+    - *hidden* (hub and casing only).
+    The defaults are a solid blade and hub and a see-through casing.
+  - **Standard View**: isometric, axial, meridional (from the side), radial (onto the blade-to-blade plane).
+    Left drag rotates, middle drag (or shift + left) pans, the wheel zooms and a double click fits.
+  - The status line in the view gives the update time.
+  - The view needs the OCCT visualization toolkits (TKService, TKV3d, TKOpenGl, detected by CMake) and OpenGL
+    2.1 with frame buffers. Without them it says why, and the mesh 3D View and the STEP export still work.
+    For example, the software driver of a remote desktop or a CI machine (Windows "GDI Generic", OpenGL 1.1)
+    gets the message instead of blank images. `BLADEGEN_NO_OPENGL=1` switches the view off.
+- **Re-stagger the whole blade** (Initial Meridional Configuration → *Re-stagger the whole blade*): an angle
+  Δγ turns every section about one radial axis.
+  - + closes the blade (higher stagger: more stall margin), − opens it (more flow).
+  - The axis is the radial line through the **hub** section (the rotor default), the **mid-span** or the
+    **tip** section at a chord fraction x/c (0 = LE, 1 = TE), or through any **point** given by its axial
+    position Z and angle θ.
+  - Each section turns rigidly in its conformal (m′, θ) plane, by Δγ, about the point where the axis crosses
+    its stream surface. So the sections stay on their stream surfaces and keep their chord, and the LE and TE
+    leave the meridional LE / TE lines as a re-staggered blade does. The map is conformal, so **every metal
+    angle on every layer changes by exactly Δγ**. On a cylindrical layer this is the rigid rotation of the
+    unrolled section about the axis.
+  - Saved in the design file as `"restagger": {"angle_deg", "axis": "hub" | "mid" | "tip" | "point",
+    "chord_fraction", "z", "theta_deg"}`. Older files read as no re-stagger.
+- **Window layouts** (toolbar and View menu): **6 views** (3 × 2), **4 views** (2 × 2) and **2 views** (side
+  by side), all in equal cells that follow the window size.
+  - Views beyond the count close; the active view is kept. Missing views open with the default contents.
+  - The default layout is the 6-view grid.
+- Python: each layer's dict has `mprime_le` and `theta_le_deg` (the placed LE point).
+- **New default channel and blade count**:
+  - casing LE (Z −11, R 106) and TE (10, 102);
+  - hub LE (−15, 40) and TE (15, 43);
+  - both walls Bell & Mehta, 18 blades;
+  - the mesh is unchanged: 25 rows, 48 body and 16 edge points per side, tanh d = 1.5.
+
+  The Rotor 67 layers scale with the new channel. Tests that need cylindrical walls set them explicitly.
+
+**Changed**
+- `LayerResult::mprime`, `m` and `mfrac` are measured from the placed LE point, and `mfrac` runs 0 → 1 between
+  the placed LE and TE. Without a re-stagger nothing changes.
+- `Occt::SolidOptions::blade_only` builds only the skin and the trimmed blade (no checks, properties, hub
+  sector or fuse). The exact view uses it with the design's own mesh resolution, which cuts the build from
+  about 9 s to about 1.5–2 s. The STEP export is unchanged.
+- The exact view meshes its solid at 0.05 mm on the blade and 0.2 mm on the walls (it was 0.01 / 0.05 mm),
+  and the display geometry is built once instead of twice. That cuts the time the window freezes from about
+  2 s to about 0.5 s.
+- `Design::build_scene_mesh`, `SceneMesh`, `TriangleMesh` and `blade_theta`: the fast display, in the core
+  library (tested without OpenGL).
+
+**Tests**
+- Placement: the similarity map against its closed form, and the re-stagger as a rotation about the pivot
+  (also mirrored).
+- Re-stagger about the hub LE: the axis passes through the hub LE, and the hub LE stays. On every layer the
+  re-staggered loop is the nominal loop rotated by Δγ about the axis crossing point (10⁻¹² in m′, θ), and every
+  metal angle is +Δγ. The mesh rows at the layer spans equal the placed layers.
+- The same checks for the mid-span, tip, hub-TE and arbitrary-point axes (the tip LE and the hub TE stay
+  where they are).
+- Invalid input: |Δγ| > 30°, a non-finite value, a pivot outside the chord, a total stagger above 80°, and an
+  axis outside the channel (reported as a design error). Also JSON round trip, old files and unknown axis
+  names.
+- Scene:
+  - a single blade on one pitch centred on it; the annulus has n_blades copies, each the blade located by
+    k pitches about the axis (exact transform), and integrated volume and centroid check three of them;
+  - neighbours do not touch;
+  - hub and casing lie on their contours to 10⁻⁷ m;
+  - 360° walls have n_blades times the area of one pitch (the area of a surface of revolution is the sweep
+    × ∫ r ds);
+  - invalid input.
+- Scene mesh:
+  - every design mesh point is a vertex, and the normals are unit length and point out of the blade;
+  - the mesh is closed, and its enclosed volume (divergence theorem) is within 1 % of the exact solid's
+    (measured +0.47 %);
+  - the largest gap to the exact C2 skin at the cell centres is below 0.1 mm (measured 0.054 mm);
+  - the walls lie on their contours, span exactly one pitch centred on the blade, and their normals face the
+    passage;
+  - the annulus and invalid input.
+- The designer self-test:
+  - re-staggers by 3° and checks every layer's β_LE;
+  - builds the design mesh and the exact solid; where OpenGL is available, it renders the single blade, the
+    annulus, a wireframe look and the exact solid;
+  - checks that the 6, 4 and 2 view layouts give that many equal cells.
+- pytest: re-stagger through the Python bindings.
+
 ### Tests
 92 ctest entries in the `python` preset.
 
@@ -150,6 +251,12 @@ Also new:
 - The mesh rows interpolate the layer profiles pointwise in span. The STEP export skins those rows, so it
   matches the mesh but not a parametric spanwise law.
 - The STEP export takes a few seconds and blocks the window.
+- The OCCT solid view needs a real OpenGL 2.1 context. CI machines (offscreen, software GL) build the solid
+  but cannot render it, so the view's rendering is tested only where a GPU driver is present.
+- The re-stagger turns each section in its conformal plane, about the point where the radial axis crosses its
+  stream surface. On a cylinder this is the rigid rotation of the unrolled section about the axis. On a
+  conical stream surface it differs slightly from the rigid 3-D rotation of the blade, which would move
+  sections off their stream surfaces.
 - DCA and C4 are still listed as planned.
 
 ### Next steps

@@ -74,6 +74,9 @@ private:
         QPushButton *bell, *linear;
     } hub_{}, casing_{};
     QDoubleSpinBox *ext_in_ = nullptr, *ext_out_ = nullptr;
+    Knob *restagger_ = nullptr, *restagger_chord_ = nullptr;
+    QComboBox* restagger_axis_ = nullptr;
+    QDoubleSpinBox *restagger_z_ = nullptr, *restagger_theta_ = nullptr;
     // layer
     QButtonGroup* layers_ = nullptr;
     QComboBox* method_ = nullptr;

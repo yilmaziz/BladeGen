@@ -20,9 +20,9 @@ message(STATUS "Qt ${Qt6_VERSION}: building bladegen_designer")
 add_executable(bladegen_designer
     main.cpp DesignerWindow.cpp DesignerWindow.hpp ContentView.cpp ContentView.hpp
     ParameterPanel.cpp ParameterPanel.hpp PlotWidget.cpp PlotWidget.hpp View3D.cpp View3D.hpp
-    Engine.cpp Engine.hpp)
+    OcctView.cpp OcctView.hpp Engine.cpp Engine.hpp)
 set_target_properties(bladegen_designer PROPERTIES AUTOMOC ON WIN32_EXECUTABLE OFF)
-target_link_libraries(bladegen_designer PRIVATE bladegen::lib bladegen::compiler_flags Qt6::Widgets Qt6::Concurrent)
+target_link_libraries(bladegen_designer PRIVATE bladegen::lib bladegen::occt_viewer bladegen::compiler_flags Qt6::Widgets Qt6::Concurrent)
 target_compile_definitions(bladegen_designer PRIVATE BLADEGEN_VERSION="${PROJECT_VERSION}")
 
 if(BLADEGEN_BUILD_TESTS)

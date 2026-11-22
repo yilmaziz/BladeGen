@@ -189,6 +189,52 @@ QWidget* ParameterPanel::meridionalPage()
     connect(ext_in_, &QDoubleSpinBox::valueChanged, this, [this](double x) { s_.design.meridional.inlet_extension = x; changed(); });
     connect(ext_out_, &QDoubleSpinBox::valueChanged, this, [this](double x) { s_.design.meridional.outlet_extension = x; changed(); });
     v->addWidget(g);
+    // re-stagger of the whole blade
+    auto* rg = new QGroupBox("Re-stagger the whole blade", w);
+    auto* rl = new QVBoxLayout(rg);
+    auto* rh = new QLabel("Turns every section by the same angle about a radial axis; every metal angle changes by "
+                          "that angle.  + closes the blade (more stall margin), − opens it (more flow).  Rotors: "
+                          "about the hub LE.", rg);
+    rh->setWordWrap(true);
+    rl->addWidget(rh);
+    restagger_ = new Knob("re-stagger Δγ [deg]", -15, 15, 3, rg, "added to the stagger of every layer; the sections turn about the axis");
+    rl->addWidget(restagger_);
+    auto* ar = new QHBoxLayout;
+    ar->addWidget(new QLabel("axis through", rg));
+    restagger_axis_ = new QComboBox(rg);
+    restagger_axis_->addItems({"hub section", "mid-span section", "tip section", "point (Z, θ)"});
+    restagger_axis_->setToolTip("the radial line the blade turns about passes through this point");
+    ar->addWidget(restagger_axis_, 1);
+    rl->addLayout(ar);
+    restagger_chord_ = new Knob("at chord x/c", 0.0, 1.0, 3, rg, "pivot on the reference section's chord line: 0 = LE, 1 = TE");
+    rl->addWidget(restagger_chord_);
+    auto* pr = new QHBoxLayout;
+    restagger_z_ = coord(rg);
+    restagger_theta_ = coord(rg);
+    restagger_theta_->setRange(-180.0, 180.0);
+    pr->addWidget(new QLabel("Z [mm]", rg));
+    pr->addWidget(restagger_z_);
+    pr->addWidget(new QLabel("θ [deg]", rg));
+    pr->addWidget(restagger_theta_);
+    rl->addLayout(pr);
+    v->addWidget(rg);
+    connect(restagger_, &Knob::changed, this, [this](double x) { s_.design.restagger.angle_deg = x; changed(); });
+    connect(restagger_chord_, &Knob::changed, this, [this](double x) { s_.design.restagger.chord_fraction = x; changed(); });
+    connect(restagger_axis_, &QComboBox::currentIndexChanged, this, [this](int i) {
+        if (syncing_ || i < 0) return;
+        s_.design.restagger.axis = static_cast<Design::Restagger::Axis>(i);
+        changed();
+    });
+    connect(restagger_z_, &QDoubleSpinBox::valueChanged, this, [this](double x) {
+        if (syncing_) return;
+        s_.design.restagger.z = x;
+        changed();
+    });
+    connect(restagger_theta_, &QDoubleSpinBox::valueChanged, this, [this](double x) {
+        if (syncing_) return;
+        s_.design.restagger.theta_deg = x;
+        changed();
+    });
     v->addStretch(1);
     return w;
 }
@@ -381,6 +427,10 @@ QWidget* ParameterPanel::bladePage()
 
 void ParameterPanel::updateEnabled()
 {
+    const bool point = s_.design.restagger.axis == Design::Restagger::Axis::Point;
+    restagger_chord_->setEnabled(!point);
+    restagger_z_->setEnabled(point);
+    restagger_theta_->setEnabled(point);
     const auto& l = layer();
     naca_box_->setEnabled(l.method != Design::Method::Custom);
     fit_->setEnabled(l.method == Design::Method::Naca65Custom);
@@ -410,6 +460,12 @@ void ParameterPanel::sync()
     setWall(casing_, m.casing, m.casing_law);
     ext_in_->setValue(m.inlet_extension);
     ext_out_->setValue(m.outlet_extension);
+    const auto& rs = s_.design.restagger;
+    restagger_->setValue(rs.angle_deg);
+    restagger_axis_->setCurrentIndex(static_cast<int>(rs.axis));
+    restagger_chord_->setValue(rs.chord_fraction);
+    restagger_z_->setValue(rs.z);
+    restagger_theta_->setValue(rs.theta_deg);
     if (auto* b = layers_->button(s_.active_layer)) b->setChecked(true);
     const auto& l = layer();
     method_->setCurrentIndex(static_cast<int>(l.method));

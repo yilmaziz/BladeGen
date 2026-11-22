@@ -82,6 +82,8 @@ struct SolidOptions
     double sector_margin_deg = 4.0;  ///< sector extends this past the blade's theta range
     double hub_bore_radius = 0.0;    ///< hub metal down to this radius (0: 85 % of the hub radius)
     double fillet_radius = 0.0;      ///< blade / hub fillet radius (0: none)
+    bool blade_only = false;         ///< viewing: only the skin and the trimmed blade (no validity check,
+                                     ///< volume, area, hub sector or hub fuse; fillet ignored)
 };
 
 /// Everything the OCCT layer builds for one blade.

@@ -4,6 +4,7 @@
 #include "fit/NacaFit.hpp"
 #include "io/BladeJson.hpp"
 #include "math/Interpolation.hpp"
+#include "math/Numerics.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -172,6 +173,26 @@ BladeDesign BladeDesign::naca65_defaults()
     return d;
 }
 
+std::string to_string(Restagger::Axis a)
+{
+    switch (a) {
+    case Restagger::Axis::Hub: return "hub";
+    case Restagger::Axis::Mid: return "mid";
+    case Restagger::Axis::Tip: return "tip";
+    case Restagger::Axis::Point: return "point";
+    }
+    return "hub";
+}
+
+Restagger::Axis restagger_axis_from_string(const std::string& s)
+{
+    if (s == "hub") return Restagger::Axis::Hub;
+    if (s == "mid") return Restagger::Axis::Mid;
+    if (s == "tip") return Restagger::Axis::Tip;
+    if (s == "point") return Restagger::Axis::Point;
+    throw std::invalid_argument("unknown re-stagger axis '" + s + "' (hub, mid, tip, point)");
+}
+
 void BladeDesign::validate() const
 {
     meridional.validate();
@@ -181,11 +202,16 @@ void BladeDesign::validate() const
         require(std::isfinite(l.span) && l.span >= 0.0 && l.span <= 1.0, "layer spans must be in [0, 1]");
         if (i > 0) require(l.span > layers[i - 1].span, "layer spans must increase");
         require(std::abs(l.stagger_deg) < 80.0, "|stagger| must be below 80 deg");
+        require(std::abs(l.stagger_deg + restagger.angle_deg) < 80.0, "|stagger + re-stagger| must be below 80 deg");
         require(l.solidity > 0.0, "solidity must be > 0");
         l.naca.validate();
         if (l.uses_custom()) Profile::validate(l.custom);
     }
     require(n_blades >= 1 && n_blades <= 500, "n_blades in [1, 500]");
+    require(std::isfinite(restagger.angle_deg) && std::abs(restagger.angle_deg) <= 30.0, "re-stagger in [-30, 30] deg");
+    require(std::isfinite(restagger.chord_fraction) && restagger.chord_fraction >= 0.0 && restagger.chord_fraction <= 1.0,
+            "re-stagger pivot chord fraction in [0, 1]");
+    require(std::isfinite(restagger.z) && std::isfinite(restagger.theta_deg), "re-stagger point must be finite");
     require(mesh.n_edge >= 4 && mesh.n_body >= 8, "mesh: n_edge >= 4, n_body >= 8");
     require(mesh.n_rows >= 2 && mesh.n_rows <= 400, "mesh: n_rows in [2, 400]");
     require(mesh.n_wall_m >= 4 && mesh.n_wall_theta >= 2 && mesh.n_field_chord >= 3, "mesh: wall / field resolution");
@@ -201,6 +227,8 @@ json to_json(const BladeDesign& d)
     j["name"] = d.name;
     j["n_blades"] = d.n_blades;
     j["mirror"] = d.mirror;
+    j["restagger"] = {{"angle_deg", d.restagger.angle_deg}, {"axis", to_string(d.restagger.axis)},
+                      {"chord_fraction", d.restagger.chord_fraction}, {"z", d.restagger.z}, {"theta_deg", d.restagger.theta_deg}};
     const auto& m = d.meridional;
     j["meridional"] = {{"hub", wall_json(m.hub, m.hub_law)},
                        {"casing", wall_json(m.casing, m.casing_law)},
@@ -302,6 +330,15 @@ BladeDesign design_from_json(const json& j)
     d.name = j.value("name", d.name);
     d.n_blades = j.value("n_blades", d.n_blades);
     d.mirror = j.value("mirror", d.mirror);
+    if (j.contains("restagger")) {
+        const auto& q = j.at("restagger");
+        auto& R = d.restagger;
+        R.angle_deg = q.value("angle_deg", R.angle_deg);
+        R.axis = restagger_axis_from_string(q.value("axis", to_string(R.axis)));
+        R.chord_fraction = q.value("chord_fraction", R.chord_fraction);
+        R.z = q.value("z", R.z);
+        R.theta_deg = q.value("theta_deg", R.theta_deg);
+    }
     if (j.contains("meridional")) {
         const auto& m = j["meridional"];
         if (m.contains("hub")) wall_from(m["hub"], d.meridional.hub, d.meridional.hub_law);
@@ -471,20 +508,47 @@ void Evaluator::clear()
 
 // ── placement ────────────────────────────────────────────────────────────────
 
+Vec2 Placement::operator()(const Vec2& q) const
+{
+    const double cg = std::cos(gamma), sn = std::sin(gamma);
+    return {m0 + c * (q.x() * cg - sign * q.y() * sn), t0 + c * (q.x() * sn + sign * q.y() * cg)};
+}
+
+Placement placement(double stagger_deg, double theta_le_deg, double mprime_te, bool mirror, double restagger_deg, const Vec2& pivot)
+{
+    Placement p;
+    const double g0 = Math::deg2rad(stagger_deg), d = Math::deg2rad(restagger_deg);
+    p.gamma = g0 + d;
+    p.c = mprime_te / std::cos(g0);
+    p.sign = mirror ? -1.0 : 1.0;
+    const Vec2 v = Vec2(0.0, Math::deg2rad(theta_le_deg)) - pivot;
+    p.m0 = pivot.x() + std::cos(d) * v.x() - std::sin(d) * v.y();
+    p.t0 = pivot.y() + std::sin(d) * v.x() + std::cos(d) * v.y();
+    return p;
+}
+
+double mprime_at_x(const Blade::StreamSurface& S, double x)
+{
+    const double a = S.mprime_inlet(), b = S.mprime_outlet();
+    const auto f = [&](double mp) { return S.xr(mp).x() - x; };
+    if ((f(a) > 0.0) == (f(b) > 0.0)) throw std::invalid_argument("the re-stagger axis is outside the meridional channel");
+    return Math::brent_root(f, a, b, 1e-13);
+}
+
 LayerResult place_layer(const Layer& layer, std::shared_ptr<const Section2D> sec, const Blade::FlowPath& fp,
-                        int n_blades, bool mirror)
+                        int n_blades, bool mirror, double restagger_deg, const Vec2& axis)
 {
     LayerResult r;
     r.section = sec;
     r.surface = fp.surface(layer.span);
     const auto& S = r.surface;
-    r.gamma = Math::deg2rad(layer.stagger_deg);
-    r.theta_le = Math::deg2rad(layer.theta_le_deg);
-    r.chord_mprime = S.mprime_te() / std::cos(r.gamma);
-    const double sg = mirror ? -1.0 : 1.0, cg = std::cos(r.gamma), sn = std::sin(r.gamma), c = r.chord_mprime;
-    auto conf = [&](const Vec2& q) {
-        return Vec2(c * (q.x() * cg - sg * q.y() * sn), r.theta_le + c * (q.x() * sn + sg * q.y() * cg));
-    };
+    const Vec2 pivot = restagger_deg == 0.0 ? Vec2::Zero() : Vec2(mprime_at_x(S, axis.x()), axis.y());
+    const auto conf = placement(layer.stagger_deg, layer.theta_le_deg, S.mprime_te(), mirror, restagger_deg, pivot);
+    r.gamma = conf.gamma;
+    r.chord_mprime = conf.c;
+    r.mprime_le = conf.m0;
+    r.theta_le = conf.t0;
+    const Vec2 te = conf({1.0, 0.0});
     r.conformal.reserve(sec->loop.xy.size());
     r.xyz.reserve(sec->loop.xy.size());
     for (const auto& q : sec->loop.xy) {
@@ -493,14 +557,15 @@ LayerResult place_layer(const Layer& layer, std::shared_ptr<const Section2D> sec
     }
     const auto& cam = sec->camber;
     const std::size_t n = cam.point.size();
+    const double m_le = S.m_of_mprime(conf.m0);
     for (std::size_t i = 0; i < n; ++i) {
         const Vec2 mt = conf(cam.point[i]);
-        r.mprime.push_back(mt.x());
-        r.m.push_back(S.m_of_mprime(mt.x()));
-        r.mfrac.push_back(mt.x() / S.mprime_te());
+        r.mprime.push_back(mt.x() - conf.m0);
+        r.m.push_back(S.m_of_mprime(mt.x()) - m_le);
+        r.mfrac.push_back((mt.x() - conf.m0) / (te.x() - conf.m0));
         r.theta_deg.push_back(Math::rad2deg(mt.y()));
         // the in-plane map is a similarity: a direction at angle a becomes gamma + sign * a
-        r.beta_deg.push_back(layer.stagger_deg + sg * cam.angle_deg[i]);
+        r.beta_deg.push_back(Math::rad2deg(conf.gamma) + conf.sign * cam.angle_deg[i]);
         r.thickness.push_back(cam.thickness[i]);
         r.xc.push_back(cam.point[i].x());
         r.camber_xr.push_back(S.xr(mt.x()));
@@ -508,13 +573,34 @@ LayerResult place_layer(const Layer& layer, std::shared_ptr<const Section2D> sec
     r.beta_le = r.beta_deg.front();
     r.beta_te = r.beta_deg.back();
     r.theta_te_deg = r.theta_deg.back();
-    r.r_le = S.le_point().y();
-    r.r_te = S.te_point().y();
-    const Vec3 a = S.cartesian(0.0, r.theta_le), b = S.cartesian(conf({1.0, 0.0}).x(), conf({1.0, 0.0}).y());
-    r.chord = (b - a).norm();
+    r.r_le = S.xr(conf.m0).y();
+    r.r_te = S.xr(te.x()).y();
+    const Vec3 pa = S.cartesian(conf.m0, conf.t0), pb = S.cartesian(te.x(), te.y());
+    r.chord = (pb - pa).norm();
     r.pitch_le = 2.0 * Math::kPi * r.r_le / n_blades;
     r.solidity_3d = r.chord / (Math::kPi * (r.r_le + r.r_te) / n_blades);
     return r;
+}
+
+Vec2 restagger_axis(const BladeDesign& d, const Blade::FlowPath& fp)
+{
+    const auto& R = d.restagger;
+    if (R.axis == Restagger::Axis::Point) return {R.z, Math::deg2rad(R.theta_deg)};
+    std::vector<double> spans;
+    for (const auto& l : d.layers) spans.push_back(l.span);
+    const double s = R.axis == Restagger::Axis::Hub ? spans.front()
+                     : R.axis == Restagger::Axis::Tip ? spans.back()
+                                                      : 0.5 * (spans.front() + spans.back());
+    // the nominal (un-re-staggered) reference section, interpolated in span like the mesh rows
+    const auto w = spline_weights(spans, s);
+    double gam = 0.0, th = 0.0;
+    for (std::size_t k = 0; k < d.layers.size(); ++k) {
+        gam += w[k] * d.layers[k].stagger_deg;
+        th += w[k] * d.layers[k].theta_le_deg;
+    }
+    const auto S = fp.surface(s);
+    const Vec2 P = placement(gam, th, S.mprime_te(), d.mirror)({R.chord_fraction, 0.0});
+    return {S.xr(P.x()).x(), P.y()};
 }
 
 // ── design ───────────────────────────────────────────────────────────────────
@@ -551,6 +637,19 @@ DesignResult Evaluator::evaluate(const BladeDesign& d)
             }
         }));
     for (auto& j : jobs) j.get();
+    // re-stagger axis
+    Vec2 axis = Vec2::Zero();
+    const double dg = d.restagger.angle_deg;
+    if (dg != 0.0) {
+        try {
+            axis = restagger_axis(d, *fp);
+            // the axis must cross every stream surface between hub and casing
+            for (const double s : {0.0, 1.0}) (void)mprime_at_x(fp->surface(s), axis.x());
+        } catch (const std::exception& e) {
+            out.errors.push_back(std::string("re-stagger: ") + e.what());
+            return out;
+        }
+    }
     // placement on the stream surfaces
     out.layers.resize(nl);
     for (std::size_t k = 0; k < nl; ++k) {
@@ -559,7 +658,7 @@ DesignResult Evaluator::evaluate(const BladeDesign& d)
             continue;
         }
         try {
-            out.layers[k] = place_layer(d.layers[k], secs[k], *fp, d.n_blades, d.mirror);
+            out.layers[k] = place_layer(d.layers[k], secs[k], *fp, d.n_blades, d.mirror, dg, axis);
         } catch (const std::exception& e) {
             out.layers[k].error = e.what();
         }
@@ -615,15 +714,16 @@ DesignResult Evaluator::evaluate(const BladeDesign& d)
             th += w[k] * d.layers[k].theta_le_deg;
         }
         const auto S = fp->surface(s);
-        const double g = Math::deg2rad(gam), cgm = std::cos(g), sgm = std::sin(g), c = S.mprime_te() / cgm;
-        const double sg = d.mirror ? -1.0 : 1.0, t_le = Math::deg2rad(th);
+        const Vec2 pivot = dg == 0.0 ? Vec2::Zero() : Vec2(mprime_at_x(S, axis.x()), axis.y());
+        const auto conf = placement(gam, th, S.mprime_te(), d.mirror, dg, pivot);
+        const double mp_le = conf.m0, mp_te = conf({1.0, 0.0}).x();
         double th_mean = 0.0;
         for (std::size_t i = 0; i < np; ++i) {
             Vec2 q = Vec2::Zero();
             for (std::size_t k = 0; k < nl; ++k) q += w[k] * out.layers[k].section->loop.xy[i];
-            const double mp = c * (q.x() * cgm - sg * q.y() * sgm), tt = t_le + c * (q.x() * sgm + sg * q.y() * cgm);
-            out.blade.p.push_back(S.cartesian(mp, tt));
-            th_mean += tt;
+            const Vec2 mt = conf(q);
+            out.blade.p.push_back(S.cartesian(mt.x(), mt.y()));
+            th_mean += mt.y();
         }
         th_mean /= static_cast<double>(np);
         if (j == 0) theta_hub = th_mean;
@@ -635,7 +735,7 @@ DesignResult Evaluator::evaluate(const BladeDesign& d)
                 b += w[k] * beta_k[k][static_cast<std::size_t>(i)];
                 t += w[k] * thk_k[k][static_cast<std::size_t>(i)];
             }
-            const Vec2 xr = S.xr(f * S.mprime_te());
+            const Vec2 xr = S.xr(mp_le + f * (mp_te - mp_le));
             out.beta.xr.push_back(xr);
             out.beta.value.push_back(b);
             out.thickness.xr.push_back(xr);

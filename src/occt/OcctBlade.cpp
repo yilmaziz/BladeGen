@@ -330,6 +330,7 @@ BladeShapes build_shapes(const std::vector<std::vector<Vec3>>& loops, const Soli
     out.blade = first_solid_containing(sp.Shape(), inside, true);
     if (out.blade.IsNull())
         throw std::runtime_error("blade solid not found: does the blade surface cross both hub and casing?");
+    if (opt.blade_only) return out;
     out.blade_valid = is_valid(out.blade);
     out.blade_volume = volume(out.blade);
     out.blade_area = area(out.blade);

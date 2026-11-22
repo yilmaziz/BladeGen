@@ -18,6 +18,7 @@ def test_flowpath_cylindrical_wrap_and_le_line():
     cfg = bg.MeridionalConfig()
     cfg.hub = bg.WallPoints(-15.0, 50.0, 15.0, 50.0)
     cfg.hub_law = bg.WallLaw.Linear
+    cfg.casing = bg.WallPoints(-15.0, 80.0, 15.0, 80.0)  # the default casing is not a cylinder
     fp = bg.FlowPath(cfg)
     s = fp.surface(0.0)
     assert s.cylindrical
@@ -41,8 +42,13 @@ def test_default_design_evaluates():
         assert lay["mfrac"][0] == pytest.approx(0.0, abs=1e-12)
         assert lay["mfrac"][-1] == pytest.approx(1.0, abs=1e-9)
         assert lay["beta_le"] > lay["beta_te"]
-    assert r["layers"][4]["cylindrical"]          # the default casing is a cylinder (R = 80)
-    assert not r["layers"][0]["cylindrical"]      # the hub rises 40 -> 60
+    assert not r["layers"][4]["cylindrical"]      # the default casing falls 106 -> 102
+    assert not r["layers"][0]["cylindrical"]      # the hub rises 40 -> 43
+    d = json.loads(bg.design_defaults())
+    assert d["n_blades"] == 18
+    pts = lambda w: [w[k] for k in ("z_le", "r_le", "z_te", "r_te")]
+    assert pts(d["meridional"]["casing"]) == [-11.0, 106.0, 10.0, 102.0]
+    assert pts(d["meridional"]["hub"]) == [-15.0, 40.0, 15.0, 43.0]
     f = r["beta_field"]
     assert f["value"].shape == f["xr"].shape[:2]
 
@@ -75,3 +81,23 @@ def test_rotor67_default_layers():
     assert all(layer["method"] == "NACA 65" for layer in n["layers"])
     with pytest.raises(ValueError):
         bg.rotor67_layer(1.5)
+
+
+def test_restagger_whole_blade_about_the_hub_le():
+    ev = bg.DesignEvaluator()
+    d = json.loads(bg.design_defaults())
+    assert d["restagger"]["angle_deg"] == 0.0 and d["restagger"]["axis"] == "hub"
+    a = ev.evaluate(json.dumps(d))
+    d["restagger"]["angle_deg"] = -3.0  # opened by 3 deg
+    b = ev.evaluate(json.dumps(d))
+    assert a["ok"] and b["ok"], b["errors"]
+    for la, lb in zip(a["layers"], b["layers"]):
+        np.testing.assert_allclose(lb["beta_deg"], la["beta_deg"] - 3.0, atol=1e-10)
+        assert lb["stagger_deg"] == pytest.approx(la["stagger_deg"] - 3.0, abs=1e-12)
+        assert lb["chord_mprime"] == pytest.approx(la["chord_mprime"], rel=1e-14)
+    # the hub LE is the pivot: it stays
+    assert b["layers"][0]["mprime_le"] == pytest.approx(0.0, abs=1e-12)
+    assert b["layers"][0]["theta_le_deg"] == pytest.approx(a["layers"][0]["theta_le_deg"], abs=1e-12)
+    d["restagger"]["axis"] = "shaft"
+    with pytest.raises(ValueError):
+        ev.evaluate(json.dumps(d))

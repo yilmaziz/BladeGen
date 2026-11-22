@@ -160,6 +160,13 @@ inscribed circles, smoothed by a least-squares cubic B-spline pinned at the LE /
   - Views beyond the count close; the active view is kept. Missing views open with the default contents.
   - The default layout is the 6-view grid.
 - Python: each layer's dict has `mprime_le` and `theta_le_deg` (the placed LE point).
+- **New default channel and blade count**:
+  - casing LE (Z −11, R 106) and TE (10, 102);
+  - hub LE (−15, 40) and TE (15, 43);
+  - both walls Bell & Mehta, 18 blades;
+  - the mesh is unchanged: 25 rows, 48 body and 16 edge points per side, tanh d = 1.5.
+
+  The Rotor 67 layers scale with the new channel. Tests that need cylindrical walls set them explicitly.
 
 **Changed**
 - `LayerResult::mprime`, `m` and `mfrac` are measured from the placed LE point, and `mfrac` runs 0 → 1 between

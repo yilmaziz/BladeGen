@@ -130,6 +130,7 @@ TEST_CASE("Cylindrical walls: the layers are wrapped on cylinders", "[design]")
     auto d = BladeDesign::defaults();
     d.meridional.hub = {-15.0, 50.0, 15.0, 50.0};
     d.meridional.hub_law = Blade::WallLaw::Linear;
+    d.meridional.casing = {-15.0, 80.0, 15.0, 80.0};  // both walls cylinders (the default casing is not)
     Evaluator ev;
     const auto r = ev.evaluate(d);
     REQUIRE(r.ok());
@@ -269,15 +270,21 @@ TEST_CASE("Default design: Rotor 67 custom layers, scaled by the meridional path
         const auto mx = *std::max_element(sec.thickness_law->law.begin(), sec.thickness_law->law.end());
         CHECK(mx == Approx(d.layers[k].custom.thickness.t_max).epsilon(1e-2));  // 120 law stations
     }
-    // the chord follows the channel: twice the axial length, twice the chord (tip layer on the cylinder)
-    REQUIRE(r.layers[4].surface.cylindrical());
-    auto e = d;
+    // the chord follows the channel: twice the axial length, twice the chord (tip layer on a cylinder)
+    auto c = d;
+    c.meridional.hub.z_le = c.meridional.casing.z_le = -15.0;
+    c.meridional.hub.z_te = c.meridional.casing.z_te = 15.0;
+    c.meridional.casing.r_le = c.meridional.casing.r_te = 80.0;
+    const auto rc = ev.evaluate(c);
+    REQUIRE(rc.ok());
+    REQUIRE(rc.layers[4].surface.cylindrical());
+    auto e = c;
     e.meridional.hub.z_le = e.meridional.casing.z_le = -30.0;
     e.meridional.hub.z_te = e.meridional.casing.z_te = 30.0;
     const auto r2 = ev.evaluate(e);
     REQUIRE(r2.ok());
-    CHECK(r2.layers[4].chord_mprime == Approx(2.0 * r.layers[4].chord_mprime).epsilon(1e-12));  // unrolled chord
-    CHECK(r2.layers[4].beta_le == Approx(r.layers[4].beta_le).margin(1e-9));  // angles do not scale
+    CHECK(r2.layers[4].chord_mprime == Approx(2.0 * rc.layers[4].chord_mprime).epsilon(1e-12));  // unrolled chord
+    CHECK(r2.layers[4].beta_le == Approx(rc.layers[4].beta_le).margin(1e-9));  // angles do not scale
     const auto n = BladeDesign::naca65_defaults();
     for (const auto& l : n.layers) CHECK(l.method == Method::Naca65);
     CHECK(ev.evaluate(n).ok());

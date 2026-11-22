@@ -18,6 +18,7 @@ def test_flowpath_cylindrical_wrap_and_le_line():
     cfg = bg.MeridionalConfig()
     cfg.hub = bg.WallPoints(-15.0, 50.0, 15.0, 50.0)
     cfg.hub_law = bg.WallLaw.Linear
+    cfg.casing = bg.WallPoints(-15.0, 80.0, 15.0, 80.0)  # the default casing is not a cylinder
     fp = bg.FlowPath(cfg)
     s = fp.surface(0.0)
     assert s.cylindrical
@@ -41,8 +42,13 @@ def test_default_design_evaluates():
         assert lay["mfrac"][0] == pytest.approx(0.0, abs=1e-12)
         assert lay["mfrac"][-1] == pytest.approx(1.0, abs=1e-9)
         assert lay["beta_le"] > lay["beta_te"]
-    assert r["layers"][4]["cylindrical"]          # the default casing is a cylinder (R = 80)
-    assert not r["layers"][0]["cylindrical"]      # the hub rises 40 -> 60
+    assert not r["layers"][4]["cylindrical"]      # the default casing falls 106 -> 102
+    assert not r["layers"][0]["cylindrical"]      # the hub rises 40 -> 43
+    d = json.loads(bg.design_defaults())
+    assert d["n_blades"] == 18
+    pts = lambda w: [w[k] for k in ("z_le", "r_le", "z_te", "r_te")]
+    assert pts(d["meridional"]["casing"]) == [-11.0, 106.0, 10.0, 102.0]
+    assert pts(d["meridional"]["hub"]) == [-15.0, 40.0, 15.0, 43.0]
     f = r["beta_field"]
     assert f["value"].shape == f["xr"].shape[:2]
 

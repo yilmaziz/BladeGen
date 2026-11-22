@@ -78,8 +78,8 @@ struct WallPoints
 
 struct MeridionalConfig
 {
-    WallPoints hub{-15.0, 40.0, 15.0, 60.0};
-    WallPoints casing{-15.0, 80.0, 15.0, 80.0};
+    WallPoints hub{-15.0, 40.0, 15.0, 43.0};
+    WallPoints casing{-11.0, 106.0, 10.0, 102.0};
     WallLaw hub_law = WallLaw::BellMehta;
     WallLaw casing_law = WallLaw::BellMehta;
     double inlet_extension = 0.5;   ///< upstream length / the wall's axial LE -> TE length

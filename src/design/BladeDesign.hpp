@@ -110,7 +110,7 @@ struct BladeDesign
     std::string name = "blade";
     Blade::MeridionalConfig meridional{};
     std::vector<Layer> layers;               ///< hub -> tip, spans increasing
-    int n_blades = 24;
+    int n_blades = 18;
     bool mirror = false;                     ///< true: suction side toward -theta
     Restagger restagger{};                   ///< re-stagger of the whole blade
     MeshOptions mesh{};

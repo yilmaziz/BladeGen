@@ -49,10 +49,13 @@ bash tools/designer.sh             # or: build/linux-release/bin/bladegen_design
 
 <p align="center">
   <img src="assets/designer.png" width="98%" alt="BladeGen Designer"/>
-  <br/><em>BladeGen Designer: the parameter panel (meridional configuration, layers Hub / 25 % / Mid / 75 % / Tip,
-  construction method and knobs, blade and mesh), six views (thickness and metal angle of all layers, SS / PS
-  curvature with the issue markers, the blade-to-blade view in (m′, θ) with the neighbouring blades, the meshed
-  3-D blade on hub and casing, the metal-angle contour in the meridional plane) and the geometry checks.</em>
+  <br/><em>BladeGen Designer as it opens (v1.0.2). Left: the parameter panel (meridional configuration, layers
+  Hub / 25 % / Mid / 75 % / Tip, construction method and knobs, blade and mesh). Right: the default layout of six
+  equal views. They show the metal-angle contour in the meridional plane for the default channel (hub R 40 → 43,
+  casing R 106 → 102), the meshed 3-D blade on hub and casing, the blade-to-blade view in (m′, θ) with the
+  neighbouring blades, the SS / PS curvature with the issue markers, and the metal angle and thickness of all
+  layers. Below: the geometry checks. The toolbar opens the OpenCASCADE 3D Solid view and switches between
+  6, 4 and 2 views.</em>
 </p>
 
 How it works:

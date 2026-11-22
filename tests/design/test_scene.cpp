@@ -103,9 +103,9 @@ TEST_CASE("Scene: one blade on a pitch of hub and casing, the whole annulus", "[
         CHECK(ck.X() == Approx(c0.X()).epsilon(1e-9));
     }
     // theta_rotation turns toward +theta: (x, r sin t, r cos t) -> theta + a
-    const gp_Pnt q = gp_Pnt(0.1, 0.0, 1.0).Transformed(theta_rotation(0.3));
-    CHECK(theta_of(q) == Approx(0.3).margin(1e-15));
-    CHECK(q.X() == Approx(0.1).margin(1e-15));
+    const gp_Pnt turned = gp_Pnt(0.1, 0.0, 1.0).Transformed(theta_rotation(0.3));
+    CHECK(theta_of(turned) == Approx(0.3).margin(1e-15));
+    CHECK(turned.X() == Approx(0.1).margin(1e-15));
     // neighbouring blades do not touch
     CHECK(Occt::distance(bn[0], bn[1]) > 1e-4);
 

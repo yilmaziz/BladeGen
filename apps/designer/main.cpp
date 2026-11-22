@@ -69,6 +69,29 @@ int main(int argc, char** argv)
                     if (k == 2) img.save(QString("%1/view_%2.png").arg(dir).arg(static_cast<int>(c), 2, 10, QChar('0')));
                     ++n;
                 }
+        // the blade-to-blade view in every coordinate system, for every layer (maximised: readable images)
+        auto* vsub = qobject_cast<QMdiSubWindow*>(v->parentWidget());
+        if (vsub) vsub->showMaximized();
+        for (const auto bc : {Designer::B2BCoords::MPrimeTheta, Designer::B2BCoords::MRTheta, Designer::B2BCoords::ZRTheta,
+                              Designer::B2BCoords::XYAxial})
+            for (int k = 0; k < static_cast<int>(w.session().design.layers.size()); ++k) {
+                v->layer = k;
+                v->b2b = bc;
+                v->setContent(Designer::Content::BladeToBlade);
+                QApplication::processEvents();
+                const QImage img = v->image();
+                if (img.isNull() || img.width() < 10) {
+                    std::fprintf(stderr, "self-test: empty blade-to-blade image (coordinates %d, layer %d)\n", static_cast<int>(bc), k);
+                    return 18;
+                }
+                if (k == 2) img.save(QString("%1/b2b_coords_%2.png").arg(dir).arg(static_cast<int>(bc)));
+                ++n;
+            }
+        v->b2b = Designer::B2BCoords::MPrimeTheta;
+        if (vsub) {
+            vsub->showNormal();
+            w.gridLayout(6);
+        }
         // a geometry change must reach the views
         const double before = w.session().result->layers[2].beta_le;
         w.session().design.layers[2].stagger_deg += 3.0;
@@ -98,15 +121,22 @@ int main(int argc, char** argv)
         {
             std::vector<double> b0;
             for (const auto& L : w.session().result->layers) b0.push_back(L.beta_le);
-            w.session().design.restagger.angle_deg = 3.0;
+            w.session().design.restagger.angle_deg = 15.0;  // large: the camber / TE placement must follow
             w.submit();
             w.settle();
             const auto& Ls = w.session().result->layers;
             for (std::size_t k = 0; k < Ls.size(); ++k)
-                if (!w.session().result->ok() || std::abs(Ls[k].beta_le - b0[k] - 3.0) > 1e-9) {
-                    std::fprintf(stderr, "self-test: the re-stagger did not turn layer %zu by 3 deg\n", k);
+                if (!w.session().result->ok() || std::abs(Ls[k].beta_le - b0[k] - 15.0) > 1e-9) {
+                    std::fprintf(stderr, "self-test: the re-stagger did not turn layer %zu by 15 deg\n", k);
                     return 12;
                 }
+            v->layer = 4;  // the camber line and the TE marker follow the re-staggered section
+            v->setContent(Designer::Content::BladeToBlade);
+            if (auto* s = qobject_cast<QMdiSubWindow*>(v->parentWidget())) s->showMaximized();
+            QApplication::processEvents();
+            v->image().save(dir + "/b2b_restagger_tip.png");
+            if (auto* s = qobject_cast<QMdiSubWindow*>(v->parentWidget())) s->showNormal();
+            w.gridLayout(6);
             w.session().design.restagger.angle_deg = 0.0;
             w.submit();
             w.settle();

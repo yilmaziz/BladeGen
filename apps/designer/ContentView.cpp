@@ -319,6 +319,8 @@ void ContentView::refresh(bool refit)
     }
     if (per_layer && k < static_cast<int>(s_.design.layers.size()))
         t += QString(" — %1 (span %2)").arg(QString::fromStdString(s_.design.layers[static_cast<std::size_t>(k)].name)).arg(s_.design.layers[static_cast<std::size_t>(k)].span);
+    if (content_ == Content::BladeToBlade)
+        t += b2b == B2BCoords::MPrimeTheta ? " · m′, θ" : b2b == B2BCoords::MRTheta ? " · m, rθ" : b2b == B2BCoords::ZRTheta ? " · Z, rθ" : " · X, Y axial view";
     setWindowTitle(t);
     emit titleChanged(t);
     if (content_ == Content::View3D) {
@@ -403,10 +405,22 @@ void ContentView::buildPlot(bool refit)
         const auto& L = R->layers[k];
         const auto& loop = L.section->loop;
         const double pitch = 2.0 * Math::kPi / std::max(D.n_blades, 1);
+        // (m', theta) on the layer's stream surface -> the chosen view coordinates
         auto map = [&](const Math::Vec2& mt, double dth) {
-            if (b2b == B2BCoords::MPrimeTheta) return QPointF(mt.x(), mt.y() + dth);
-            const double r = L.surface.xr(mt.x()).y();
-            return QPointF(L.surface.m_of_mprime(mt.x()), r * (mt.y() + dth));
+            const double th = mt.y() + dth;
+            switch (b2b) {
+            case B2BCoords::MPrimeTheta: return QPointF(mt.x(), th);
+            case B2BCoords::MRTheta: return QPointF(L.surface.m_of_mprime(mt.x()), L.surface.xr(mt.x()).y() * th);
+            case B2BCoords::ZRTheta: {
+                const Math::Vec2 xr = L.surface.xr(mt.x());
+                return QPointF(xr.x(), xr.y() * th);
+            }
+            case B2BCoords::XYAxial: {
+                const Math::Vec3 p = L.surface.cartesian(mt.x(), th);  // (axial, r sin theta, r cos theta)
+                return QPointF(p.y(), p.z());
+            }
+            }
+            return QPointF(mt.x(), th);
         };
         for (double dth : {-pitch, pitch}) {
             Series s;
@@ -423,7 +437,7 @@ void ContentView::buildPlot(bool refit)
         cam.name = "camber line";
         cam.color = kCamber;
         cam.style = Qt::DashLine;
-        for (std::size_t i = 0; i < L.mprime.size(); ++i) cam.pts << map({L.mprime[i], Math::deg2rad(L.theta_deg[i])}, 0.0);
+        for (std::size_t i = 0; i < L.mprime.size(); ++i) cam.pts << map({L.mprime_le + L.mprime[i], Math::deg2rad(L.theta_deg[i])}, 0.0);
         S << cam;
         const auto cf = confOf(L, D.mirror);
         for (const auto& is : L.section->quality.issues) {
@@ -432,10 +446,19 @@ void ContentView::buildPlot(bool refit)
             M << issueMarker(map({c.x(), c.y()}, 0.0), is.severity);
         }
         M << PointMarker{map({L.mprime_le, L.theta_le}, 0.0), Qt::black, 'o', "LE"};
-        M << PointMarker{map({L.mprime.back(), Math::deg2rad(L.theta_deg.back())}, 0.0), Qt::black, 'o', "TE"};
-        if (b2b == B2BCoords::MPrimeTheta) plot_->setLabels("m'", "θ [rad]");
-        else plot_->setLabels("m [mm]", "r θ [mm]");
-        plot_->setBadge(badgeFor(L.section->quality, QString("%1 · γ %2° · %3").arg(QString::fromStdString(L.section->designation)).arg(D.layers[k].stagger_deg).arg(L.surface.cylindrical() ? "cylindrical wrap" : "surface of revolution")));
+        M << PointMarker{map({L.mprime_le + L.mprime.back(), Math::deg2rad(L.theta_deg.back())}, 0.0), Qt::black, 'o', "TE"};
+        switch (b2b) {
+        case B2BCoords::MPrimeTheta: plot_->setLabels("m'", "θ [rad]"); break;
+        case B2BCoords::MRTheta: plot_->setLabels("m [mm] (from the layer's LE line)", "r θ [mm]"); break;
+        case B2BCoords::ZRTheta: plot_->setLabels("Z (axial) [mm]", "r θ [mm]"); break;
+        case B2BCoords::XYAxial: plot_->setLabels("X = r sin θ [mm]   (axial view, seen from downstream)", "Y = r cos θ [mm]"); break;
+        }
+        const QString rs = D.restagger.angle_deg != 0.0 ? QString(" (re-staggered %1%2°)").arg(D.restagger.angle_deg > 0 ? "+" : "").arg(D.restagger.angle_deg) : QString();
+        plot_->setBadge(badgeFor(L.section->quality, QString("%1 · γ %2°%3 · %4")
+                                                         .arg(QString::fromStdString(L.section->designation))
+                                                         .arg(Math::rad2deg(L.gamma), 0, 'f', 3)
+                                                         .arg(rs)
+                                                         .arg(L.surface.cylindrical() ? "cylindrical wrap" : "surface of revolution")));
         break;
     }
     case Content::ProfileSection: {
@@ -1010,7 +1033,8 @@ void ContentView::showMenu(const QPoint& global)
     }
     auto* bc = m.addMenu("Blade-to-Blade Coordinates");
     auto* bg = new QActionGroup(&m);
-    for (const auto& [c, name] : {std::pair{B2BCoords::MPrimeTheta, "M-prime, Theta (conformal)"}, std::pair{B2BCoords::MRTheta, "M, R·Theta [mm]"}}) {
+    for (const auto& [c, name] : {std::pair{B2BCoords::MPrimeTheta, "M-prime, Theta Plot (conformal)"}, std::pair{B2BCoords::MRTheta, "M, R·Theta Plot"},
+                                  std::pair{B2BCoords::ZRTheta, "Z, R·Theta Plot"}, std::pair{B2BCoords::XYAxial, "X, Y Plot (axial view)"}}) {
         auto* a = bc->addAction(name, this, [this, cv = c] { b2b = cv; refresh(true); });
         a->setCheckable(true);
         a->setChecked(b2b == c);

@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.0.3 — blade-to-blade view: Z, R·Theta and axial (X, Y) coordinates
+
+### New
+- **Blade-to-Blade View coordinates** (right-click → *Blade-to-Blade Coordinates*), for every layer (Hub,
+  25 %, Mid, 75 %, Tip). The section, its neighbouring blades, the camber line, LE / TE and the geometry-check
+  markers are all drawn in the chosen coordinates:
+  - *M-prime, Theta Plot (conformal)*: (m′, θ), as before;
+  - *M, R·Theta Plot*: (m, r θ), as before;
+  - **Z, R·Theta Plot**: axial position Z against r θ (mm);
+  - **X, Y Plot (axial view)**: the section seen along the machine axis from downstream,
+    X = r sin θ, Y = r cos θ (mm).
+- The window title shows the chosen coordinates.
+
+### Fixed
+- Re-staggered blades: the blade-to-blade view drew the camber line and the TE marker from the LE line rather
+  than from the turned LE point. A blade without a re-stagger was not affected.
+- The blade-to-blade status box gives the stagger actually used, including the re-stagger, and notes the
+  re-stagger.
+
+### Tests
+- The designer self-test renders the blade-to-blade view in all four coordinate systems for every layer, and
+  the tip section with a 15° re-stagger. That is 125 view renders, up from 105.
+
 ## v1.0.2 — BladeGen Designer: meridional channel, five layers, conformal 3-D blade
 
 BladeGen gets a native **C++ / Qt designer** with the layout of a professional blade-design program: MDI views

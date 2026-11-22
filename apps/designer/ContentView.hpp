@@ -52,7 +52,9 @@ enum class Content
 [[nodiscard]] QList<QList<Content>> contentGroups();  ///< for the menus (separators between groups)
 
 enum class HAxis { MeridionalFraction, MPrime, Meridional, ChordFraction };
-enum class B2BCoords { MPrimeTheta, MRTheta };
+/// Blade-to-blade view coordinates: conformal (m', theta); (m, r theta); (z, r theta); the axial view
+/// (x, y) = (r sin theta, r cos theta), the section seen along the machine axis from downstream.
+enum class B2BCoords { MPrimeTheta, MRTheta, ZRTheta, XYAxial };
 enum class CurvatureRange { Full, LeadingEdge, TrailingEdge };
 
 class ContentView : public QWidget

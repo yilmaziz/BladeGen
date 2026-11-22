@@ -8,6 +8,9 @@
 
 #include <gp_Trsf.hxx>
 
+#include <array>
+#include <vector>
+
 namespace BladeGen::Design {
 
 /// Builds the solid from a design (any construction method, NACA 65 sections included).
@@ -39,6 +42,39 @@ struct Scene
     double theta_start = 0.0;  ///< the walls start at this theta ...
     double sweep = 0.0;        ///< ... and sweep this angle toward +theta [rad]
 };
+
+/// Triangles with smooth vertex normals (metres).
+struct TriangleMesh
+{
+    std::vector<Vec3> p;                      ///< vertices
+    std::vector<Vec3> n;                      ///< unit vertex normals
+    std::vector<std::array<int, 3>> tri;      ///< vertex indices, counter-clockwise seen along n
+};
+
+/// The fast display of the OCCT 3-D view, made from the design's own mesh rows (no OCCT
+/// modelling, no Boolean, no BRepMesh).  The blade is the row grid in triangles (it passes
+/// through every mesh point; flat between them) with flat caps on the hub and tip rows; hub and
+/// casing are grids on their surfaces of revolution over one pitch or 360 deg, as in Scene.
+/// Normals face out of the blade and into the passage.  Metres, like Scene.
+struct SceneMesh
+{
+    TriangleMesh blade;                          ///< one blade (the viewer turns copies by k * pitch)
+    TriangleMesh hub, casing;
+    std::vector<std::vector<Vec3>> blade_lines;  ///< wireframe: the rows and every few loop columns
+    std::vector<std::vector<Vec3>> hub_lines, casing_lines;
+    std::vector<std::vector<Vec3>> blade_edges;  ///< outline: hub and tip rows, LE and TE lines
+    std::vector<std::vector<Vec3>> hub_edges, casing_edges;
+    int n_blades = 0;
+    int copies = 0;
+    double pitch = 0.0, theta_blade = 0.0, theta_start = 0.0, sweep = 0.0;
+};
+
+/// Builds the fast display from an evaluated design (r = Evaluator::evaluate(d), r.ok()).
+/// Throws std::invalid_argument for a result without a blade mesh or n_blades < 1.
+[[nodiscard]] SceneMesh build_scene_mesh(const BladeDesign& d, const DesignResult& r, bool annulus);
+
+/// theta of a design's blade: the inside point (mid row, mid chord) [rad].
+[[nodiscard]] double blade_theta(const DesignResult& r);
 
 /// Rotation of a copy by `angle` about the machine axis toward +theta (y = r sin theta, z = r cos theta).
 [[nodiscard]] gp_Trsf theta_rotation(double angle);

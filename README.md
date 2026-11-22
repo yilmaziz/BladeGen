@@ -311,13 +311,15 @@ OpenCASCADE interface; their Fig. 15) is BladeGen's: `src/` library, `apps/` exe
   rigidly in its conformal plane about the point where the axis crosses its stream surface: the map
   (m′, θ) = P + R(Δγ)(nominal − P). The sections stay on their stream surfaces, the chord c′ is kept, and every
   metal angle changes by exactly Δγ.
-* **3D Solid (OpenCASCADE)** view (toolbar *3D Solid*, or any view's right-click menu). It shows the OCCT blade
-  solid with hub and casing in OCCT's own viewer (V3d / AIS, OpenGL), rendered offscreen into the MDI window.
+* **3D Solid (OpenCASCADE)** view (toolbar *3D Solid*, or any view's right-click menu). It shows the blade with
+  hub and casing in OCCT's own viewer (V3d / AIS, OpenGL), rendered offscreen into the MDI window.
+  - *Design mesh* (the default) updates with every change, in 3–11 ms. It is the design's mesh rows as
+    triangles, within 0.054 mm of the exact skin.
+  - *Exact OCCT solid* is the trimmed B-spline solid of the STEP export, about 2 s per change.
   - A single blade on one pitch of hub and casing, or the whole annulus (n_blades copies, walls over 360°).
   - Blade, hub and casing each wireframe, solid (opaque, with edges) or shaded (smooth, see-through); hub and
     casing can also be hidden.
   - Standard views: isometric, axial, meridional, radial.
-  - The solid is rebuilt in the background whenever the design changes.
 * **Layouts**: *6 views* (3 × 2), *4 views* (2 × 2) and *2 views* (side by side) arrange the views in equal
   cells that follow the window size.
 

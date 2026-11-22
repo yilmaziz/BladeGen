@@ -1,4 +1,7 @@
-// OcctView: the blade solid, hub and casing in OpenCASCADE's own viewer (V3d / AIS, OpenGL).
+// OcctView: the blade, hub and casing in OpenCASCADE's own viewer (V3d / AIS, OpenGL).  Two
+// sources: the fast display mesh of the design rows (Design::SceneMesh, our own triangles drawn
+// as OpenGL primitive arrays: no OCCT modelling, updated with every design change) or the exact
+// OCCT solid (Design::Scene: trimmed B-spline solid, meshed by BRepMesh; slow).
 // The view renders offscreen (V3d_View::ToPixMap into a frame buffer of the widget's size) and
 // paints the image, so it behaves like any other widget inside the MDI area and its image can
 // be saved.  Mouse: left drag rotates, middle drag (or shift + left) pans, wheel zooms, double
@@ -36,6 +39,8 @@ public:
     /// Meshes the scene for display: call it off the GUI thread, before setScene.
     static void prepare(const BladeGen::Design::Scene& s);
     void setScene(std::shared_ptr<const BladeGen::Design::Scene> s, bool refit);
+    /// The fast display mesh (cheap: call it on the GUI thread with every result).
+    void setMeshScene(std::shared_ptr<const BladeGen::Design::SceneMesh> m, bool refit);
     /// Text drawn over the view (progress, errors); empty: none.
     void setMessage(const QString& m);
     void setLook(Part p, Look l);

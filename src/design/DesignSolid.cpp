@@ -86,10 +86,7 @@ Scene build_scene(const BladeDesign& d, Evaluator& ev, const SceneOptions& opt)
     s.n_blades = d.n_blades;
     s.pitch = 2.0 * Math::kPi / d.n_blades;
     // theta of the blade: the solid's inside point (mid row, mid chord), the sector is centred on it
-    const auto r = ev.evaluate(d);
-    const int j = r.blade.nj / 2, n = r.blade.ni - 1;
-    const Vec3 c = 0.5 * (r.blade.at(n / 4, j) + r.blade.at(3 * n / 4, j));
-    s.theta_blade = std::atan2(c.y(), c.z());
+    s.theta_blade = blade_theta(ev.evaluate(d));
     s.copies = opt.annulus ? d.n_blades : 1;
     s.sweep = opt.annulus ? 2.0 * Math::kPi : s.pitch;
     s.theta_start = opt.annulus ? s.theta_blade - Math::kPi : s.theta_blade - 0.5 * s.pitch;
@@ -103,6 +100,193 @@ Scene build_scene(const BladeDesign& d, Evaluator& ev, const SceneOptions& opt)
     const Blade::FlowPath fp(d.meridional);
     s.hub = wall(fp.hub(), scale, s.theta_start, s.sweep);
     s.casing = wall(fp.casing(), scale, s.theta_start, s.sweep);
+    return s;
+}
+
+double blade_theta(const DesignResult& r)
+{
+    if (r.blade.p.empty()) throw std::invalid_argument("blade_theta: no blade mesh");
+    const int j = r.blade.nj / 2, n = r.blade.ni - 1;
+    const Vec3 c = 0.5 * (r.blade.at(n / 4, j) + r.blade.at(3 * n / 4, j));
+    return std::atan2(c.y(), c.z());
+}
+
+namespace {
+
+/// Adds the grid p[i + ni j] (i fastest) as triangles; `flip` reverses their orientation.
+void add_grid(TriangleMesh& m, const std::vector<Vec3>& p, int ni, int nj, bool flip)
+{
+    const int base = static_cast<int>(m.p.size());
+    m.p.insert(m.p.end(), p.begin(), p.end());
+    for (int j = 0; j + 1 < nj; ++j)
+        for (int i = 0; i + 1 < ni; ++i) {
+            const int a = base + i + ni * j, b = a + 1, c = a + 1 + ni, e = a + ni;
+            if (flip) {
+                m.tri.push_back({a, c, b});
+                m.tri.push_back({a, e, c});
+            } else {
+                m.tri.push_back({a, b, c});
+                m.tri.push_back({a, c, e});
+            }
+        }
+}
+
+/// Area-weighted vertex normals of the triangles from `first` on (accumulated, then normalised).
+void normals(TriangleMesh& m, std::size_t first_vertex = 0, std::size_t first_tri = 0)
+{
+    m.n.resize(m.p.size(), Vec3::Zero());
+    for (std::size_t v = first_vertex; v < m.p.size(); ++v) m.n[v] = Vec3::Zero();
+    for (std::size_t t = first_tri; t < m.tri.size(); ++t) {
+        const auto& [a, b, c] = m.tri[t];
+        const Vec3 f = (m.p[static_cast<std::size_t>(b)] - m.p[static_cast<std::size_t>(a)])
+                           .cross(m.p[static_cast<std::size_t>(c)] - m.p[static_cast<std::size_t>(a)]);
+        for (const int v : {a, b, c}) m.n[static_cast<std::size_t>(v)] += f;
+    }
+}
+
+void normalise(TriangleMesh& m)
+{
+    for (auto& v : m.n) {
+        const double l = v.norm();
+        v = l > 0.0 ? Vec3(v / l) : Vec3(1.0, 0.0, 0.0);
+    }
+}
+
+/// Wall grid on the stream surface S: m' inlet -> outlet, theta from t0 over `sweep`.
+std::vector<Vec3> wall_grid(const Blade::StreamSurface& S, double t0, double sweep, int nm, int nt, double scale)
+{
+    std::vector<Vec3> p;
+    p.reserve(static_cast<std::size_t>(nm * nt));
+    for (int j = 0; j < nt; ++j) {
+        const double th = t0 + sweep * j / (nt - 1);
+        for (int i = 0; i < nm; ++i) {
+            const double mp = S.mprime_inlet() + (S.mprime_outlet() - S.mprime_inlet()) * i / (nm - 1);
+            p.push_back(scale * S.cartesian(mp, th));
+        }
+    }
+    return p;
+}
+
+}  // namespace
+
+SceneMesh build_scene_mesh(const BladeDesign& d, const DesignResult& r, bool annulus)
+{
+    if (d.n_blades < 1) throw std::invalid_argument("build_scene_mesh: n_blades must be >= 1");
+    if (r.blade.p.empty() || r.blade.ni < 7 || r.blade.nj < 2) throw std::invalid_argument("build_scene_mesh: no blade mesh");
+    constexpr double scale = 1e-3;  // design mm -> m, as build_scene
+    SceneMesh s;
+    s.n_blades = d.n_blades;
+    s.pitch = 2.0 * Math::kPi / d.n_blades;
+    s.theta_blade = blade_theta(r);
+    s.copies = annulus ? d.n_blades : 1;
+    s.sweep = annulus ? 2.0 * Math::kPi : s.pitch;
+    s.theta_start = annulus ? s.theta_blade - Math::kPi : s.theta_blade - 0.5 * s.pitch;
+
+    // blade: the closed row loops (last point = first), the LE at 0 and the TE at N / 2
+    const int ni = r.blade.ni, nj = r.blade.nj, N = ni - 1;
+    std::vector<Vec3> g;
+    g.reserve(r.blade.p.size());
+    for (const auto& q : r.blade.p) g.push_back(scale * q);
+    add_grid(s.blade, g, ni, nj, false);
+    normals(s.blade);
+    for (int j = 0; j < nj; ++j) {  // the seam: one normal for the two copies of the LE point
+        const auto a = static_cast<std::size_t>(ni * j), b = static_cast<std::size_t>(N + ni * j);
+        const Vec3 sum = s.blade.n[a] + s.blade.n[b];
+        s.blade.n[a] = s.blade.n[b] = sum;
+    }
+    normalise(s.blade);
+    // out of the blade: compare with the direction from the inside point to a suction-side point
+    const int jm = nj / 2;
+    const Vec3 inside = 0.5 * scale * (r.blade.at(N / 4, jm) + r.blade.at(3 * N / 4, jm));
+    const auto ks = static_cast<std::size_t>(N / 4 + ni * jm);
+    if (s.blade.n[ks].dot(s.blade.p[ks] - inside) < 0.0) {
+        for (auto& t : s.blade.tri) std::swap(t[1], t[2]);
+        for (auto& v : s.blade.n) v = -v;
+    }
+    // caps on the hub and tip rows: strips between the suction and pressure side points i and N - i
+    for (const int j : {0, nj - 1}) {
+        const std::size_t v0 = s.blade.p.size(), t0 = s.blade.tri.size();
+        for (int i = 0; i <= N; ++i) s.blade.p.push_back(g[static_cast<std::size_t>(i + ni * j)]);
+        const int base = static_cast<int>(v0);
+        for (int i = 0; i < N / 2; ++i) {
+            const int a = base + i, b = base + i + 1, c = base + N - i - 1, e = base + N - i;
+            if (c > b) s.blade.tri.push_back({a, b, c});
+            s.blade.tri.push_back({a, c, e});
+        }
+        normals(s.blade, v0, t0);
+        // outward: along +r at the tip, -r at the hub
+        Vec3 nsum = Vec3::Zero(), rad = Vec3::Zero();
+        for (std::size_t v = v0; v < s.blade.p.size(); ++v) {
+            nsum += s.blade.n[v];
+            rad += Vec3(0.0, s.blade.p[v].y(), s.blade.p[v].z());
+        }
+        if ((nsum.dot(rad) < 0.0) == (j != 0)) {
+            for (std::size_t t = t0; t < s.blade.tri.size(); ++t) std::swap(s.blade.tri[t][1], s.blade.tri[t][2]);
+            for (std::size_t v = v0; v < s.blade.p.size(); ++v) s.blade.n[v] = -s.blade.n[v];
+        }
+        for (std::size_t v = v0; v < s.blade.p.size(); ++v) {
+            const double l = s.blade.n[v].norm();
+            s.blade.n[v] = l > 0.0 ? Vec3(s.blade.n[v] / l) : Vec3(1.0, 0.0, 0.0);
+        }
+    }
+    // blade lines: every row, every few loop columns; outline: hub and tip rows, LE and TE lines
+    auto row = [&](int j) {
+        std::vector<Vec3> l;
+        for (int i = 0; i <= N; ++i) l.push_back(g[static_cast<std::size_t>(i + ni * j)]);
+        return l;
+    };
+    auto column = [&](int i) {
+        std::vector<Vec3> l;
+        for (int j = 0; j < nj; ++j) l.push_back(g[static_cast<std::size_t>(i + ni * j)]);
+        return l;
+    };
+    for (int j = 0; j < nj; ++j) s.blade_lines.push_back(row(j));
+    const int step = std::max(1, N / 24);
+    for (int i = 0; i < N; i += step) s.blade_lines.push_back(column(i));
+    s.blade_edges = {row(0), row(nj - 1), column(0), column(N / 2)};
+
+    // walls
+    const Blade::FlowPath fp(d.meridional);
+    const int nm = 64;
+    const int nt = std::max(16, static_cast<int>(std::ceil(s.sweep / Math::deg2rad(2.0))) + 1);
+    auto wall_mesh = [&](double span, TriangleMesh& m, std::vector<std::vector<Vec3>>& lines, std::vector<std::vector<Vec3>>& edges) {
+        const auto S = fp.surface(span);
+        const auto p = wall_grid(S, s.theta_start, s.sweep, nm, nt, scale);
+        add_grid(m, p, nm, nt, false);
+        normals(m);
+        normalise(m);
+        // into the passage: +r on the hub, -r on the casing
+        const Vec3 q = m.p[m.p.size() / 2], rad(0.0, q.y(), q.z());
+        if ((m.n[m.p.size() / 2].dot(rad) < 0.0) == (span == 0.0)) {
+            for (auto& t : m.tri) std::swap(t[1], t[2]);
+            for (auto& v : m.n) v = -v;
+        }
+        auto at = [&](int i, int j) { return p[static_cast<std::size_t>(i + nm * j)]; };
+        const int jstep = std::max(1, (nt - 1) / (annulus ? 72 : 6));
+        for (int j = 0; j < nt; j += jstep) {
+            std::vector<Vec3> l;
+            for (int i = 0; i < nm; ++i) l.push_back(at(i, j));
+            lines.push_back(std::move(l));
+        }
+        for (int i = 0; i < nm; i += 6) {
+            std::vector<Vec3> l;
+            for (int j = 0; j < nt; ++j) l.push_back(at(i, j));
+            lines.push_back(std::move(l));
+        }
+        for (const int i : {0, nm - 1}) {
+            std::vector<Vec3> l;
+            for (int j = 0; j < nt; ++j) l.push_back(at(i, j));
+            edges.push_back(std::move(l));
+        }
+        if (!annulus)
+            for (const int j : {0, nt - 1}) {
+                std::vector<Vec3> l;
+                for (int i = 0; i < nm; ++i) l.push_back(at(i, j));
+                edges.push_back(std::move(l));
+            }
+    };
+    wall_mesh(0.0, s.hub, s.hub_lines, s.hub_edges);
+    wall_mesh(1.0, s.casing, s.casing_lines, s.casing_edges);
     return s;
 }
 

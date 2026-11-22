@@ -148,13 +148,29 @@ int main(int argc, char** argv)
                 ov->setLook(P::Casing, L::Shaded);
                 v->setAnnulus(false);
                 (void)v->waitForSolid();
-                if (std::min({c1, c2, c3}) < 50) {
-                    std::fprintf(stderr, "self-test: the OCCT view rendered blank images (%d, %d, %d colours)\n", c1, c2, c3);
+                // the exact OCCT solid
+                v->setExact(true);
+                err = v->waitForSolid();
+                if (!err.isEmpty()) {
+                    std::fprintf(stderr, "self-test: the exact OCCT solid was not built: %s\n", qPrintable(err));
+                    return 15;
+                }
+                const int c4 = save("solid_exact.png");
+                v->setExact(false);
+                if (std::min({c1, c2, c3, c4}) < 50) {
+                    std::fprintf(stderr, "self-test: the OCCT view rendered blank images (%d, %d, %d, %d colours)\n", c1, c2, c3, c4);
                     return 13;
                 }
-                std::printf("self-test: OCCT viewer renders (single blade, annulus, wireframe)\n");
+                std::printf("self-test: OCCT viewer renders (design mesh: single blade, annulus, wireframe; exact solid)\n");
             } else {
-                std::printf("self-test: OCCT viewer not available here (%s); the solid was built\n", qPrintable(ov->unavailableReason()));
+                v->setExact(true);  // the exact solid still builds without OpenGL
+                err = v->waitForSolid();
+                v->setExact(false);
+                if (!err.isEmpty()) {
+                    std::fprintf(stderr, "self-test: the exact OCCT solid was not built: %s\n", qPrintable(err));
+                    return 15;
+                }
+                std::printf("self-test: OCCT viewer not available here (%s); mesh and exact solid were built\n", qPrintable(ov->unavailableReason()));
             }
             v->setContent(Designer::Content::BladeToBlade);
         }

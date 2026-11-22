@@ -313,8 +313,10 @@ void ContentView::refresh(bool refit)
     const bool per_layer = content_ == Content::BladeToBlade || content_ == Content::ProfileSection ||
                            content_ == Content::ProfileCurvature || content_ == Content::InfoCurrent ||
                            content_ == Content::AnglesCurrent || content_ == Content::ThicknessCurrent;
-    if (content_ == Content::Solid3D)
+    if (content_ == Content::Solid3D) {
         t += annulus_ ? QString(" — whole annulus (%1 blades)").arg(s_.design.n_blades) : QString(" — single blade");
+        t += exact_ ? QString(", exact OCCT solid") : QString(", design mesh");
+    }
     if (per_layer && k < static_cast<int>(s_.design.layers.size()))
         t += QString(" — %1 (span %2)").arg(QString::fromStdString(s_.design.layers[static_cast<std::size_t>(k)].name)).arg(s_.design.layers[static_cast<std::size_t>(k)].span);
     setWindowTitle(t);
@@ -761,6 +763,14 @@ void ContentView::setAnnulus(bool on)
     refresh();
 }
 
+void ContentView::setExact(bool on)
+{
+    if (on == exact_) return;
+    exact_ = on;
+    solid_for_.reset();  // the exact solid is built anew for the current result
+    refresh();
+}
+
 void ContentView::buildSolid()
 {
     const auto R = s_.result;
@@ -770,6 +780,24 @@ void ContentView::buildSolid()
     }
     if (!R->ok()) {
         occt_->setMessage("✗ the design has errors: no solid (see Geometry checks)");
+        return;
+    }
+    if (!exact_) {  // the design rows as triangles: immediate
+        try {
+            const auto t0 = std::chrono::steady_clock::now();
+            auto m = std::make_shared<const Design::SceneMesh>(Design::build_scene_mesh(s_.design, *R, annulus_));
+            occt_->setMeshScene(std::move(m), !solid_shown_ || solid_refit_);  // includes the OpenGL arrays
+            solid_shown_ = true;
+            solid_refit_ = false;
+            solid_error_.clear();
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            occt_->setMessage(QString("%1 · design mesh · updated in %2 ms")
+                                  .arg(annulus_ ? QString("%1 blades").arg(s_.design.n_blades) : QString("1 of %1 blades").arg(s_.design.n_blades))
+                                  .arg(ms, 0, 'f', 0));
+        } catch (const std::exception& e) {
+            solid_error_ = QString::fromUtf8(e.what());
+            occt_->setMessage("✗ no display mesh: " + solid_error_);
+        }
         return;
     }
     if (R == solid_for_ && annulus_ == solid_annulus_) return;  // built (or being built) for this result
@@ -812,6 +840,7 @@ void ContentView::solidDone()
 {
     if (solid_applied_ || !solid_watch_->future().isFinished()) return;
     solid_applied_ = true;
+    if (!exact_) return;  // switched back to the display mesh meanwhile
     const SolidJob j = solid_watch_->result();
     if (!j.error.isEmpty()) {
         solid_error_ = j.error;
@@ -821,17 +850,18 @@ void ContentView::solidDone()
         occt_->setScene(j.scene, !solid_shown_ || solid_refit_);
         solid_shown_ = true;
         solid_refit_ = false;
-        occt_->setMessage(QString("%1 · built in %2 s")
+        occt_->setMessage(QString("%1 · exact OCCT solid · built in %2 s")
                               .arg(j.annulus ? QString("%1 blades").arg(j.scene->copies) : QString("1 of %1 blades").arg(j.scene->n_blades))
                               .arg(j.seconds, 0, 'f', 2));
     }
     // a newer result (or a blade-count switch) arrived meanwhile
-    if (content_ == Content::Solid3D && (solid_pending_ || s_.result != solid_for_ || annulus_ != solid_annulus_)) buildSolid();
+    if (exact_ && content_ == Content::Solid3D && (solid_pending_ || s_.result != solid_for_ || annulus_ != solid_annulus_)) buildSolid();
 }
 
 QString ContentView::waitForSolid()
 {
     if (content_ != Content::Solid3D) return "not a solid view";
+    if (!exact_) return solid_shown_ ? solid_error_ : QString("no display mesh");
     if (solid_watch_->isRunning()) solid_watch_->waitForFinished();
     solidDone();
     if (solid_watch_->isRunning()) {  // solidDone started the newer result: wait for it too
@@ -1012,6 +1042,16 @@ void ContentView::showMenu(const QPoint& global)
         toggle("Show Hub and Casing", show_walls_, false);
     }
     if (content_ == Content::Solid3D) {
+        auto* gm = m.addMenu("Geometry");
+        auto* ggp = new QActionGroup(&m);
+        for (const bool ex : {false, true}) {
+            auto* a = gm->addAction(ex ? QString("Exact OCCT solid (trimmed B-spline solid, slow: ~2 s per change)")
+                                       : QString("Design mesh (fast: follows every change)"),
+                                    this, [this, ex] { setExact(ex); });
+            a->setCheckable(true);
+            a->setChecked(exact_ == ex);
+            ggp->addAction(a);
+        }
         auto* bm = m.addMenu("Blades");
         auto* bgp = new QActionGroup(&m);
         for (const bool ann : {false, true}) {

@@ -73,6 +73,10 @@ public:
     void simulateDrag(int id, QPointF p) { dragControlPoint(id, p, true); }
     /// 3D Solid: every blade around the annulus (else one blade on one pitch of the walls).
     void setAnnulus(bool on);
+    /// 3D Solid: the exact OCCT solid (trimmed B-spline solid, built on a worker thread in about
+    /// 2 s) instead of the fast display mesh of the design rows (updated with every change).
+    void setExact(bool on);
+    [[nodiscard]] bool exact() const { return exact_; }
     [[nodiscard]] bool annulus() const { return annulus_; }
     [[nodiscard]] OcctView* occtView() const { return occt_; }
     /// 3D Solid: waits for the solid being built (tests); its error, empty when it was built.
@@ -121,6 +125,7 @@ private:
     std::unique_ptr<BladeGen::Design::Evaluator> solid_ev_;  ///< used by the worker only
     std::shared_ptr<const BladeGen::Design::DesignResult> solid_for_;
     QString solid_error_;
+    bool exact_ = false;
     bool annulus_ = false, solid_annulus_ = false, solid_pending_ = false, solid_applied_ = true, solid_shown_ = false, solid_refit_ = false;
 };
 

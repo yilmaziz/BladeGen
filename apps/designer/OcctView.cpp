@@ -23,11 +23,19 @@
 
 #if defined(BLADEGEN_HAVE_OCCT_VIEWER)
 #include <AIS_InteractiveContext.hxx>
+#include <AIS_InteractiveObject.hxx>
 #include <AIS_Shape.hxx>
 #include <AIS_ViewController.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <Aspect_NeutralWindow.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <Graphic3d_ArrayOfPolylines.hxx>
+#include <Graphic3d_ArrayOfTriangles.hxx>
+#include <Graphic3d_AspectFillArea3d.hxx>
+#include <Graphic3d_AspectLine3d.hxx>
+#include <Prs3d_Presentation.hxx>
+#include <PrsMgr_PresentationManager.hxx>
+#include <SelectMgr_Selection.hxx>
 #include <Image_PixMap.hxx>
 #include <OpenGl_GraphicDriver.hxx>
 #include <Prs3d_Drawer.hxx>
@@ -62,6 +70,104 @@ constexpr double kWallDeflection = 2e-4, kWallAngle = 0.2;
 
 #if defined(BLADEGEN_HAVE_OCCT_VIEWER)
 
+namespace {
+
+/// One part of the fast display (blade with its copies, hub or casing) as OpenGL primitive
+/// arrays: mode 1 shaded triangles with vertex normals (+ outline polylines for the solid look),
+/// mode 0 wireframe polylines.  Not selectable.
+class MeshObject : public AIS_InteractiveObject
+{
+    DEFINE_STANDARD_RTTI_INLINE(MeshObject, AIS_InteractiveObject)
+public:
+    MeshObject(std::shared_ptr<const BladeGen::Design::SceneMesh> scene, std::size_t part, const Quantity_Color& color,
+               Graphic3d_NameOfMaterial material)
+        : scene_(std::move(scene)), part_(part), color_(color), material_(material)
+    {
+        setLook(false, 0.0);
+    }
+
+    void setLook(bool edges, double transparency)
+    {
+        edges_ = edges;
+        Graphic3d_MaterialAspect mat(material_);
+        mat.SetColor(color_);
+        mat.SetTransparency(static_cast<float>(transparency));
+        fill_ = new Graphic3d_AspectFillArea3d(Aspect_IS_SOLID, color_, Quantity_NOC_BLACK, Aspect_TOL_SOLID, 1.0, mat, mat);
+        fill_->SetDistinguishOff();
+        Quantity_Color dark = color_;
+        dark.ChangeIntensity(-40.0);
+        wire_ = new Graphic3d_AspectLine3d(dark, Aspect_TOL_SOLID, 1.0);
+        edge_ = new Graphic3d_AspectLine3d(Quantity_Color(0.15, 0.15, 0.15, Quantity_TOC_sRGB), Aspect_TOL_SOLID, 1.0);
+    }
+
+    Standard_Boolean AcceptDisplayMode(const Standard_Integer mode) const override { return mode == 0 || mode == 1; }
+
+protected:
+    void Compute(const Handle(PrsMgr_PresentationManager)&, const Handle(Prs3d_Presentation)& prs, const Standard_Integer mode) override
+    {
+        const auto& sc = *scene_;
+        const auto& m = part_ == 0 ? sc.blade : part_ == 1 ? sc.hub : sc.casing;
+        const auto& lines = part_ == 0 ? sc.blade_lines : part_ == 1 ? sc.hub_lines : sc.casing_lines;
+        const auto& edges = part_ == 0 ? sc.blade_edges : part_ == 1 ? sc.hub_edges : sc.casing_edges;
+        const int copies = part_ == 0 ? std::max(1, sc.copies) : 1;
+        std::vector<gp_Trsf> turn;
+        for (int k = 0; k < copies; ++k) turn.push_back(BladeGen::Design::theta_rotation(k * sc.pitch));
+        auto pnt = [](const BladeGen::Math::Vec3& p, const gp_Trsf& t) { return gp_Pnt(p.x(), p.y(), p.z()).Transformed(t); };
+        auto polylines = [&](const std::vector<std::vector<BladeGen::Math::Vec3>>& ls, const Handle(Graphic3d_AspectLine3d)& aspect) {
+            int nv = 0;
+            for (const auto& l : ls) nv += static_cast<int>(l.size());
+            if (nv == 0) return;
+            Handle(Graphic3d_ArrayOfPolylines) arr = new Graphic3d_ArrayOfPolylines(nv * copies, static_cast<int>(ls.size()) * copies);
+            for (const auto& t : turn)
+                for (const auto& l : ls) {
+                    arr->AddBound(static_cast<int>(l.size()));
+                    for (const auto& p : l) arr->AddVertex(pnt(p, t));
+                }
+            Handle(Graphic3d_Group) g = prs->NewGroup();
+            g->SetGroupPrimitivesAspect(aspect);
+            g->AddPrimitiveArray(arr);
+        };
+        if (mode == 0) {
+            polylines(lines, wire_);
+            polylines(edges, wire_);
+            return;
+        }
+        const int nv = static_cast<int>(m.p.size()), nt = static_cast<int>(m.tri.size());
+        Handle(Graphic3d_ArrayOfTriangles) tri = new Graphic3d_ArrayOfTriangles(nv * copies, 3 * nt * copies, Graphic3d_ArrayFlags_VertexNormal);
+        for (std::size_t k = 0; k < turn.size(); ++k) {
+            const auto& t = turn[k];
+            for (std::size_t v = 0; v < m.p.size(); ++v)
+                tri->AddVertex(pnt(m.p[v], t), gp_Dir(m.n[v].x(), m.n[v].y(), m.n[v].z()).Transformed(t));
+            const int base = static_cast<int>(k) * nv + 1;  // 1-based
+            for (const auto& [a, b, c] : m.tri) tri->AddEdges(base + a, base + b, base + c);
+        }
+        Handle(Graphic3d_Group) g = prs->NewGroup();
+        g->SetGroupPrimitivesAspect(fill_);
+        g->AddPrimitiveArray(tri);
+        if (edges_) polylines(edges, edge_);
+    }
+
+    void ComputeSelection(const Handle(SelectMgr_Selection)&, const Standard_Integer) override {}
+
+private:
+    std::shared_ptr<const BladeGen::Design::SceneMesh> scene_;
+    std::size_t part_;
+    Quantity_Color color_;
+    Graphic3d_NameOfMaterial material_;
+    bool edges_ = false;
+    Handle(Graphic3d_AspectFillArea3d) fill_;
+    Handle(Graphic3d_AspectLine3d) wire_, edge_;
+};
+
+const Quantity_Color& partColor(std::size_t k)
+{
+    static const Quantity_Color colors[] = {Quantity_Color(0.74, 0.20, 0.17, Quantity_TOC_sRGB), Quantity_Color(0.36, 0.60, 0.40, Quantity_TOC_sRGB),
+                                            Quantity_Color(0.62, 0.64, 0.70, Quantity_TOC_sRGB)};
+    return colors[k];
+}
+
+}  // namespace
+
 struct OcctView::Impl : public AIS_ViewController
 {
     OcctView* w = nullptr;
@@ -70,9 +176,10 @@ struct OcctView::Impl : public AIS_ViewController
     Handle(AIS_InteractiveContext) ctx;
     Handle(Aspect_Window) native;  // hidden platform window: owns the OpenGL context
     Handle(Aspect_NeutralWindow) win;
-    std::array<Handle(AIS_Shape), 3> parts;
+    std::array<Handle(AIS_InteractiveObject), 3> parts;
     std::array<Look, 3> looks{Look::Solid, Look::Solid, Look::Shaded};
     std::shared_ptr<const BladeGen::Design::Scene> scene;
+    std::shared_ptr<const BladeGen::Design::SceneMesh> mesh;
     QString reason;
     QImage frame;
     bool dirty = true;
@@ -179,6 +286,18 @@ struct OcctView::Impl : public AIS_ViewController
         const int mode = l == Look::Wireframe ? AIS_WireFrame : AIS_Shaded;
         const double transparency = l == Look::Shaded ? (k == 0 ? 0.35 : 0.6) : 0.0;
         const bool boundary = l == Look::Solid;
+        if (Handle(MeshObject) mo = Handle(MeshObject)::DownCast(s); !mo.IsNull()) {
+            mo->setLook(boundary, transparency);  // the presentation is cheap: recompute it
+            if (ctx->DisplayStatus(s) == PrsMgr_DisplayStatus_None) {
+                s->SetDisplayMode(mode);
+                ctx->Display(s, mode, -1, Standard_False);
+                return;
+            }
+            if (s->DisplayMode() != mode) ctx->SetDisplayMode(s, mode, Standard_False);
+            ctx->Redisplay(s, Standard_False);
+            if (!ctx->IsDisplayed(s)) ctx->Display(s, Standard_False);
+            return;
+        }
         if (ctx->DisplayStatus(s) == PrsMgr_DisplayStatus_None) {
             // first display: set everything, compute the presentation once
             s->Attributes()->SetFaceBoundaryDraw(boundary);
@@ -199,9 +318,7 @@ struct OcctView::Impl : public AIS_ViewController
     Handle(AIS_Shape) makePart(const TopoDS_Shape& shape, std::size_t k)
     {
         Handle(AIS_Shape) s = new AIS_Shape(shape);
-        const Quantity_Color colors[] = {Quantity_Color(0.74, 0.20, 0.17, Quantity_TOC_sRGB), Quantity_Color(0.36, 0.60, 0.40, Quantity_TOC_sRGB),
-                                         Quantity_Color(0.62, 0.64, 0.70, Quantity_TOC_sRGB)};
-        s->SetColor(colors[k]);
+        s->SetColor(partColor(k));
         s->SetMaterial(Graphic3d_MaterialAspect(k == 0 ? Graphic3d_NameOfMaterial_Plastified : Graphic3d_NameOfMaterial_Satin));
         const Handle(Prs3d_Drawer)& dr = s->Attributes();
         dr->SetTypeOfDeflection(Aspect_TOD_ABSOLUTE);
@@ -222,6 +339,7 @@ struct OcctView::Impl : public AIS_ViewController
         for (auto& p : parts)
             if (!p.IsNull()) ctx->Remove(p, Standard_False);
         scene = std::move(s);
+        mesh.reset();
         if (!scene) {
             parts = {};
             dirty = true;
@@ -234,6 +352,24 @@ struct OcctView::Impl : public AIS_ViewController
         for (std::size_t k = 0; k < 3; ++k) applyLook(k);
         if (refit) direction(Direction::Iso);
         dirty = true;
+    }
+
+    void setMesh(std::shared_ptr<const BladeGen::Design::SceneMesh> m, bool refit)
+    {
+        if (!ok()) return;
+        for (auto& p : parts)
+            if (!p.IsNull()) ctx->Remove(p, Standard_False);
+        mesh = std::move(m);
+        scene.reset();
+        parts = {};
+        dirty = true;
+        if (!mesh) return;
+        theta_blade = mesh->theta_blade;
+        for (std::size_t k = 0; k < 3; ++k) {
+            parts[k] = new MeshObject(mesh, k, partColor(k), k == 0 ? Graphic3d_NameOfMaterial_Plastified : Graphic3d_NameOfMaterial_Satin);
+            applyLook(k);
+        }
+        if (refit) direction(Direction::Iso);
     }
 
     void direction(Direction d)
@@ -306,6 +442,17 @@ void OcctView::setScene(std::shared_ptr<const BladeGen::Design::Scene> s, bool r
     d_->setScene(std::move(s), refit);
 #else
     (void)s;
+    (void)refit;
+#endif
+    update();
+}
+
+void OcctView::setMeshScene(std::shared_ptr<const BladeGen::Design::SceneMesh> m, bool refit)
+{
+#if defined(BLADEGEN_HAVE_OCCT_VIEWER)
+    d_->setMesh(std::move(m), refit);
+#else
+    (void)m;
     (void)refit;
 #endif
     update();

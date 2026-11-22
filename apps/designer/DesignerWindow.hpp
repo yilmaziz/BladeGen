@@ -29,6 +29,10 @@ public:
     bool openDesign(const QString& path, bool quiet = false);
     ContentView* addView(Content c);
     void defaultLayout();
+    /// n views (6, 4 or 2) in equal cells: 3 x 2, 2 x 2, 2 x 1.  Views beyond n close (the
+    /// active one is kept); missing ones are opened.  The grid follows the window size until
+    /// Tile or Cascade is chosen.
+    void gridLayout(int n);
     /// Waits for the engine and redraws (screenshots, tests).
     void settle();
     [[nodiscard]] Session& session() { return s_; }
@@ -38,6 +42,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* e) override;
+    bool eventFilter(QObject* o, QEvent* e) override;
 
 private:
     void buildMenus();
@@ -54,6 +59,7 @@ private:
     void meshPointsDialog();
     void startFit();
     void updateTitle();
+    void arrangeGrid();
 
     Session s_;
     Engine engine_;
@@ -63,6 +69,7 @@ private:
     QLabel* status_;
     QFutureWatcher<QString>* fit_watch_;
     bool dirty_ = false;
+    int grid_n_ = 0;  ///< the equal-size grid in use (0: none)
 };
 
 }  // namespace Designer

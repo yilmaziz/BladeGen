@@ -75,3 +75,23 @@ def test_rotor67_default_layers():
     assert all(layer["method"] == "NACA 65" for layer in n["layers"])
     with pytest.raises(ValueError):
         bg.rotor67_layer(1.5)
+
+
+def test_restagger_whole_blade_about_the_hub_le():
+    ev = bg.DesignEvaluator()
+    d = json.loads(bg.design_defaults())
+    assert d["restagger"]["angle_deg"] == 0.0 and d["restagger"]["axis"] == "hub"
+    a = ev.evaluate(json.dumps(d))
+    d["restagger"]["angle_deg"] = -3.0  # opened by 3 deg
+    b = ev.evaluate(json.dumps(d))
+    assert a["ok"] and b["ok"], b["errors"]
+    for la, lb in zip(a["layers"], b["layers"]):
+        np.testing.assert_allclose(lb["beta_deg"], la["beta_deg"] - 3.0, atol=1e-10)
+        assert lb["stagger_deg"] == pytest.approx(la["stagger_deg"] - 3.0, abs=1e-12)
+        assert lb["chord_mprime"] == pytest.approx(la["chord_mprime"], rel=1e-14)
+    # the hub LE is the pivot: it stays
+    assert b["layers"][0]["mprime_le"] == pytest.approx(0.0, abs=1e-12)
+    assert b["layers"][0]["theta_le_deg"] == pytest.approx(a["layers"][0]["theta_le_deg"], abs=1e-12)
+    d["restagger"]["axis"] = "shaft"
+    with pytest.raises(ValueError):
+        ev.evaluate(json.dumps(d))

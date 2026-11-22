@@ -8,6 +8,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDockWidget>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHeaderView>
@@ -23,6 +24,7 @@
 #include <QTreeWidget>
 #include <QtConcurrent/QtConcurrentRun>
 
+#include <algorithm>
 #include <cstdio>
 
 namespace Designer {
@@ -37,6 +39,7 @@ DesignerWindow::DesignerWindow()
     mdi_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     mdi_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     setCentralWidget(mdi_);
+    mdi_->viewport()->installEventFilter(this);  // the equal-size grid follows the viewport size
 
     panel_ = new ParameterPanel(s_, this);
     auto* scroll = new QScrollArea(this);
@@ -130,8 +133,17 @@ void DesignerWindow::buildMenus()
         for (Content c : grp) nv->addAction(contentName(c), this, [this, c] { addView(c); });
         nv->addSeparator();
     }
-    view->addAction("&Tile", mdi_, &QMdiArea::tileSubWindows);
-    view->addAction("&Cascade", mdi_, &QMdiArea::cascadeSubWindows);
+    view->addAction("6 views (3 × 2)", this, [this] { gridLayout(6); });
+    view->addAction("4 views (2 × 2)", this, [this] { gridLayout(4); });
+    view->addAction("2 views (side by side)", this, [this] { gridLayout(2); });
+    view->addAction("&Tile", this, [this] {
+        grid_n_ = 0;
+        mdi_->tileSubWindows();
+    });
+    view->addAction("&Cascade", this, [this] {
+        grid_n_ = 0;
+        mdi_->cascadeSubWindows();
+    });
     view->addAction("&Default layout", this, &DesignerWindow::defaultLayout);
     view->addAction("Zoom fit all", this, [this] { refreshViews(true); });
 
@@ -151,7 +163,15 @@ void DesignerWindow::buildMenus()
     tb->addAction("Save", this, [this] { save(false); });
     tb->addSeparator();
     tb->addAction("New view", this, [this] { addView(Content::BladeToBlade); });
-    tb->addAction("Tile", mdi_, &QMdiArea::tileSubWindows);
+    tb->addAction("3D Solid", this, [this] { addView(Content::Solid3D); })->setToolTip("new view: the OpenCASCADE blade solid with hub and casing");
+    tb->addSeparator();
+    for (const int n : {6, 4, 2})
+        tb->addAction(QString("%1 views").arg(n), this, [this, n] { gridLayout(n); })
+            ->setToolTip(n == 6 ? "six views in equal cells (3 × 2)" : n == 4 ? "four views in equal cells (2 × 2)" : "two views side by side");
+    tb->addAction("Tile", this, [this] {
+        grid_n_ = 0;
+        mdi_->tileSubWindows();
+    });
     tb->addSeparator();
     tb->addAction("Export STEP", this, &DesignerWindow::exportStep);
 }
@@ -190,7 +210,57 @@ void DesignerWindow::defaultLayout()
     for (Content c : {Content::MeridionalBeta, Content::View3D, Content::BladeToBlade, Content::ProfileCurvature,
                       Content::BetaAll, Content::ThicknessAll})
         addView(c);
-    mdi_->tileSubWindows();
+    gridLayout(6);
+}
+
+void DesignerWindow::gridLayout(int n)
+{
+    n = std::clamp(n, 1, 6);
+    auto subs = mdi_->subWindowList(QMdiArea::CreationOrder);
+    if (auto* act = mdi_->activeSubWindow(); act && subs.indexOf(act) >= n) {  // keep the active view
+        subs.removeOne(act);
+        subs.insert(n - 1, act);
+    }
+    for (int i = n; i < subs.size(); ++i) subs[i]->close();
+    // fill up with the default contents not shown yet
+    QList<Content> shown;
+    for (int i = 0; i < std::min(n, static_cast<int>(subs.size())); ++i)
+        if (auto* v = qobject_cast<ContentView*>(subs[i]->widget())) shown << v->content();
+    for (Content c : {Content::MeridionalBeta, Content::View3D, Content::BladeToBlade, Content::ProfileCurvature, Content::BetaAll,
+                      Content::ThicknessAll}) {
+        if (static_cast<int>(shown.size()) >= n) break;
+        if (shown.contains(c)) continue;
+        addView(c);
+        shown << c;
+    }
+    grid_n_ = n;
+    arrangeGrid();
+}
+
+void DesignerWindow::arrangeGrid()
+{
+    if (grid_n_ <= 0) return;
+    const auto subs = mdi_->subWindowList(QMdiArea::CreationOrder);
+    const int cols = grid_n_ == 6 ? 3 : grid_n_ == 1 ? 1 : 2, rows = (grid_n_ + cols - 1) / cols;
+    const QSize a = mdi_->viewport()->size();
+    int k = 0;
+    // cells in creation order
+    for (auto* s : subs) {
+        if (k >= grid_n_) break;
+        if (s->isHidden()) continue;  // closed, not deleted yet
+        const int r = k / cols, c = k % cols;
+        const int x0 = a.width() * c / cols, x1 = a.width() * (c + 1) / cols;
+        const int y0 = a.height() * r / rows, y1 = a.height() * (r + 1) / rows;
+        s->showNormal();
+        s->setGeometry(x0, y0, x1 - x0, y1 - y0);
+        ++k;
+    }
+}
+
+bool DesignerWindow::eventFilter(QObject* o, QEvent* e)
+{
+    if (o == mdi_->viewport() && e->type() == QEvent::Resize && grid_n_ > 0) arrangeGrid();
+    return QMainWindow::eventFilter(o, e);
 }
 
 void DesignerWindow::submit()

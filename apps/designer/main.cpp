@@ -6,15 +6,21 @@
 // --self-test   additionally cycles every view content over every layer, writes one image per
 //               content to out_dir and exits non-zero when a view fails (CI, offscreen)
 #include "DesignerWindow.hpp"
+#include "OcctView.hpp"
 
 #include <QApplication>
+#include <QMdiSubWindow>
+#include <QSet>
+#include <QToolBox>
 #include <QCommandLineParser>
 #include <QDir>
 #include <QImage>
 #include <QTimer>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 int main(int argc, char** argv)
 {
@@ -87,6 +93,93 @@ int main(int argc, char** argv)
         if (!w.session().result->ok()) {
             std::fprintf(stderr, "self-test: the dragged profile did not evaluate\n");
             return 9;
+        }
+        // re-stagger of the whole blade: every layer's beta_LE moves by the angle
+        {
+            std::vector<double> b0;
+            for (const auto& L : w.session().result->layers) b0.push_back(L.beta_le);
+            w.session().design.restagger.angle_deg = 3.0;
+            w.submit();
+            w.settle();
+            const auto& Ls = w.session().result->layers;
+            for (std::size_t k = 0; k < Ls.size(); ++k)
+                if (!w.session().result->ok() || std::abs(Ls[k].beta_le - b0[k] - 3.0) > 1e-9) {
+                    std::fprintf(stderr, "self-test: the re-stagger did not turn layer %zu by 3 deg\n", k);
+                    return 12;
+                }
+            w.session().design.restagger.angle_deg = 0.0;
+            w.submit();
+            w.settle();
+        }
+        // 3D Solid: the OCCT shapes are built; the viewer renders when OpenGL is available
+        {
+            v->setContent(Designer::Content::Solid3D);
+            QString err = v->waitForSolid();
+            if (!err.isEmpty()) {
+                std::fprintf(stderr, "self-test: the 3-D solid was not built: %s\n", qPrintable(err));
+                return 10;
+            }
+            auto* ov = v->occtView();
+            if (ov->available()) {
+                using P = Designer::OcctView::Part;
+                using L = Designer::OcctView::Look;
+                auto save = [&](const QString& name) {
+                    const QImage img = v->image();
+                    QSet<QRgb> colors;
+                    for (int y = 0; y < img.height(); y += 3)
+                        for (int x = 0; x < img.width(); x += 3) colors.insert(img.pixel(x, y));
+                    img.save(dir + "/" + name);
+                    return static_cast<int>(colors.size());
+                };
+                const int c1 = save("solid_single.png");
+                v->setAnnulus(true);
+                err = v->waitForSolid();
+                if (!err.isEmpty()) {
+                    std::fprintf(stderr, "self-test: the annulus was not built: %s\n", qPrintable(err));
+                    return 11;
+                }
+                const int c2 = save("solid_annulus.png");
+                ov->setLook(P::Hub, L::Wireframe);
+                ov->setLook(P::Casing, L::Hidden);
+                ov->setLook(P::Blade, L::Shaded);
+                const int c3 = save("solid_annulus_wire.png");
+                ov->setLook(P::Blade, L::Solid);
+                ov->setLook(P::Hub, L::Solid);
+                ov->setLook(P::Casing, L::Shaded);
+                v->setAnnulus(false);
+                (void)v->waitForSolid();
+                if (std::min({c1, c2, c3}) < 50) {
+                    std::fprintf(stderr, "self-test: the OCCT view rendered blank images (%d, %d, %d colours)\n", c1, c2, c3);
+                    return 13;
+                }
+                std::printf("self-test: OCCT viewer renders (single blade, annulus, wireframe)\n");
+            } else {
+                std::printf("self-test: OCCT viewer not available here (%s); the solid was built\n", qPrintable(ov->unavailableReason()));
+            }
+            v->setContent(Designer::Content::BladeToBlade);
+        }
+        // the equal-size layouts: 4, 2 and 6 views
+        for (const int k : {4, 2, 6}) {
+            w.gridLayout(k);
+            QApplication::processEvents();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            QList<QMdiSubWindow*> subs;
+            for (auto* cv : w.views())
+                if (auto* s = qobject_cast<QMdiSubWindow*>(cv->parentWidget()); s && !s->isHidden()) subs << s;
+            bool equal = subs.size() == k;
+            for (auto* s : subs)
+                equal = equal && std::abs(s->width() - subs.front()->width()) <= 1 && std::abs(s->height() - subs.front()->height()) <= 1;
+            if (!equal) {
+                std::fprintf(stderr, "self-test: the %d-view layout has %d views or unequal sizes\n", k, static_cast<int>(subs.size()));
+                return 14;
+            }
+        }
+        if (auto* box = w.findChild<QToolBox*>()) {  // the meridional page (re-stagger inputs)
+            const int page = box->currentIndex();
+            box->setCurrentIndex(0);
+            QApplication::processEvents();
+            box->grab().save(dir + "/panel_meridional.png");
+            box->setCurrentIndex(page);
         }
         w.grab().save(dir + "/window.png");
         std::printf("self-test: %d view renders OK, geometry %.1f ms\n", n, 1000.0 * w.session().result->seconds);

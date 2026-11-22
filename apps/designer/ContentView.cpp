@@ -1,8 +1,11 @@
 #include "ContentView.hpp"
 
+#include "OcctView.hpp"
 #include "PlotWidget.hpp"
 #include "View3D.hpp"
 #include "design/DesignSolid.hpp"
+
+#include <Standard_Failure.hxx>
 
 #include <QActionGroup>
 #include <QApplication>
@@ -15,7 +18,9 @@
 #include <QTableWidget>
 #include <QTextStream>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrentRun>
 
+#include <chrono>
 #include <cmath>
 
 namespace Designer {
@@ -95,16 +100,16 @@ QString num(double v, int prec = 4) { return QString::number(v, 'g', prec); }
 
 struct Conf
 {
-    double c, cg, sg, th, sign;
+    double c, cg, sg, m0, th, sign;
     [[nodiscard]] QPointF operator()(const Math::Vec2& q) const
     {
-        return {c * (q.x() * cg - sign * q.y() * sg), th + c * (q.x() * sg + sign * q.y() * cg)};
+        return {m0 + c * (q.x() * cg - sign * q.y() * sg), th + c * (q.x() * sg + sign * q.y() * cg)};
     }
 };
 
 Conf confOf(const LayerResult& L, bool mirror)
 {
-    return {L.chord_mprime, std::cos(L.gamma), std::sin(L.gamma), L.theta_le, mirror ? -1.0 : 1.0};
+    return {L.chord_mprime, std::cos(L.gamma), std::sin(L.gamma), L.mprime_le, L.theta_le, mirror ? -1.0 : 1.0};
 }
 
 Badge badgeFor(const Profile::QualityReport& q, const QString& head)
@@ -170,13 +175,14 @@ QString contentName(Content c)
     case Content::BetaVsTheta: return "Beta vs. Theta, All Layers";
     case Content::ThicknessCurrent: return "Thickness, Current Layer";
     case Content::ThicknessAll: return "Thickness, All Layers";
+    case Content::Solid3D: return "3D Solid (OpenCASCADE)";
     }
     return "?";
 }
 
 QList<QList<Content>> contentGroups()
 {
-    return {{Content::View3D, Content::BladeToBlade, Content::ProfileSection, Content::MeridionalContour},
+    return {{Content::View3D, Content::Solid3D, Content::BladeToBlade, Content::ProfileSection, Content::MeridionalContour},
             {Content::MeridionalBeta, Content::MeridionalThickness},
             {Content::MeridionalCurvature, Content::ProfileCurvature},
             {Content::LeTeTheta, Content::LeTeBeta, Content::LeTeParameters},
@@ -197,15 +203,26 @@ ContentView::ContentView(Session& s, Content c, QWidget* parent) : QWidget(paren
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table_->setContextMenuPolicy(Qt::CustomContextMenu);
     table_->verticalHeader()->setDefaultSectionSize(20);
+    occt_ = new OcctView(stack_);
+    solid_watch_ = new QFutureWatcher<SolidJob>(this);
+    solid_ev_ = std::make_unique<Design::Evaluator>();
+    connect(solid_watch_, &QFutureWatcher<SolidJob>::finished, this, &ContentView::solidDone);
     stack_->addWidget(plot_);
     stack_->addWidget(view3d_);
     stack_->addWidget(table_);
+    stack_->addWidget(occt_);
     lay->addWidget(stack_);
     connect(plot_, &PlotWidget::contextMenuWanted, this, &ContentView::showMenu);
     connect(view3d_, &View3D::contextMenuWanted, this, &ContentView::showMenu);
+    connect(occt_, &OcctView::contextMenuWanted, this, &ContentView::showMenu);
     connect(plot_, &PlotWidget::handleMoved, this, &ContentView::dragControlPoint);
     connect(table_, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& p) { showMenu(table_->viewport()->mapToGlobal(p)); });
     setContent(c);
+}
+
+ContentView::~ContentView()
+{
+    if (solid_watch_->isRunning()) solid_watch_->waitForFinished();  // the worker uses solid_ev_
 }
 
 void ContentView::setContent(Content c)
@@ -280,6 +297,10 @@ int ContentView::layerIndex() const
 
 QImage ContentView::image()
 {
+    if (stack_->currentWidget() == occt_) {
+        waitForSolid();
+        return occt_->image();
+    }
     if (stack_->currentWidget() == plot_) return plot_->image();
     if (stack_->currentWidget() == view3d_) return view3d_->image();
     return table_->grab().toImage();
@@ -292,6 +313,8 @@ void ContentView::refresh(bool refit)
     const bool per_layer = content_ == Content::BladeToBlade || content_ == Content::ProfileSection ||
                            content_ == Content::ProfileCurvature || content_ == Content::InfoCurrent ||
                            content_ == Content::AnglesCurrent || content_ == Content::ThicknessCurrent;
+    if (content_ == Content::Solid3D)
+        t += annulus_ ? QString(" — whole annulus (%1 blades)").arg(s_.design.n_blades) : QString(" — single blade");
     if (per_layer && k < static_cast<int>(s_.design.layers.size()))
         t += QString(" — %1 (span %2)").arg(QString::fromStdString(s_.design.layers[static_cast<std::size_t>(k)].name)).arg(s_.design.layers[static_cast<std::size_t>(k)].span);
     setWindowTitle(t);
@@ -299,6 +322,9 @@ void ContentView::refresh(bool refit)
     if (content_ == Content::View3D) {
         stack_->setCurrentWidget(view3d_);
         build3D(refit);
+    } else if (content_ == Content::Solid3D) {
+        stack_->setCurrentWidget(occt_);
+        buildSolid();
     } else if (content_ == Content::InfoCurrent || content_ == Content::InfoAll) {
         stack_->setCurrentWidget(table_);
         buildTable();
@@ -403,7 +429,7 @@ void ContentView::buildPlot(bool refit)
             const QPointF c = cf(is.where);
             M << issueMarker(map({c.x(), c.y()}, 0.0), is.severity);
         }
-        M << PointMarker{map({0.0, L.theta_le}, 0.0), Qt::black, 'o', "LE"};
+        M << PointMarker{map({L.mprime_le, L.theta_le}, 0.0), Qt::black, 'o', "LE"};
         M << PointMarker{map({L.mprime.back(), Math::deg2rad(L.theta_deg.back())}, 0.0), Qt::black, 'o', "TE"};
         if (b2b == B2BCoords::MPrimeTheta) plot_->setLabels("m'", "θ [rad]");
         else plot_->setLabels("m [mm]", "r θ [mm]");
@@ -725,6 +751,97 @@ void ContentView::build3D(bool refit)
     view3d_->setScene(std::move(G), std::move(L), refit);
 }
 
+// ── 3D Solid ─────────────────────────────────────────────────────────────────
+
+void ContentView::setAnnulus(bool on)
+{
+    if (on == annulus_) return;
+    annulus_ = on;
+    solid_refit_ = true;
+    refresh();
+}
+
+void ContentView::buildSolid()
+{
+    const auto R = s_.result;
+    if (!R) {
+        occt_->setMessage("evaluating ...");
+        return;
+    }
+    if (!R->ok()) {
+        occt_->setMessage("✗ the design has errors: no solid (see Geometry checks)");
+        return;
+    }
+    if (R == solid_for_ && annulus_ == solid_annulus_) return;  // built (or being built) for this result
+    if (solid_watch_->isRunning()) {
+        solid_pending_ = true;
+        return;
+    }
+    startSolid();
+}
+
+void ContentView::startSolid()
+{
+    solid_for_ = s_.result;
+    solid_annulus_ = annulus_;
+    solid_pending_ = false;
+    solid_applied_ = false;
+    const auto d = s_.design;
+    const bool ann = annulus_;
+    occt_->setMessage(ann ? QString("building the solid (%1 blades) ...").arg(d.n_blades) : QString("building the solid ..."));
+    auto* ev = solid_ev_.get();
+    solid_watch_->setFuture(QtConcurrent::run([d, ann, ev] {
+        SolidJob j;
+        j.annulus = ann;
+        const auto t0 = std::chrono::steady_clock::now();
+        try {
+            auto sc = std::make_shared<Design::Scene>(Design::build_scene(d, *ev, {ann, 11}));
+            OcctView::prepare(*sc);
+            j.scene = std::move(sc);
+        } catch (const Standard_Failure& e) {
+            j.error = QString("OCCT: %1").arg(e.GetMessageString());
+        } catch (const std::exception& e) {
+            j.error = QString::fromUtf8(e.what());
+        }
+        j.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        return j;
+    }));
+}
+
+void ContentView::solidDone()
+{
+    if (solid_applied_ || !solid_watch_->future().isFinished()) return;
+    solid_applied_ = true;
+    const SolidJob j = solid_watch_->result();
+    if (!j.error.isEmpty()) {
+        solid_error_ = j.error;
+        occt_->setMessage("✗ solid not built: " + j.error);
+    } else {
+        solid_error_.clear();
+        occt_->setScene(j.scene, !solid_shown_ || solid_refit_);
+        solid_shown_ = true;
+        solid_refit_ = false;
+        occt_->setMessage(QString("%1 · built in %2 s")
+                              .arg(j.annulus ? QString("%1 blades").arg(j.scene->copies) : QString("1 of %1 blades").arg(j.scene->n_blades))
+                              .arg(j.seconds, 0, 'f', 2));
+    }
+    // a newer result (or a blade-count switch) arrived meanwhile
+    if (content_ == Content::Solid3D && (solid_pending_ || s_.result != solid_for_ || annulus_ != solid_annulus_)) buildSolid();
+}
+
+QString ContentView::waitForSolid()
+{
+    if (content_ != Content::Solid3D) return "not a solid view";
+    if (solid_watch_->isRunning()) solid_watch_->waitForFinished();
+    solidDone();
+    if (solid_watch_->isRunning()) {  // solidDone started the newer result: wait for it too
+        solid_watch_->waitForFinished();
+        solidDone();
+    }
+    if (!solid_shown_ && solid_error_.isEmpty()) return "no solid built";
+    return solid_error_;
+}
+
 void ContentView::buildTable()
 {
     table_->clear();
@@ -894,6 +1011,40 @@ void ContentView::showMenu(const QPoint& global)
         toggle("Shaded", view3d_->shaded, false);
         toggle("Show Hub and Casing", show_walls_, false);
     }
+    if (content_ == Content::Solid3D) {
+        auto* bm = m.addMenu("Blades");
+        auto* bgp = new QActionGroup(&m);
+        for (const bool ann : {false, true}) {
+            auto* a = bm->addAction(ann ? QString("Whole annulus (%1 blades)").arg(s_.design.n_blades) : QString("Single blade (one pitch of hub and casing)"),
+                                    this, [this, ann] { setAnnulus(ann); });
+            a->setCheckable(true);
+            a->setChecked(annulus_ == ann);
+            bgp->addAction(a);
+        }
+        const std::pair<OcctView::Part, const char*> parts[] = {
+            {OcctView::Part::Blade, "Blade Display"}, {OcctView::Part::Hub, "Hub Display"}, {OcctView::Part::Casing, "Casing Display"}};
+        const std::pair<OcctView::Look, const char*> looks[] = {{OcctView::Look::Hidden, "Hidden"},
+                                                                {OcctView::Look::Wireframe, "Wireframe"},
+                                                                {OcctView::Look::Solid, "Solid (opaque, with edges)"},
+                                                                {OcctView::Look::Shaded, "Shaded (smooth, see-through)"}};
+        for (const auto& [part, name] : parts) {
+            auto* pm = m.addMenu(name);
+            auto* pg = new QActionGroup(&m);
+            for (const auto& [lk, lname] : looks) {
+                if (part == OcctView::Part::Blade && lk == OcctView::Look::Hidden) continue;
+                auto* a = pm->addAction(lname, this, [this, p = part, l = lk] { occt_->setLook(p, l); });
+                a->setCheckable(true);
+                a->setChecked(occt_->look(part) == lk);
+                pg->addAction(a);
+            }
+        }
+        auto* vm = m.addMenu("Standard View");
+        const std::pair<OcctView::Direction, const char*> dirs[] = {{OcctView::Direction::Iso, "Isometric"},
+                                                                    {OcctView::Direction::Axial, "Axial (along the machine axis)"},
+                                                                    {OcctView::Direction::Meridional, "Meridional (from the side)"},
+                                                                    {OcctView::Direction::Radial, "Radial (onto the blade-to-blade plane)"}};
+        for (const auto& [dir, name] : dirs) vm->addAction(name, this, [this, dv = dir] { occt_->setDirection(dv); });
+    }
     m.addSeparator();
     toggle("Swap Axes", plot_->swapAxes, true, is_plot);
     toggle("Proportional Axes", plot_->proportional, true, is_plot);
@@ -908,6 +1059,7 @@ void ContentView::showMenu(const QPoint& global)
     m.addSeparator();
     m.addAction("Zoom Fit", this, [this] {
         if (content_ == Content::View3D) view3d_->zoomFit();
+        else if (content_ == Content::Solid3D) occt_->fitAll();
         else plot_->zoomFit();
     });
     m.exec(global);

@@ -5,6 +5,7 @@
 #
 # Exposed targets:
 #   bladegen::occt   OpenCASCADE geometry kernel + data exchange
+#   bladegen::occt_viewer  OCCT visualization (V3d, AIS, OpenGL) when installed (else empty)
 #   Eigen3::Eigen    dense / sparse linear algebra (header only)
 #   bladegen::json   nlohmann/json (header only)
 #   Catch2::Catch2WithMain   (tests only)
@@ -34,6 +35,19 @@ foreach(_lib IN LISTS _occt_libs)
     endif()
 endforeach()
 target_link_libraries(bladegen_occt INTERFACE ${_occt_libs})
+
+# Visualization toolkits (V3d / AIS / OpenGL), optional: the designer's 3-D solid view.
+add_library(bladegen_occt_viewer INTERFACE)
+add_library(bladegen::occt_viewer ALIAS bladegen_occt_viewer)
+set(BLADEGEN_HAVE_OCCT_VIEWER OFF)
+if(TARGET TKService AND TARGET TKV3d AND TARGET TKOpenGl)
+    set(BLADEGEN_HAVE_OCCT_VIEWER ON)
+    target_link_libraries(bladegen_occt_viewer INTERFACE bladegen::occt TKService TKV3d TKOpenGl)
+    target_compile_definitions(bladegen_occt_viewer INTERFACE BLADEGEN_HAVE_OCCT_VIEWER)
+    message(STATUS "OpenCASCADE visualization toolkits found: the designer gets the 3-D solid view")
+else()
+    message(STATUS "OpenCASCADE visualization toolkits not found: the designer's 3-D solid view is disabled")
+endif()
 
 # Directory holding the OCCT shared libraries (Windows: needed on PATH for tests).
 get_target_property(_tkernel_loc TKernel IMPORTED_LOCATION_RELEASE)

@@ -115,6 +115,77 @@ inscribed circles, smoothed by a least-squares cubic B-spline pinned at the LE /
 - Doubling the axial chord doubles the tip chord and keeps the angles. The NACA 65 default still evaluates.
 - The designer self-test drags CP2 of the mid layer and checks that the design and the geometry follow.
 
+### Designer update: OpenCASCADE solid view, re-stagger, equal-size layouts
+
+**New**
+- **3D Solid (OpenCASCADE)**, a view content and a toolbar button. It shows the OCCT blade solid with the hub
+  and casing, drawn by OCCT's own viewer (V3d / AIS, OpenGL), inside the MDI window like the other views.
+  - **Blades** (right-click): a *single blade* on one pitch of hub and casing, centred on the blade, or the
+    *whole annulus*, all n_blades copies at 2π / n_blades with the hub and casing over 360°. The copies share
+    the blade's geometry and triangulation.
+  - **Blade, Hub and Casing Display** (right-click), each set on its own:
+    - *wireframe*: edges and iso lines;
+    - *solid*: opaque, lit, with the face boundaries;
+    - *shaded*: lit, smooth, see-through;
+    - *hidden* (hub and casing only).
+    The defaults are a solid blade and hub and a see-through casing.
+  - **Standard View**: isometric, axial, meridional (from the side), radial (onto the blade-to-blade plane).
+    Left drag rotates, middle drag (or shift + left) pans, the wheel zooms and a double click fits.
+  - The solid is rebuilt on a worker thread whenever the design changes, in about 1–3 s; the status line in
+    the view gives the time.
+  - The view needs the OCCT visualization toolkits (TKService, TKV3d, TKOpenGl, detected by CMake) and OpenGL
+    2.1. Without them it says why, and the mesh 3D View and the STEP export still work.
+- **Re-stagger the whole blade** (Initial Meridional Configuration → *Re-stagger the whole blade*): an angle
+  Δγ turns every section about one radial axis.
+  - + closes the blade (higher stagger: more stall margin), − opens it (more flow).
+  - The axis is the radial line through the **hub** section (the rotor default), the **mid-span** or the
+    **tip** section at a chord fraction x/c (0 = LE, 1 = TE), or through any **point** given by its axial
+    position Z and angle θ.
+  - Each section turns rigidly in its conformal (m′, θ) plane, by Δγ, about the point where the axis crosses
+    its stream surface. So the sections stay on their stream surfaces and keep their chord, and the LE and TE
+    leave the meridional LE / TE lines as a re-staggered blade does. The map is conformal, so **every metal
+    angle on every layer changes by exactly Δγ**. On a cylindrical layer this is the rigid rotation of the
+    unrolled section about the axis.
+  - Saved in the design file as `"restagger": {"angle_deg", "axis": "hub" | "mid" | "tip" | "point",
+    "chord_fraction", "z", "theta_deg"}`. Older files read as no re-stagger.
+- **Window layouts** (toolbar and View menu): **6 views** (3 × 2), **4 views** (2 × 2) and **2 views** (side
+  by side), all in equal cells that follow the window size.
+  - Views beyond the count close; the active view is kept. Missing views open with the default contents.
+  - The default layout is the 6-view grid.
+- Python: each layer's dict has `mprime_le` and `theta_le_deg` (the placed LE point).
+
+**Changed**
+- `LayerResult::mprime`, `m` and `mfrac` are measured from the placed LE point, and `mfrac` runs 0 → 1 between
+  the placed LE and TE. Without a re-stagger nothing changes.
+- `Occt::SolidOptions::blade_only` builds only the skin and the trimmed blade (no checks, properties, hub
+  sector or fuse). The viewer uses it with the design's own mesh resolution, which cuts the build from about
+  9 s to about 1–3 s. The STEP export is unchanged.
+
+**Tests**
+- Placement: the similarity map against its closed form, and the re-stagger as a rotation about the pivot
+  (also mirrored).
+- Re-stagger about the hub LE: the axis passes through the hub LE, and the hub LE stays. On every layer the
+  re-staggered loop is the nominal loop rotated by Δγ about the axis crossing point (10⁻¹² in m′, θ), and every
+  metal angle is +Δγ. The mesh rows at the layer spans equal the placed layers.
+- The same checks for the mid-span, tip, hub-TE and arbitrary-point axes (the tip LE and the hub TE stay
+  where they are).
+- Invalid input: |Δγ| > 30°, a non-finite value, a pivot outside the chord, a total stagger above 80°, and an
+  axis outside the channel (reported as a design error). Also JSON round trip, old files and unknown axis
+  names.
+- Scene:
+  - a single blade on one pitch centred on it; the annulus has n_blades copies, each the blade located by
+    k pitches about the axis (exact transform), and integrated volume and centroid check three of them;
+  - neighbours do not touch;
+  - hub and casing lie on their contours to 10⁻⁷ m;
+  - 360° walls have n_blades times the area of one pitch (the area of a surface of revolution is the sweep
+    × ∫ r ds);
+  - invalid input.
+- The designer self-test:
+  - re-staggers by 3° and checks every layer's β_LE;
+  - builds the solid; where OpenGL is available, renders the single blade, the annulus and a wireframe look;
+  - checks that the 6, 4 and 2 view layouts give that many equal cells.
+- pytest: re-stagger through the Python bindings.
+
 ### Tests
 92 ctest entries in the `python` preset.
 
@@ -150,6 +221,12 @@ Also new:
 - The mesh rows interpolate the layer profiles pointwise in span. The STEP export skins those rows, so it
   matches the mesh but not a parametric spanwise law.
 - The STEP export takes a few seconds and blocks the window.
+- The OCCT solid view needs a real OpenGL 2.1 context. CI machines (offscreen, software GL) build the solid
+  but cannot render it, so the view's rendering is tested only where a GPU driver is present.
+- The re-stagger turns each section in its conformal plane, about the point where the radial axis crosses its
+  stream surface. On a cylinder this is the rigid rotation of the unrolled section about the axis. On a
+  conical stream surface it differs slightly from the rigid 3-D rotation of the blade, which would move
+  sections off their stream surfaces.
 - DCA and C4 are still listed as planned.
 
 ### Next steps

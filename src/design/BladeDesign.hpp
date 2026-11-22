@@ -14,6 +14,18 @@
 /// cylindrical wrap on constant-radius layers and the map onto the layer's surface of
 /// revolution otherwise (blade/FlowPath.hpp).
 ///
+/// Re-stagger.  The whole blade can be re-staggered by an angle d (BladeDesign::restagger): it
+/// turns by d about an axis, the radial line through a pivot at axial position x_a and angle
+/// theta_a.  The pivot is a point of the hub, mid-span or tip section's chord line (chord fraction
+/// x_p, 0 = LE; rotors are re-staggered about the hub LE, the default) or any (Z, theta) point.
+/// Every placed section, and every mesh row, turns rigidly in its conformal plane by d about the
+/// point where the axis crosses its stream surface, (m'(x_a), theta_a).  The sections stay on
+/// their stream surfaces and their chord c' stays the nominal one, so the LE and TE leave the
+/// meridional LE / TE lines.  The conformal map keeps angles, so every metal angle on every layer
+/// changes by exactly d.  On a cylindrical layer this is the rigid rotation about the axis of
+/// the unrolled (x, r theta) section.  A positive d closes the blade (higher stagger: more stall
+/// margin), a negative one opens it (more flow).
+///
 /// Metal angle beta: the angle of the camber line from the meridional direction,
 /// beta = atan(d theta / d m') = atan(r d theta / d m) (conformal: the true angle on the
 /// stream surface).  Lengths in the unit of the meridional input (mm in the designer).
@@ -69,6 +81,19 @@ struct Layer
     [[nodiscard]] bool uses_custom() const { return method == Method::Custom || (method == Method::Naca65Custom && fitted_to); }
 };
 
+/// Re-stagger of the whole blade (see the file comment).
+struct Restagger
+{
+    enum class Axis { Hub, Mid, Tip, Point };
+    double angle_deg = 0.0;       ///< + closes, - opens
+    Axis axis = Axis::Hub;        ///< pivot: on the hub / mid-span / tip chord line, or the point below
+    double chord_fraction = 0.0;  ///< pivot on the reference section's chord line (0 LE, 1 TE)
+    double z = 0.0;               ///< Axis::Point: axial position of the radial axis [mm]
+    double theta_deg = 0.0;       ///< Axis::Point: its angle [deg]
+};
+[[nodiscard]] std::string to_string(Restagger::Axis a);
+[[nodiscard]] Restagger::Axis restagger_axis_from_string(const std::string& s);
+
 struct MeshOptions
 {
     int n_edge = 16;          ///< loop points per half edge connector
@@ -87,6 +112,7 @@ struct BladeDesign
     std::vector<Layer> layers;               ///< hub -> tip, spans increasing
     int n_blades = 24;
     bool mirror = false;                     ///< true: suction side toward -theta
+    Restagger restagger{};                   ///< re-stagger of the whole blade
     MeshOptions mesh{};
 
     /// Default: five Custom layers (0, 25, 50, 75, 100 % span) with the NASA Rotor 67 profiles
@@ -116,6 +142,31 @@ struct Rotor67Layer
 };
 [[nodiscard]] Rotor67Layer rotor67_layer(double span);
 [[nodiscard]] const std::vector<Rotor67Layer>& rotor67_sections();
+
+/// The map of one section from its unstaggered frame (chord 1, LE (0, 0), TE (1, 0)) to the
+/// conformal plane (m', theta), a similarity:
+///   m'    = m0 + c' (x cos g - s y sin g),   theta = t0 + c' (x sin g + s y cos g)
+/// with s = -1 when mirrored.  Nominal: g = gamma, c' = m'_TE / cos(gamma), (m0, t0) = (0, theta_LE).
+/// Re-staggered by d about the conformal point P: g = gamma + d, the same c', and
+///   (m0, t0) = P + R(d) ((0, theta_LE) - P),   R(d) the rotation by d (m' toward +theta),
+/// so P stays where it was and every direction turns by d.
+struct Placement
+{
+    double gamma = 0.0;  ///< chord angle from the m' axis [rad] (re-stagger included)
+    double c = 1.0;      ///< conformal chord c'
+    double m0 = 0.0;     ///< m' of the placed LE point
+    double t0 = 0.0;     ///< theta of the placed LE point [rad]
+    double sign = 1.0;   ///< -1: mirrored
+    [[nodiscard]] Vec2 operator()(const Vec2& q) const;
+};
+[[nodiscard]] Placement placement(double stagger_deg, double theta_le_deg, double mprime_te, bool mirror,
+                                  double restagger_deg = 0.0, const Vec2& pivot = Vec2::Zero());
+
+/// The re-stagger axis of a design: the radial line at (x_a, theta_a [rad]).  Throws
+/// std::invalid_argument when the reference section's pivot cannot be found.
+[[nodiscard]] Vec2 restagger_axis(const BladeDesign& d, const Blade::FlowPath& fp);
+/// m' where the stream surface reaches the axial position x (throws when it does not).
+[[nodiscard]] double mprime_at_x(const Blade::StreamSurface& S, double x);
 
 /// Natural cubic spline weights: f(s) = sum_k w_k f_k through (spans_k, f_k).
 [[nodiscard]] std::vector<double> spline_weights(const std::vector<double>& spans, double s);
@@ -155,9 +206,10 @@ struct LayerResult
     std::string error;                ///< not empty: the layer could not be built
     std::shared_ptr<const Section2D> section;
     Blade::StreamSurface surface;
-    double gamma = 0.0;               ///< stagger [rad]
+    double gamma = 0.0;               ///< stagger [rad] (re-stagger included)
     double chord_mprime = 0.0;        ///< conformal chord c'
-    double theta_le = 0.0;            ///< [rad]
+    double mprime_le = 0.0;           ///< m' of the placed LE point (0 unless re-staggered)
+    double theta_le = 0.0;            ///< theta of the placed LE point [rad]
     double r_le = 0.0, r_te = 0.0;
     double chord = 0.0;               ///< physical chord (3-D distance LE -> TE point)
     double pitch_le = 0.0;            ///< 2 pi r_LE / n_blades
@@ -165,9 +217,9 @@ struct LayerResult
     std::vector<Vec2> conformal;      ///< loop in (m', theta)
     std::vector<Vec3> xyz;            ///< loop in Cartesian
     // camber on the stream surface
-    std::vector<double> mprime;       ///< m' of the camber points (from the layer LE)
-    std::vector<double> m;            ///< meridional arc length of the camber points
-    std::vector<double> mfrac;        ///< meridional chord fraction (0 LE, 1 TE)
+    std::vector<double> mprime;       ///< m' of the camber points (from the placed LE point)
+    std::vector<double> m;            ///< meridional arc length of the camber points (from the placed LE point)
+    std::vector<double> mfrac;        ///< meridional chord fraction (0 placed LE, 1 placed TE)
     std::vector<double> theta_deg;    ///< theta of the camber points
     std::vector<double> beta_deg;     ///< metal angle along the camber line
     std::vector<double> thickness;    ///< t / c along the camber line (chord-fraction x below)
@@ -233,9 +285,11 @@ private:
 /// Builds the 2-D section of one layer (no cache).
 [[nodiscard]] Section2D build_section2d(const Layer& layer, const Naca::Naca65Section* naca, const MeshOptions& mesh);
 
-/// Places one layer (2-D section already built) on its stream surface.
+/// Places one layer (2-D section already built) on its stream surface; re-staggered by
+/// `restagger_deg` about the radial axis at (x_a, theta_a) = `axis` (restagger_axis).
 [[nodiscard]] LayerResult place_layer(const Layer& layer, std::shared_ptr<const Section2D> sec,
-                                      const Blade::FlowPath& fp, int n_blades, bool mirror);
+                                      const Blade::FlowPath& fp, int n_blades, bool mirror,
+                                      double restagger_deg = 0.0, const Vec2& axis = Vec2::Zero());
 
 /// Fits the custom parameters of a NACA 65 + Custom layer to its NACA section (seconds).
 void fit_layer(Layer& layer, Evaluator& ev);

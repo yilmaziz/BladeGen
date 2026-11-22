@@ -65,6 +65,8 @@ py::dict result_dict(const D::DesignResult& r)
             l["cylindrical"] = L.surface.cylindrical();
             l["stagger_deg"] = Math::rad2deg(L.gamma);
             l["chord_mprime"] = L.chord_mprime;
+            l["mprime_le"] = L.mprime_le;
+            l["theta_le_deg"] = Math::rad2deg(L.theta_le);
             l["chord"] = L.chord;
             l["r_le"] = L.r_le;
             l["r_te"] = L.r_te;

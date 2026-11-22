@@ -69,25 +69,22 @@ int main(int argc, char** argv)
                     if (k == 2) img.save(QString("%1/view_%2.png").arg(dir).arg(static_cast<int>(c), 2, 10, QChar('0')));
                     ++n;
                 }
-        // the blade-to-blade view in every coordinate system, for every layer (maximised: readable images)
+        // the Blade Sections view in its three coordinate systems (maximised: readable images)
         auto* vsub = qobject_cast<QMdiSubWindow*>(v->parentWidget());
         if (vsub) vsub->showMaximized();
-        for (const auto bc : {Designer::B2BCoords::MPrimeTheta, Designer::B2BCoords::MRTheta, Designer::B2BCoords::ZRTheta,
-                              Designer::B2BCoords::XYAxial})
-            for (int k = 0; k < static_cast<int>(w.session().design.layers.size()); ++k) {
-                v->layer = k;
-                v->b2b = bc;
-                v->setContent(Designer::Content::BladeToBlade);
-                QApplication::processEvents();
-                const QImage img = v->image();
-                if (img.isNull() || img.width() < 10) {
-                    std::fprintf(stderr, "self-test: empty blade-to-blade image (coordinates %d, layer %d)\n", static_cast<int>(bc), k);
-                    return 18;
-                }
-                if (k == 2) img.save(QString("%1/b2b_coords_%2.png").arg(dir).arg(static_cast<int>(bc)));
-                ++n;
+        for (const auto sc : {Designer::SectionCoords::MRTheta, Designer::SectionCoords::ZRTheta, Designer::SectionCoords::XYAxial}) {
+            v->sections = sc;
+            v->setContent(Designer::Content::BladeSections);
+            QApplication::processEvents();
+            const QImage img = v->image();
+            if (img.isNull() || img.width() < 10) {
+                std::fprintf(stderr, "self-test: empty Blade Sections image (coordinates %d)\n", static_cast<int>(sc));
+                return 18;
             }
-        v->b2b = Designer::B2BCoords::MPrimeTheta;
+            img.save(QString("%1/sections_%2.png").arg(dir).arg(static_cast<int>(sc)));
+            ++n;
+        }
+        v->sections = Designer::SectionCoords::MRTheta;
         if (vsub) {
             vsub->showNormal();
             w.gridLayout(6);

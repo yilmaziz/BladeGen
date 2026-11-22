@@ -1,16 +1,16 @@
 # Changelog
 
-## v1.0.3 — blade-to-blade view: Z, R·Theta and axial (X, Y) coordinates
+## v1.0.3 — Blade Sections view: every layer in M-R·Theta, Z-R·Theta or the axial X-Y view
 
 ### New
-- **Blade-to-Blade View coordinates** (right-click → *Blade-to-Blade Coordinates*), for every layer (Hub,
-  25 %, Mid, 75 %, Tip). The section, its neighbouring blades, the camber line, LE / TE and the geometry-check
-  markers are all drawn in the chosen coordinates:
-  - *M-prime, Theta Plot (conformal)*: (m′, θ), as before;
-  - *M, R·Theta Plot*: (m, r θ), as before;
-  - **Z, R·Theta Plot**: axial position Z against r θ (mm);
-  - **X, Y Plot (axial view)**: the section seen along the machine axis from downstream,
-    X = r sin θ, Y = r cos θ (mm).
+- **Blade Sections (all layers)**: a new view content (*New Auxiliary View* or *Auxiliary View Content*). It
+  draws every layer's section (Hub, 25 %, Mid, 75 %, Tip) in one plot: suction side blue, pressure side red,
+  LE / TE closures green and the camber line thin dark. Green **LE and TE lines** join the leading and the
+  trailing edges of all sections. Right-click → *Blade Sections Coordinates*:
+  - **M, RTheta Plot**: m from each layer's LE line against r θ (mm);
+  - **Z, RTheta Plot**: axial position Z against r θ (mm);
+  - **X, Y Plot (axial view)**: the sections seen along the machine axis from downstream,
+    X = r sin θ and Y = r cos θ (mm), with the hub and casing circles at the LE and TE radii dashed.
 - The window title shows the chosen coordinates.
 
 ### Fixed
@@ -20,8 +20,8 @@
   re-stagger.
 
 ### Tests
-- The designer self-test renders the blade-to-blade view in all four coordinate systems for every layer, and
-  the tip section with a 15° re-stagger. That is 125 view renders, up from 105.
+- The designer self-test renders the Blade Sections view in all three coordinate systems (the content loop
+  also renders it for every layer) and the tip section with a 15° re-stagger. That is 113 view renders.
 
 ## v1.0.2 — BladeGen Designer: meridional channel, five layers, conformal 3-D blade
 

@@ -52,8 +52,10 @@ namespace {
 
 #if defined(BLADEGEN_HAVE_OCCT_VIEWER)
 // Tessellation of the shown shapes (metres): the drawers ask for the same, so AIS reuses it.
-constexpr double kBladeDeflection = 1e-5, kBladeAngle = 0.15;
-constexpr double kWallDeflection = 5e-5, kWallAngle = 0.1;
+// 0.05 mm on the blade (about 1/1000 of the chord) and 0.2 mm on the walls look smooth on screen;
+// the angular limit (about 11 deg) keeps the LE / TE rounded.
+constexpr double kBladeDeflection = 5e-5, kBladeAngle = 0.2;
+constexpr double kWallDeflection = 2e-4, kWallAngle = 0.2;
 #endif
 
 }  // namespace
@@ -174,13 +176,24 @@ struct OcctView::Impl : public AIS_ViewController
             if (ctx->IsDisplayed(s)) ctx->Erase(s, Standard_False);
             return;
         }
-        const Handle(Prs3d_Drawer)& dr = s->Attributes();
-        dr->SetFaceBoundaryDraw(l == Look::Solid);
         const int mode = l == Look::Wireframe ? AIS_WireFrame : AIS_Shaded;
-        if (!ctx->IsDisplayed(s)) ctx->Display(s, mode, -1, Standard_False);
-        else ctx->SetDisplayMode(s, mode, Standard_False);
-        ctx->SetTransparency(s, l == Look::Shaded ? (k == 0 ? 0.35 : 0.6) : 0.0, Standard_False);
-        ctx->Redisplay(s, Standard_False);
+        const double transparency = l == Look::Shaded ? (k == 0 ? 0.35 : 0.6) : 0.0;
+        const bool boundary = l == Look::Solid;
+        if (ctx->DisplayStatus(s) == PrsMgr_DisplayStatus_None) {
+            // first display: set everything, compute the presentation once
+            s->Attributes()->SetFaceBoundaryDraw(boundary);
+            s->SetTransparency(transparency);
+            s->SetDisplayMode(mode);
+            ctx->Display(s, mode, -1, Standard_False);
+            return;
+        }
+        // a look change: only what differs is recomputed
+        const bool redo = s->Attributes()->FaceBoundaryDraw() != boundary;
+        s->Attributes()->SetFaceBoundaryDraw(boundary);
+        if (s->DisplayMode() != mode) ctx->SetDisplayMode(s, mode, Standard_False);
+        ctx->SetTransparency(s, transparency, Standard_False);
+        if (redo) ctx->Redisplay(s, Standard_False);
+        if (!ctx->IsDisplayed(s)) ctx->Display(s, Standard_False);
     }
 
     Handle(AIS_Shape) makePart(const TopoDS_Shape& shape, std::size_t k)

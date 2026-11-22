@@ -10,7 +10,7 @@
 // Each part (blade, hub, casing) has a look: hidden, wireframe (edges and iso lines), solid
 // (opaque, lit, with its face boundaries) or shaded (lit, smooth, see-through).  Without the OCCT
 // visualization toolkits, or without an OpenGL context (a headless test machine), the view shows
-// why instead.
+// why instead.  BLADEGEN_NO_OPENGL (set to anything) switches the view off.
 #pragma once
 
 #include "design/DesignSolid.hpp"

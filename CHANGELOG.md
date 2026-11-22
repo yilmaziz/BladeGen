@@ -141,7 +141,9 @@ inscribed circles, smoothed by a least-squares cubic B-spline pinned at the LE /
     Left drag rotates, middle drag (or shift + left) pans, the wheel zooms and a double click fits.
   - The status line in the view gives the update time.
   - The view needs the OCCT visualization toolkits (TKService, TKV3d, TKOpenGl, detected by CMake) and OpenGL
-    2.1. Without them it says why, and the mesh 3D View and the STEP export still work.
+    2.1 with frame buffers. Without them it says why, and the mesh 3D View and the STEP export still work.
+    For example, the software driver of a remote desktop or a CI machine (Windows "GDI Generic", OpenGL 1.1)
+    gets the message instead of blank images. `BLADEGEN_NO_OPENGL=1` switches the view off.
 - **Re-stagger the whole blade** (Initial Meridional Configuration → *Re-stagger the whole blade*): an angle
   Δγ turns every section about one radial axis.
   - + closes the blade (higher stagger: more stall margin), − opens it (more flow).

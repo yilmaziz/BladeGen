@@ -37,6 +37,7 @@
 #include <PrsMgr_PresentationManager.hxx>
 #include <SelectMgr_Selection.hxx>
 #include <Image_PixMap.hxx>
+#include <OpenGl_Context.hxx>
 #include <OpenGl_GraphicDriver.hxx>
 #include <Prs3d_Drawer.hxx>
 #include <Prs3d_IsoAspect.hxx>
@@ -204,6 +205,10 @@ SharedGl& sharedGl()
 {
     static SharedGl* g = [] {
         auto* s = new SharedGl;  // never deleted: no teardown order against Qt or the GL driver at exit
+        if (qEnvironmentVariableIsSet("BLADEGEN_NO_OPENGL")) {  // broken drivers; tests of the fallback
+            s->error = "switched off by the environment variable BLADEGEN_NO_OPENGL";
+            return s;
+        }
         try {
             s->disp = new Aspect_DisplayConnection();
             s->driver = new OpenGl_GraphicDriver(s->disp);
@@ -215,6 +220,17 @@ SharedGl& sharedGl()
             s->native = hiddenWindow(*s);
             s->win = neutralOn(s->native);
             s->view->SetWindow(s->win);
+            // the views render offscreen into frame buffers: OpenGL 2.1 with FBOs.  A software
+            // driver (Windows "GDI Generic" 1.1, e.g. a remote desktop or a CI machine) makes OCCT
+            // fall back to the fixed pipeline, and the dumps come out blank: say so instead.
+            const Handle(OpenGl_Context)& c = s->driver->GetSharedContext();
+            if (c.IsNull()) s->error = "no OpenGL context";
+            else if (!c->IsGlGreaterEqual(2, 1) || c->arbFBO == nullptr)
+                s->error = QString("the OpenGL driver offers version %1.%2%3; the view needs OpenGL 2.1 with frame buffers "
+                                   "(update the graphics driver)")
+                               .arg(c->VersionMajor())
+                               .arg(c->VersionMinor())
+                               .arg(c->arbFBO == nullptr ? " without frame buffers" : "");
         } catch (const Standard_Failure& e) {
             s->error = QString::fromUtf8(e.GetMessageString());
         } catch (const std::exception& e) {

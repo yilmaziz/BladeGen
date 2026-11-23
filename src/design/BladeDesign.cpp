@@ -506,6 +506,63 @@ void Evaluator::clear()
     order_.clear();
 }
 
+// ── centres of gravity ───────────────────────────────────────────────────────
+
+PolygonCentroid polygon_centroid(const std::vector<Vec2>& p)
+{
+    if (p.size() < 3) throw std::invalid_argument("polygon_centroid: need at least 3 points");
+    double a2 = 0.0;
+    Vec2 c = Vec2::Zero();
+    const Vec2 o = p.front();  // relative to the first point: no cancellation far from the origin
+    for (std::size_t i = 0; i < p.size(); ++i) {
+        const Vec2 u = p[i] - o, v = p[(i + 1) % p.size()] - o;
+        const double cr = u.x() * v.y() - v.x() * u.y();
+        a2 += cr;
+        c += cr * (u + v);
+    }
+    if (!(std::abs(a2) > 0.0)) throw std::invalid_argument("polygon_centroid: zero area");
+    PolygonCentroid r;
+    r.area = 0.5 * std::abs(a2);
+    r.centroid = o + c / (3.0 * a2);
+    return r;
+}
+
+MassProperties mass_properties(const Grid& g)
+{
+    if (g.ni < 7 || g.nj < 2 || g.p.size() != static_cast<std::size_t>(g.ni * g.nj))
+        throw std::invalid_argument("mass_properties: need closed row loops (ni >= 7, nj >= 2)");
+    double V = 0.0;
+    Vec3 M = Vec3::Zero();
+    const Vec3 o = g.at(0, 0);  // tetrahedra from a point near the blade: no cancellation
+    auto tri = [&](const Vec3& a, const Vec3& b, const Vec3& c) {
+        const Vec3 pa = a - o, pb = b - o, pc = c - o;
+        const double v = pa.dot(pb.cross(pc)) / 6.0;
+        V += v;
+        M += v * (pa + pb + pc) / 4.0;
+    };
+    const int ni = g.ni, nj = g.nj, N = ni - 1;
+    for (int j = 0; j + 1 < nj; ++j)
+        for (int i = 0; i + 1 < ni; ++i) {
+            tri(g.at(i, j), g.at(i + 1, j), g.at(i + 1, j + 1));
+            tri(g.at(i, j), g.at(i + 1, j + 1), g.at(i, j + 1));
+        }
+    // caps: strips between the points i and N - i (suction / pressure side), oriented against the sides
+    for (int i = 0; i < N / 2; ++i) {
+        const int b = i + 1, c = N - i - 1, e = N - i;
+        if (c > b) {
+            tri(g.at(i, 0), g.at(c, 0), g.at(b, 0));
+            tri(g.at(i, nj - 1), g.at(b, nj - 1), g.at(c, nj - 1));
+        }
+        tri(g.at(i, 0), g.at(e, 0), g.at(c, 0));
+        tri(g.at(i, nj - 1), g.at(c, nj - 1), g.at(e, nj - 1));
+    }
+    if (!(std::abs(V) > 0.0)) throw std::invalid_argument("mass_properties: zero volume");
+    MassProperties r;
+    r.volume = std::abs(V);
+    r.centroid = o + M / V;
+    return r;
+}
+
 // ── placement ────────────────────────────────────────────────────────────────
 
 Vec2 Placement::operator()(const Vec2& q) const
@@ -579,6 +636,17 @@ LayerResult place_layer(const Layer& layer, std::shared_ptr<const Section2D> sec
     r.chord = (pb - pa).norm();
     r.pitch_le = 2.0 * Math::kPi * r.r_le / n_blades;
     r.solidity_3d = r.chord / (Math::kPi * (r.r_le + r.r_te) / n_blades);
+    // centre of gravity: area centroid in the (m, r theta) plane, mapped back to the surface
+    std::vector<Vec2> dev;
+    dev.reserve(r.conformal.size());
+    for (const auto& q : r.conformal) dev.emplace_back(S.m_of_mprime(q.x()), S.xr(q.x()).y() * q.y());
+    const auto pc = polygon_centroid(dev);
+    r.section_area = pc.area;
+    r.cg_mprime = Math::brent_root([&](double mp) { return S.m_of_mprime(mp) - pc.centroid.x(); }, S.mprime_inlet(),
+                                   S.mprime_outlet(), 1e-14);
+    r.cg_xr = S.xr(r.cg_mprime);
+    r.cg_theta = pc.centroid.y() / r.cg_xr.y();
+    r.cg_xyz = S.cartesian(r.cg_mprime, r.cg_theta);
     return r;
 }
 
@@ -763,6 +831,10 @@ DesignResult Evaluator::evaluate(const BladeDesign& d)
     };
     wall(hub, theta_hub, out.hub_wall);
     wall(cas, theta_cas, out.casing_wall);
+    // the blade's volume and centre of gravity
+    const auto mp = mass_properties(out.blade);
+    out.blade_volume = mp.volume;
+    out.blade_cg = mp.centroid;
     out.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     return out;
 }

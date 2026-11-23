@@ -437,6 +437,7 @@ void ContentView::buildPlot(bool refit)
         }
         M << PointMarker{map({L.mprime_le, L.theta_le}, 0.0), Qt::black, 'o', "LE"};
         M << PointMarker{map({L.mprime_le + L.mprime.back(), Math::deg2rad(L.theta_deg.back())}, 0.0), Qt::black, 'o', "TE"};
+        M << PointMarker{map({L.cg_mprime, L.cg_theta}, 0.0), QColor(0, 0, 0), 's', "CG", 4.0, 1.6};
         if (b2b == B2BCoords::MPrimeTheta) plot_->setLabels("m'", "θ [rad]");
         else plot_->setLabels("m [mm]", "r θ [mm]");
         const QString rs = D.restagger.angle_deg != 0.0 ? QString(" (re-staggered %1%2°)").arg(D.restagger.angle_deg > 0 ? "+" : "").arg(D.restagger.angle_deg) : QString();
@@ -450,7 +451,7 @@ void ContentView::buildPlot(bool refit)
     case Content::BladeSections: {
         // every layer's section in one plot, joined by the LE and TE lines; the axial view also shows
         // the hub and casing circles at the LE and TE radii (of the first and last layer)
-        std::vector<QPointF> le, te;
+        std::vector<QPointF> le, te, cgs;
         bool first = true;
         double tmin = 1e300, tmax = -1e300;
         for (std::size_t j = 0; j < R->layers.size(); ++j) {
@@ -485,6 +486,8 @@ void ContentView::buildPlot(bool refit)
             for (std::size_t i = 0; i < L.mprime.size(); ++i) cam.pts << map({L.mprime_le + L.mprime[i], Math::deg2rad(L.theta_deg[i])});
             S << cam;
             le.push_back(map({L.mprime_le, L.theta_le}));
+            cgs.push_back(map({L.cg_mprime, L.cg_theta}));
+            M << PointMarker{cgs.back(), QColor(0, 0, 0), 's', j == 0 ? QString("CG") : QString(), 4.0, 1.6};
             te.push_back(map({L.mprime_le + L.mprime.back(), Math::deg2rad(L.theta_deg.back())}));
             first = false;
         }
@@ -496,6 +499,24 @@ void ContentView::buildPlot(bool refit)
             s.legend = line == &le;
             for (const auto& p : *line) s.pts << p;
             S << s;
+        }
+        {
+            Series s;
+            s.name = "centres of gravity";
+            s.color = QColor(0, 0, 0);
+            s.style = Qt::DashLine;
+            s.width = 1.2;
+            for (const auto& p : cgs) s.pts << p;
+            S << s;
+        }
+        if (R->blade_volume > 0.0) {
+            const auto& g = R->blade_cg;
+            plot_->setBadge({QString("blade centre of gravity (uniform density): Z %1 mm · R %2 mm · θ %3° · volume %4 mm³")
+                                 .arg(g.x(), 0, 'f', 3)
+                                 .arg(std::hypot(g.y(), g.z()), 0, 'f', 3)
+                                 .arg(Math::rad2deg(std::atan2(g.y(), g.z())), 0, 'f', 3)
+                                 .arg(R->blade_volume, 0, 'f', 1),
+                             0});
         }
         if (sections == SectionCoords::XYAxial && !first) {
             const auto& h = R->layers.front();
@@ -828,6 +849,21 @@ void ContentView::build3D(bool refit)
     tip.width = 1.5;
     for (int i = 0; i <= n; ++i) tip.p.push_back({R->blade.at(i, j).x(), R->blade.at(i, j).y(), R->blade.at(i, j).z()});
     L.push_back(tip);
+    // centres of gravity: the sections' (dashed line) and the blade's (cross)
+    const QColor cgc(150, 0, 170);
+    Line3D cgl;
+    cgl.color = cgc;
+    cgl.style = Qt::DashLine;
+    cgl.width = 1.5;
+    for (const auto& lay : R->layers)
+        if (lay.error.empty()) cgl.p.push_back({lay.cg_xyz.x(), lay.cg_xyz.y(), lay.cg_xyz.z()});
+    if (cgl.p.size() > 1) L.push_back(cgl);
+    if (R->blade_volume > 0.0) {
+        const auto& g = R->blade_cg;
+        const double h = 2.0;  // mm
+        for (const Math::Vec3& e : {Math::Vec3(h, 0, 0), Math::Vec3(0, h, 0), Math::Vec3(0, 0, h)})
+            L.push_back({{{g.x() - e.x(), g.y() - e.y(), g.z() - e.z()}, {g.x() + e.x(), g.y() + e.y(), g.z() + e.z()}}, cgc, Qt::SolidLine, 2.5});
+    }
     // rotation axis (dash-dot)
     double x0 = 1e300, x1 = -1e300;
     for (const auto& p : R->hub_wall.p) {
@@ -966,7 +1002,8 @@ void ContentView::buildTable()
     QStringList props = {"construction", "span fraction", "stagger [deg]", "β LE [deg]", "β TE [deg]", "camber β LE − β TE [deg]",
                          "θ LE [deg]", "θ TE [deg]", "mapping", "R LE [mm]", "R TE [mm]", "conformal chord c'", "meridional length LE→TE [mm]",
                          "chord [mm]", "pitch at LE [mm]", "solidity (3-D, n_blades)", "solidity (2-D input)", "t_max / c", "x/c of t_max",
-                         "LE radius / c", "TE radius / c", "area [mm²]", "quality", "fit RMS / deviation [% c]",
+                         "LE radius / c", "TE radius / c", "area [mm²]", "centre of gravity Z [mm]", "centre of gravity R [mm]",
+                         "centre of gravity θ [deg]", "quality", "fit RMS / deviation [% c]",
                          "NACA 65 equivalent arc: γ + χ LE / γ − χ TE [deg]"};
     auto column = [&](std::size_t j) {
         QStringList v;
@@ -984,7 +1021,8 @@ void ContentView::buildTable()
           << (L.surface.cylindrical() ? "cylindrical wrap" : "surface of revolution") << num(L.r_le, 6) << num(L.r_te, 6)
           << num(L.chord_mprime, 6) << num(L.surface.m_te(), 6) << num(L.chord, 6) << num(L.pitch_le, 6) << num(L.solidity_3d, 4)
           << num(l.solidity, 4) << num(sec.camber.max_thickness, 4) << num(sec.camber.max_thickness_x, 4) << num(sec.le_radius, 4)
-          << num(sec.te_radius, 4) << num(sec.area * L.chord * L.chord, 5)
+          << num(sec.te_radius, 4) << num(L.section_area, 5) << num(L.cg_xr.x(), 6) << num(L.cg_xr.y(), 6)
+          << num(Math::rad2deg(L.cg_theta), 6)
           << (ne ? QString("%1 error(s)").arg(ne) : nw ? QString("%1 warning(s)").arg(nw) : QString("OK"))
           << (sec.deviation_rms ? num(100.0 * *sec.deviation_rms, 3) : l.fitted_to ? num(100.0 * l.fit_rms, 3) : QString("—"))
           << (sec.equivalent_arc_deg ? QString("%1 / %2").arg(num(l.stagger_deg + (*sec.equivalent_arc_deg)[0], 5), num(l.stagger_deg - (*sec.equivalent_arc_deg)[1], 5))

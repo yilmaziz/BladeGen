@@ -53,6 +53,8 @@ py::dict result_dict(const D::DesignResult& r)
     d["ok"] = r.ok();
     d["errors"] = r.errors;
     d["seconds"] = r.seconds;
+    d["blade_volume"] = r.blade_volume;
+    d["blade_cg"] = py::make_tuple(r.blade_cg.x(), r.blade_cg.y(), r.blade_cg.z());
     py::list layers;
     for (const auto& L : r.layers) {
         py::dict l;
@@ -66,6 +68,12 @@ py::dict result_dict(const D::DesignResult& r)
             l["stagger_deg"] = Math::rad2deg(L.gamma);
             l["chord_mprime"] = L.chord_mprime;
             l["mprime_le"] = L.mprime_le;
+            l["section_area"] = L.section_area;
+            l["cg_xyz"] = py::make_tuple(L.cg_xyz.x(), L.cg_xyz.y(), L.cg_xyz.z());
+            l["cg_z"] = L.cg_xr.x();
+            l["cg_r"] = L.cg_xr.y();
+            l["cg_theta_deg"] = Math::rad2deg(L.cg_theta);
+            l["cg_mprime"] = L.cg_mprime;
             l["theta_le_deg"] = Math::rad2deg(L.theta_le);
             l["chord"] = L.chord;
             l["r_le"] = L.r_le;

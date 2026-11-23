@@ -32,7 +32,10 @@ set(TURBOLENZA_WITH_PARDISO AUTO CACHE STRING "Use Intel MKL PARDISO when found 
 set_property(CACHE TURBOLENZA_WITH_PARDISO PROPERTY STRINGS AUTO ON OFF)
 if(NOT TURBOLENZA_WITH_PARDISO STREQUAL "OFF")
     set(MKL_INTERFACE lp64)
-    set(MKL_THREADING intel_thread)
+    # MKL's TBB threading layer: the OpenMP loops of a pass keep the compiler's OpenMP runtime, and
+    # PARDISO runs on TBB (it runs between those loops, never beside them).  MKL's own OpenMP layer
+    # (libiomp5md) cannot share MSVC's /openmp runtime.
+    set(MKL_THREADING tbb_thread)
     set(MKL_LINK dynamic)
     if(TURBOLENZA_WITH_PARDISO STREQUAL "ON")
         find_package(MKL CONFIG REQUIRED)
@@ -41,8 +44,8 @@ if(NOT TURBOLENZA_WITH_PARDISO STREQUAL "OFF")
     endif()
     if(MKL_FOUND)
         target_link_libraries(turbolenza_core PUBLIC MKL::MKL)
-        target_compile_definitions(turbolenza_core PUBLIC TURBOLENZA_HAVE_PARDISO EIGEN_USE_MKL_VML_OFF)
-        message(STATUS "TURBOlenza: Intel MKL PARDISO enabled")
+        target_compile_definitions(turbolenza_core PUBLIC TURBOLENZA_HAVE_PARDISO)
+        message(STATUS "TURBOlenza: Intel MKL PARDISO enabled (${MKL_THREADING})")
     else()
         message(STATUS "TURBOlenza: Intel MKL not found, PARDISO disabled (Eigen SparseLU only)")
     endif()

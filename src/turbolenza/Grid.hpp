@@ -23,6 +23,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace BladeGen::Turbolenza {
@@ -64,14 +65,42 @@ public:
     std::optional<int> n_passage, nearest_lower, nearest_higher, finest, ceiling;
 };
 
+/// v1 rejection reasons of a standard-level candidate (REJECT_*).
+inline constexpr const char* kRejectLE = "invalid LE cut";
+inline constexpr const char* kRejectTE = "invalid TE cut";
+inline constexpr const char* kRejectBranch = "wrong branch identity";
+inline constexpr const char* kRejectExtension = "extension outside tolerance";
+inline constexpr const char* kRejectEta = "eta-resolution issue";
+inline constexpr const char* kRejectOther = "other topology failure";
+
+/// v1 CandidateRecord: one candidate spacing tried for a standard level.
+struct CandidateRecord
+{
+    int n_cells = 0;
+    double dm_over_chord = 0.0;
+    int rank = 0;          ///< 1: nearest the target
+    bool accepted = false;
+    std::string reason;    ///< one of kReject*, empty when accepted
+    std::string detail;
+};
+
 /// v1 GridGenerationError: no candidate of a standard level passes (the reasons are counted).
 class GridGenerationError : public GridError
 {
 public:
     using GridError::GridError;
+    GridGenerationError(const std::string& what, std::optional<std::string> level_,
+                        std::vector<CandidateRecord> candidates_, std::vector<std::pair<std::string, int>> reasons_)
+        : GridError(what), level(std::move(level_)), candidates(std::move(candidates_)), reasons(std::move(reasons_))
+    {
+    }
+    std::optional<std::string> level;                  ///< the level asked for; empty: the geometry itself
+    std::vector<CandidateRecord> candidates;           ///< every candidate tried
+    std::vector<std::pair<std::string, int>> reasons;  ///< rejection reason -> count, first-seen order
 };
 
-/// v1 StandardGridInfo (the numbers of a standard grid; lengths in chords).
+/// v1 StandardGridInfo (the numbers of a standard grid; lengths in chords).  v1's geometry_id
+/// (a sha256 fingerprint of the cascade, for messages) is not ported.
 struct StandardGridInfo
 {
     std::string level;
@@ -86,13 +115,80 @@ struct StandardGridInfo
     double upstream_extension_chords = 0.0, downstream_extension_chords = 0.0;
     double cell_aspect = 0.0;
     std::vector<std::string> checks;
+    // added with the port (the v1 fields of the same names)
+    double m_first = 0.0, m_last = 0.0;
+    /// (m, y) on the reference blade (the pressure-side wall node moved back one pitch)
+    Point first_ss_wall_point, first_ps_wall_point, last_ss_wall_point, last_ps_wall_point;
+    std::string admissibility;
 };
 
 struct StandardGrid
 {
     Grid grid;
     StandardGridInfo info;
+    // added with the port: v1 CandidateStatistics
+    std::vector<CandidateRecord> candidates;  ///< every candidate tried, in search order
+    double target_dm_over_chord = 0.0;
+    std::array<double, 2> band{0.0, 0.0};     ///< dm / chord range searched
 };
+
+// ── v1 grid.py constants ─────────────────────────────────────────────────────
+inline constexpr double kTouch = 1e-12;                    ///< TOUCH, chords
+inline constexpr double kMediumDmOverChord = 0.020;        ///< MEDIUM_DM_OVER_CHORD
+inline constexpr double kCandidateBand = 0.10;             ///< CANDIDATE_BAND
+inline constexpr double kTransitionClearance = 0.10;       ///< TRANSITION_CLEARANCE, of dm
+inline constexpr double kCellAspect = 1.8;                 ///< CELL_ASPECT = pitch deta / dm
+inline constexpr int kMinEtaCells = 6;                     ///< MIN_ETA_CELLS
+inline constexpr double kNominalExtensionChords = 1.0;     ///< NOMINAL_EXTENSION_CHORDS
+inline constexpr double kExtensionToleranceChords = 0.05;  ///< EXTENSION_TOLERANCE_CHORDS
+inline constexpr double kUniformSpacingTolerance = 1e-13;  ///< UNIFORM_SPACING_TOLERANCE, chords
+
+/// v1 LEVEL_TARGET_DM_OVER_CHORD: 0.020 sqrt(2)^(2 - k) for level k of kGridLevels;
+/// std::invalid_argument for an unknown level.
+[[nodiscard]] double level_target_dm_over_chord(const std::string& level);
+
+/// v1 PassageTransitions: the blade ends along m (grid.py section 9), in the active unit.
+struct PassageTransitions
+{
+    double m_tip = 0.0, m_le = 0.0, m_start = 0.0, m_end = 0.0, m_te = 0.0, m_tail = 0.0, chord = 1.0;
+    struct Interval
+    {
+        double lo = 0.0, hi = 0.0;
+        int suction = 0, pressure = 0;
+    };
+    std::vector<Interval> coverage;  ///< every m interval between branch ends, with its crossing counts
+
+    [[nodiscard]] double length() const noexcept { return m_end - m_start; }
+    [[nodiscard]] double le_window() const noexcept { return m_start - m_tip; }
+    [[nodiscard]] double te_window() const noexcept { return m_tail - m_end; }
+    [[nodiscard]] double le_face() const noexcept { return 0.5 * (m_tip + m_start); }
+    [[nodiscard]] double te_face() const noexcept { return 0.5 * (m_end + m_tail); }
+    [[nodiscard]] double lattice_length() const noexcept { return te_face() - le_face(); }
+    [[nodiscard]] bool valid_cut(double m) const noexcept { return m_start < m && m < m_end; }
+};
+
+/// v1 passage_transitions.  GridGenerationError when no SS + PS-valid interval holds the middle of
+/// the chord or the passage is closed.
+[[nodiscard]] PassageTransitions passage_transitions(const Cascade& cascade);
+
+/// v1 EdgeStationTopology: how the first ("LE") or the last ("TE") blade station cuts the blade.
+struct EdgeStationTopology
+{
+    std::string edge;
+    int station = 0;
+    double m = 0.0;
+    int crossings = 0, suction = 0, pressure = 0;
+    double branch_point = 0.0;  ///< m_le or m_te
+    double extreme = 0.0;       ///< m of the nose tip or the tail end
+    bool on_branch_point = false;
+    [[nodiscard]] bool valid() const noexcept
+    {
+        return crossings == 2 && suction == 1 && pressure == 1 && !on_branch_point;
+    }
+};
+
+/// v1 wall_station_topology: (LE, TE) of a built grid.
+[[nodiscard]] std::array<EdgeStationTopology, 2> wall_station_topology(const Grid& grid);
 
 /// v1 make_passage_boundaries.  exit_angle empty: kappa_te.
 [[nodiscard]] PassageBoundaries make_passage_boundaries(const Cascade& cascade, const GridSettings& settings,
@@ -108,12 +204,34 @@ struct StandardGrid
 [[nodiscard]] StandardGrid build_grid(const Cascade& cascade, const std::string& level, double inlet_angle,
                                       std::optional<double> exit_angle);
 
+/// v1 build_grid with the nominal (upstream, downstream) extension lengths in chords.
+[[nodiscard]] StandardGrid build_grid(const Cascade& cascade, const std::string& level, double inlet_angle,
+                                      std::optional<double> exit_angle, std::array<double, 2> extension_chords);
+
 /// v1 rebuild_exit: the same grid with its exit extension turned to exit_angle; only the exit
 /// stations' nodes move.
 [[nodiscard]] Grid rebuild_exit(const Grid& grid, double exit_angle);
+/// v1 rebuild_exit of PassageBoundaries: exit_angle, downstream_beta and the downstream lines.
+[[nodiscard]] PassageBoundaries rebuild_exit(const PassageBoundaries& boundaries, double exit_angle);
 
 /// v1 validate_uniform_grid_topology: GridTopologyError unless the first and last blade stations
 /// each cut one suction and one pressure surface.
 void validate_uniform_grid_topology(const Grid& grid);
+/// The same with v1's keywords: the n_passage that built the grid (for the nearest admissible
+/// values in the message and the error) and the stagger [rad] that names the cascade.
+void validate_uniform_grid_topology(const Grid& grid, std::optional<int> n_passage, std::optional<double> stagger);
+
+/// v1 find_valid_n_passage: the admissible n_passage among n_values, ascending (no grid is built).
+[[nodiscard]] std::vector<int> find_valid_n_passage(const Cascade& cascade, const GridSettings& settings,
+                                                    double inlet_angle, const std::vector<int>& n_values);
+/// v1 n_passage_ceiling: the first n_passage from which every finer one fails; empty when the blade
+/// has neither an LE nor a TE window.
+[[nodiscard]] std::optional<int> n_passage_ceiling(const Cascade& cascade, const GridSettings& settings,
+                                                   double inlet_angle);
+
+/// v1 validate_standard_grid: the invariants of a standard grid; the names of the checks passed, or
+/// GridError naming the first that fails.  v1's last check, "metrics with positive S", calls
+/// metrics.py and is not run by the grid module (the metrics come after the grid in v2).
+[[nodiscard]] std::vector<std::string> validate_standard_grid(const Grid& grid);
 
 }  // namespace BladeGen::Turbolenza

@@ -9,6 +9,12 @@
 //   bladegen naca65 <cl0> <t_max/c> [--variant kovach_sandercock|emery_base] [--csv sides.csv] [--fit out.json]
 //       parametric NACA 65-(cl0 A10) t/c section: quality report, side coordinates and curvature,
 //       optionally the custom profile parameters fitted to it (NACA 65 + Custom)
+//   bladegen export-sections <blade.json> --span s[,s...] [--out f.json] [--n-edge 40] [--n-body 160] [--channel-points 2001]
+//       versioned JSON (format "bladegen.sections") of the sections at the span fractions (0 = hub):
+//       SS / PS points LE -> TE in (m', theta) and (z, r, theta), LE / TE, streamline, channel, pitch
+//   bladegen export-sections naca65 <cl0> <t_max/c> --variant kovach_sandercock|emery_base --chord c
+//            --stagger deg --solidity s [--stations 101] [--n-edge 40] [--out f.json]
+//       the planar NACA 65 cascade section (axial x, tangential y), staggered, pitch = chord / solidity
 //   bladegen demo <out dir>
 //       writes the demo rotor definition and its STEP files
 //   bladegen version
@@ -16,13 +22,16 @@
 #include "fit/NacaFit.hpp"
 #include "naca/Naca65.hpp"
 #include "io/BladeJson.hpp"
+#include "io/SectionExport.hpp"
 #include "occt/OcctBlade.hpp"
 #include "profile/Quality.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
@@ -41,6 +50,10 @@ int usage()
                  "  bladegen build <blade.json> <out.step> [--fillet R_mm] [--unit mm|m]\n"
                  "  bladegen fit <sides.csv> <out.json> [--ss x,y] [--ps x,y] [--negate-y] [--fairness w]\n"
                  "  bladegen naca65 <cl0> <t_max/c> [--variant kovach_sandercock|emery_base] [--csv sides.csv] [--fit out.json]\n"
+                 "  bladegen export-sections <blade.json> --span s[,s...] [--out f.json] [--n-edge 40] [--n-body 160]\n"
+                 "                           [--channel-points 2001]\n"
+                 "  bladegen export-sections naca65 <cl0> <t_max/c> --variant kovach_sandercock|emery_base --chord c\n"
+                 "                           --stagger deg --solidity s [--stations 101] [--n-edge 40] [--out f.json]\n"
                  "  bladegen demo <out dir>\n"
                  "  bladegen version\n");
     return 2;
@@ -197,6 +210,93 @@ int cmd_naca65(int argc, char** argv)
     return q.ok() ? 0 : 3;
 }
 
+/// A whole-string number (std::stod accepts a trailing junk suffix).
+double number(const std::string& s, const std::string& what)
+{
+    std::size_t used = 0;
+    double v = 0.0;
+    try {
+        v = std::stod(s, &used);
+    } catch (const std::exception&) {
+        used = 0;
+    }
+    if (used == 0 || used != s.size() || !std::isfinite(v)) throw std::invalid_argument(what + ": not a number: '" + s + "'");
+    return v;
+}
+
+int integer(const std::string& s, const std::string& what)
+{
+    const double v = number(s, what);
+    if (v != std::floor(v) || std::abs(v) > 1e6) throw std::invalid_argument(what + ": not an integer: '" + s + "'");
+    return static_cast<int>(v);
+}
+
+const std::string& required(const std::map<std::string, std::string>& opt, const std::string& key)
+{
+    const auto it = opt.find(key);
+    if (it == opt.end()) throw std::invalid_argument("missing option " + key);
+    return it->second;
+}
+
+void check_known(const std::map<std::string, std::string>& opt, const std::vector<std::string>& known)
+{
+    for (const auto& [k, v] : opt)
+        if (std::find(known.begin(), known.end(), k) == known.end()) throw std::invalid_argument("unknown option " + k);
+}
+
+int emit_sections(const nlohmann::ordered_json& j, const std::map<std::string, std::string>& opt, const std::string& what)
+{
+    if (!opt.count("--out")) {
+        std::cout << IO::dump_sections(j);
+        return 0;
+    }
+    const fs::path out = opt.at("--out");
+    if (out.has_parent_path()) fs::create_directories(fs::absolute(out).parent_path());
+    IO::write_sections(j, out.string());
+    std::printf("wrote %s (%s)\n", out.string().c_str(), what.c_str());
+    return 0;
+}
+
+int cmd_export_sections(int argc, char** argv)
+{
+    if (argc < 3) return usage();
+    if (std::string(argv[2]) == "naca65") {
+        if (argc < 5) return usage();
+        const auto opt = options(argc, argv, 5);
+        check_known(opt, {"--variant", "--chord", "--stagger", "--solidity", "--stations", "--n-edge", "--out"});
+        IO::CascadeExportOptions o;
+        o.naca = {number(argv[3], "cl0"), number(argv[4], "t_max/c"), Naca::variant_from_string(required(opt, "--variant"))};
+        o.chord = number(required(opt, "--chord"), "--chord");
+        o.stagger_deg = number(required(opt, "--stagger"), "--stagger");
+        o.solidity = number(required(opt, "--solidity"), "--solidity");
+        if (opt.count("--stations")) o.n_stations = integer(opt.at("--stations"), "--stations");
+        if (opt.count("--n-edge")) o.n_edge = integer(opt.at("--n-edge"), "--n-edge");
+        const auto j = IO::export_naca65_cascade(o, BLADEGEN_VERSION);
+        char buf[160];
+        std::snprintf(buf, sizeof buf, "%s %s, %zu SS + %zu PS points, pitch %.6g m",
+                      j["source"]["naca"]["designation"].get<std::string>().c_str(), Naca::to_string(o.naca.variant).c_str(),
+                      j["suction_side"]["xy"].size(), j["pressure_side"]["xy"].size(), j["cascade"]["pitch"].get<double>());
+        return emit_sections(j, opt, buf);
+    }
+    const auto opt = options(argc, argv, 3);
+    check_known(opt, {"--span", "--n-edge", "--n-body", "--channel-points", "--out"});
+    IO::DesignExportOptions o;
+    o.spans.clear();
+    std::stringstream ss(required(opt, "--span"));
+    for (std::string item; std::getline(ss, item, ',');) o.spans.push_back(number(item, "--span"));
+    if (opt.count("--n-edge")) o.n_edge = integer(opt.at("--n-edge"), "--n-edge");
+    if (opt.count("--n-body")) o.n_body = integer(opt.at("--n-body"), "--n-body");
+    if (opt.count("--channel-points")) o.n_channel = integer(opt.at("--channel-points"), "--channel-points");
+    const fs::path design = argv[2];
+    const auto def = IO::read_blade_json(design.string());
+    // the file name only: no directories of the user's machine in the output
+    const auto j = IO::export_design_sections(def, o, design.filename().string(), BLADEGEN_VERSION);
+    char buf[160];
+    std::snprintf(buf, sizeof buf, "%s: %zu section(s), %zu points per side, %d blades", def.name.c_str(),
+                  j["sections"].size(), j["sections"][0]["suction_side"]["mprime_theta"].size(), def.n_blades);
+    return emit_sections(j, opt, buf);
+}
+
 int cmd_demo(int argc, char** argv)
 {
     if (argc < 3) return usage();
@@ -222,6 +322,7 @@ int main(int argc, char** argv)
         if (cmd == "build") return cmd_build(argc, argv);
         if (cmd == "fit") return cmd_fit(argc, argv);
         if (cmd == "naca65") return cmd_naca65(argc, argv);
+        if (cmd == "export-sections") return cmd_export_sections(argc, argv);
         if (cmd == "demo") return cmd_demo(argc, argv);
         if (cmd == "version") {
             std::printf("BladeGen %s\n", BLADEGEN_VERSION);

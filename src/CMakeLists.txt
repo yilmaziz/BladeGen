@@ -24,6 +24,7 @@ set(BLADEGEN_SOURCES
     fit/NacaFit.cpp
     io/Rotor67.cpp
     io/BladeJson.cpp
+    io/SectionExport.cpp
     naca/Naca65.cpp
     design/BladeDesign.cpp
     design/DesignSolid.cpp

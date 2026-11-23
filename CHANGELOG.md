@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.0.4 — Stacking on a reference point (DLR variants 1 and 2, centre of gravity)
+## v1.0.4 — Stacking on a reference point (DLR variants 1 and 2, centre of gravity) and `bladegen export-sections`
 
 ### New
 - **Stacking of the sections** (Initial Meridional Configuration; Vos et al. 2025, Sec. 4). Two ways to fix
@@ -38,6 +38,75 @@
   - `stack_z`, `stack_r`, `stack_theta_deg` and `stack_mprime` for each layer;
   - `blade_le`, `blade_te`, `stacking_xr` and `stacking_xyz` for the mesh rows;
   - `DesignEvaluator.hub_reference_point(design_json, reference)`: the (Z_ref, θ_ref) of the button above.
+- **`bladegen export-sections`** writes the section points as JSON, `"format": "bladegen.sections"`,
+  `"version": 1`, for tools that read BladeGen geometry (first user: the ENIGMAgrid mesher). Two inputs:
+  - a blade design (`BladeDefinition` JSON, e.g. `data/rotor67/rotor67_bladegen.json`) at span fractions
+    `--span 0[,0.5,...]` (0 = hub section):
+    - the hub and shroud channel curves in (z, r), 2001 points each (`--channel-points`);
+    - per section, the suction- and pressure-side points from the LE point to the TE point in the
+      blade-to-blade plane (m′, θ) and the same points in 3-D (z, r, θ) on the stream surface, from one
+      evaluation (the points of `Blade::section`, the 3-D skin's layout);
+    - the LE and TE points, the stagger, θ_LE, m′_LE, m′_TE and the conformal chord;
+    - the section's streamline through the **whole channel, inlet to outlet** (2001 points, 0.27 mm apart on the
+      Rotor 67 hub), as (z, r) with its m and m′ tables, so a reader can check its own m′ transform and build
+      the stream surface upstream and downstream of the blade; m = m′ = 0 at the channel inlet, and the
+      section points' m′ use the same origin;
+    - a design with its own blade-length section streamlines (Rotor 67: the published section surfaces end at
+      the blade) gets the channel's streamline instead (the hub curve at span 0, the shroud curve at span 1,
+      the channel streamline between), and its section points are moved onto it, to their foot points in
+      (z, r) with θ kept: on the Rotor 67 hub by at most 1.2·10⁻⁵ m (mean 5.0·10⁻⁶ m), the distance between
+      the published section-1 surface and the flowpath hub;
+    - the number of blades and the pitch angle 2π/N;
+  - a planar NACA 65 cascade: `bladegen export-sections naca65 <cl0> <t/c> --variant kovach_sandercock|emery_base
+    --chord c --stagger deg --solidity s [--stations 101]`, in cascade coordinates (axial x, tangential y),
+    scaled by the chord, rotated about the LE point by the stagger (from the +x axis toward +y) and with the
+    pitch chord / solidity; also the unstaggered unit-chord points (ξ, η).
+- Every file states its units (m, rad), the coordinate convention (machine axis z = BladeGen's internal x;
+  θ = 0 on the internal +z axis, turning from the designer's +Y toward +X; the stagger), the point order, the
+  source (the design file's name only, or the NACA parameters) and the BladeGen version.
+- Every double is written with 17 significant digits (`std::setprecision(17)`, "C" locale), so it reads back
+  bit-identically. `--out f.json` writes a file, otherwise the JSON goes to stdout. Library:
+  `IO::export_design_sections`, `IO::export_naca65_cascade`, `IO::dump_sections` (`src/io/SectionExport`).
+
+### Tests
+- Stacking (`tests/design/test_stacking.cpp`):
+  - dC/dm′ against finite differences, with |dC/dm′| = r;
+  - the closest point against a 200 000-point scan;
+  - the LE / TE-lines mode equal to the v1.0.3 placement;
+  - variant 1 with the centre of gravity, the LE and the TE at (Z_ref, θ_ref) on every layer and mesh row;
+  - variant 2's closest-point condition on every layer;
+  - both variants identical on cylindrical walls;
+  - the chord scale;
+  - a re-stagger of a stacked blade rigid about its axis;
+  - *Take Z_ref, θ_ref* idempotent with a re-stagger;
+  - invalid input and JSON.
+
+  The designer self-test also clicks the real button five times.
+- Section export: the format and version fields; the point counts, order and pieces; both sides share the LE and TE points.
+- Every double of both kinds of file reads back bit-identical, through a string and through a file; awkward
+  values (0.1, 1/3, subnormal, the largest double, −0) as well. Non-finite numbers are refused.
+- Rotor 67 hub: the written streamline is the channel's hub curve, point for point (bit-identical, the same
+  curve), from the inlet to the outlet, no coarser than 0.47 mm; every (m′, θ) point maps to its (z, r, θ)
+  point by BladeGen's own m′ → m → (z, r) on it (10⁻¹⁴ m); each point moved from BladeGen's section by
+  ≤ 1.5·10⁻⁵ m, normal to the hub (10⁻¹² m tangential); m′ = ∫ dm / r by the trapezoidal rule over the
+  written table over the whole channel (10⁻⁷ relative).
+- A channel design (the demo rotor with inlet and outlet): at spans 0, 0.5 and 1 the points are BladeGen's
+  own 3-D section points (10⁻¹⁴ m) on the written full-channel streamline, which is the curve BladeGen placed
+  the section on (bit-identical); the span-0 streamline lies on the hub curve (10⁻⁹ m).
+- NACA 65-(12A10)10 cascade (chord 0.5 m, stagger 33°, solidity 1.0): the chord (10⁻¹⁵ m) and stagger
+  (10⁻¹⁴ rad) from the LE and TE points, the pitch, and the points rotated back equal to `Naca65Section`'s.
+- Invalid input throws: span outside [0, 1], chord or solidity ≤ 0, |stagger| ≥ 90°, too few points; the CLI
+  refuses a malformed number, a missing option and an unknown option.
+
+### Known limitations
+- The design input is the `BladeDefinition` JSON of `bladegen build`; the designer's `bladegen-design-2`
+  files are not read by this command.
+- For a design with its own section streamlines the exported points are on the channel's stream surface, not
+  on the section's own: they differ from BladeGen's 3-D blade by the distance between the two curves.
+- The NACA 65 section is BladeGen's (curvature-continuous G2 joints, C4 body; see the NACA 65 section of the
+  README for its agreement with TURBOlenza's C2 geometry). `--stations` is the number of body points per side
+  (cosine-clustered in √x), not a camber-station table.
+
 
 ## v1.0.3 — Blade Sections view (M-R·Theta, Z-R·Theta, axial X-Y) and centres of gravity
 

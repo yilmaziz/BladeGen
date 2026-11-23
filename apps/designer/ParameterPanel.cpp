@@ -227,10 +227,10 @@ QWidget* ParameterPanel::meridionalPage()
     connect(stacking_mode_, &QComboBox::currentIndexChanged, this, [this](int i) {
         if (syncing_ || i < 0) return;
         auto& st = s_.design.stacking;
-        const bool was_edges = st.mode == Design::Stacking::Mode::Edges;
+        // from the LE / TE lines: the hub section stays where it was (read before the mode changes)
+        if (st.mode == Design::Stacking::Mode::Edges && i > 0) takeStackingPoint();
         st.mode = i == 0 ? Design::Stacking::Mode::Edges : Design::Stacking::Mode::ReferencePoint;
         if (i > 0) st.variant = i == 1 ? Design::Stacking::Variant::SameZTheta : Design::Stacking::Variant::ClosestPoint;
-        if (was_edges && i > 0) takeStackingPoint();  // the hub section stays where it was
         changed();
     });
     connect(stacking_ref_, &QComboBox::currentIndexChanged, this, [this](int i) {
@@ -570,23 +570,17 @@ void ParameterPanel::sync()
 
 void ParameterPanel::takeStackingPoint()
 {
+    // the hub's reference point before the re-stagger (the re-staggered one would turn again on every press)
     const auto R = s_.result;
-    if (!R || R->layers.empty() || !R->layers.front().error.empty()) return;
-    const auto& L = R->layers.front();
+    if (!R || R->layers.empty() || !R->layers.front().section) return;
     auto& st = s_.design.stacking;
-    switch (st.reference) {
-    case Design::Stacking::Reference::CG:
-        st.z_ref = L.cg_xr.x();
-        st.theta_ref_deg = Math::rad2deg(L.cg_theta);
-        break;
-    case Design::Stacking::Reference::LE:
-        st.z_ref = L.camber_xr.front().x();
-        st.theta_ref_deg = Math::rad2deg(L.theta_le);
-        break;
-    case Design::Stacking::Reference::TE:
-        st.z_ref = L.camber_xr.back().x();
-        st.theta_ref_deg = L.theta_te_deg;
-        break;
+    try {
+        const Blade::FlowPath fp(s_.design.meridional);
+        const Math::Vec2 p = Design::hub_reference_point(s_.design, fp, *R->layers.front().section, st.reference);
+        st.z_ref = p.x();
+        st.theta_ref_deg = Math::rad2deg(p.y());
+    } catch (const std::exception&) {
+        return;  // the current design cannot be placed: keep Z_ref, theta_ref
     }
     const bool was = syncing_;
     syncing_ = true;

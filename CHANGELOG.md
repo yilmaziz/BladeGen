@@ -21,7 +21,8 @@
     does not carry it over from the profile's own frame except on cylinders, so the section is shifted until
     its centre of gravity is on the target. On the default hub the correction is 0.011 in m′ (about 0.4 mm).
   - *Take Z_ref, θ_ref from the current hub section* (also done automatically when you switch from the LE /
-    TE lines) keeps the hub section where it is.
+    TE lines) keeps the hub section where it is. It takes the hub's reference point before the re-stagger, so a
+    re-staggered hub stays put too, and pressing it again changes nothing.
   - A reference point may lie anywhere on the stream surface, extensions included. A point outside the
     channel is reported as a design error.
 - **Chord scale** per layer (Layers and Profiles → Placement): with reference-point stacking,
@@ -35,7 +36,8 @@
   layer's `chord_scale`. Files without them load with the prescribed edges, as before.
 - Python:
   - `stack_z`, `stack_r`, `stack_theta_deg` and `stack_mprime` for each layer;
-  - `blade_le`, `blade_te`, `stacking_xr` and `stacking_xyz` for the mesh rows.
+  - `blade_le`, `blade_te`, `stacking_xr` and `stacking_xyz` for the mesh rows;
+  - `DesignEvaluator.hub_reference_point(design_json, reference)`: the (Z_ref, θ_ref) of the button above.
 
 ## v1.0.3 — Blade Sections view (M-R·Theta, Z-R·Theta, axial X-Y) and centres of gravity
 

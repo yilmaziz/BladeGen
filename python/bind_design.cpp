@@ -186,6 +186,13 @@ void bind_design(py::module_& m)
             }
             return result_dict(r);
         }, py::arg("design_json"), "Evaluate a design given as its JSON text; returns a dict of numpy arrays")
+        .def("hub_reference_point", [](D::Evaluator& ev, const std::string& design_json, const std::string& reference) {
+            const auto d = D::design_from_json(nlohmann::json::parse(design_json));
+            const Blade::FlowPath fp(d.meridional);
+            const auto p = D::hub_reference_point(d, fp, *ev.section(d.layers.front(), d.mesh), D::stacking_reference_from_string(reference));
+            return py::make_tuple(p.x(), Math::rad2deg(p.y()));
+        }, py::arg("design_json"), py::arg("reference") = "cg",
+           "(Z_ref [mm], theta_ref [deg]) of the hub section's reference point before any re-stagger")
         .def("write_step", [](D::Evaluator& ev, const std::string& design_json, const std::string& path) {
             const auto d = D::design_from_json(nlohmann::json::parse(design_json));
             py::gil_scoped_release nogil;

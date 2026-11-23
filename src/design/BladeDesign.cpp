@@ -1086,6 +1086,26 @@ DesignResult Evaluator::evaluate(const BladeDesign& d)
     return out;
 }
 
+Vec2 hub_reference_point(const BladeDesign& d, const Blade::FlowPath& fp, const Section2D& hub, Stacking::Reference ref)
+{
+    if (d.layers.empty()) throw std::invalid_argument("hub_reference_point: no layers");
+    const auto& l = d.layers.front();
+    const auto st = resolve_stacking(d, fp);
+    const auto S = fp.surface(l.span);
+    const auto& loop = hub.loop.xy;
+    const auto p = nominal_placement(st, S, l.stagger_deg, l.theta_le_deg, l.chord_scale, loop, d.mirror);
+    Vec2 q = p({0.0, 0.0});
+    if (ref == Stacking::Reference::TE) q = p({1.0, 0.0});
+    if (ref == Stacking::Reference::CG) {
+        std::vector<Vec2> conf;
+        conf.reserve(loop.size());
+        for (const auto& v : loop) conf.push_back(p(v));
+        const auto c = section_cg(S, conf);
+        q = {c.mprime, c.theta};
+    }
+    return {S.xr(q.x()).x(), q.y()};
+}
+
 void fit_layer(Layer& layer, Evaluator& ev)
 {
     const auto sec = ev.naca(layer.naca);

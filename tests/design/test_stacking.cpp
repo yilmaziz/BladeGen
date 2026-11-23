@@ -308,6 +308,37 @@ TEST_CASE("Re-stagger of a reference-point stacked blade: rigid about the axis t
     check_end_rows(b);
 }
 
+TEST_CASE("hub_reference_point: switching to a reference point keeps a re-staggered hub section; idempotent", "[design][stacking]")
+{
+    // The GUI's "Take Z_ref, theta_ref from the current hub section".  Taking the re-staggered hub's centre of
+    // gravity instead turned the hub by the re-stagger again on every press (Z_ref drifted ~0.5 mm per press).
+    Evaluator ev;
+    for (const auto ref : {Stacking::Reference::CG, Stacking::Reference::LE, Stacking::Reference::TE})
+        for (const auto v : {Stacking::Variant::SameZTheta, Stacking::Variant::ClosestPoint})
+            for (const double rs : {0.0, 4.0, -7.0}) {
+                auto d = BladeDesign::defaults();
+                d.restagger = {rs, Restagger::Axis::Hub, 0.3, 0.0, 0.0};
+                const auto a = ev.evaluate(d);
+                REQUIRE(a.ok());
+                const Blade::FlowPath fp(d.meridional);
+                const Vec2 p = hub_reference_point(d, fp, *a.layers[0].section, ref);
+                d.stacking = {Stacking::Mode::ReferencePoint, v, ref, p.x(), Math::rad2deg(p.y())};
+                const auto b = ev.evaluate(d);
+                REQUIRE(b.ok());
+                // the hub section has not moved, re-stagger included
+                for (std::size_t i = 0; i < a.layers[0].conformal.size(); i += 3)
+                    CHECK((b.layers[0].conformal[i] - a.layers[0].conformal[i]).norm() < 1e-10);
+                // pressing again changes nothing
+                for (int press = 0; press < 3; ++press) {
+                    const Vec2 q = hub_reference_point(d, fp, *b.layers[0].section, ref);
+                    CHECK(q.x() == Approx(d.stacking.z_ref).margin(1e-10));
+                    CHECK(Math::rad2deg(q.y()) == Approx(d.stacking.theta_ref_deg).margin(1e-10));
+                    d.stacking.z_ref = q.x();
+                    d.stacking.theta_ref_deg = Math::rad2deg(q.y());
+                }
+            }
+}
+
 TEST_CASE("Stacking: invalid input, design errors, JSON round trip", "[design][stacking]")
 {
     auto d = stacked(Stacking::Variant::SameZTheta, Stacking::Reference::CG, 0.0, 0.0);

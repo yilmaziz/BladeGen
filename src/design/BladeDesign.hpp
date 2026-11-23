@@ -416,6 +416,13 @@ private:
                                       double restagger_deg = 0.0, const Vec2& axis = Vec2::Zero(),
                                       const StackingLine* stacking = nullptr);
 
+/// (Z, theta [rad]) of the first layer's reference point (CG, LE or TE of `hub` = its 2-D section) as placed
+/// by the design's current stacking, before any re-stagger.  As Z_ref, theta_ref it keeps the hub section
+/// where it is when switching to reference-point stacking, re-stagger included, and it is what the design
+/// already has once stacked on that point (idempotent).
+[[nodiscard]] Vec2 hub_reference_point(const BladeDesign& d, const Blade::FlowPath& fp, const Section2D& hub,
+                                       Stacking::Reference ref);
+
 /// Fits the custom parameters of a NACA 65 + Custom layer to its NACA section (seconds).
 void fit_layer(Layer& layer, Evaluator& ev);
 

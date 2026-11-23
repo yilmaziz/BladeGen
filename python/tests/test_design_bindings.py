@@ -142,3 +142,18 @@ def test_stacking_on_the_centre_of_gravity_variants_1_and_2():
     d["stacking"]["variant"] = "radial"
     with pytest.raises(ValueError):
         ev.evaluate(json.dumps(d))
+
+
+def test_hub_reference_point_is_idempotent_with_a_restagger():
+    # pressing "Take Z_ref, theta_ref from the current hub section" again must not move the blade
+    ev = bg.DesignEvaluator()
+    d = json.loads(bg.design_defaults())
+    d["restagger"]["angle_deg"] = 4.0
+    z, th = ev.hub_reference_point(json.dumps(d), "cg")
+    for variant in ("same_z_theta", "closest_point"):
+        d["stacking"] = {"mode": "reference_point", "variant": variant, "reference": "cg", "z_ref": z,
+                         "theta_ref_deg": th}
+        for _ in range(5):
+            z2, th2 = ev.hub_reference_point(json.dumps(d), "cg")
+            assert z2 == pytest.approx(z, abs=1e-10) and th2 == pytest.approx(th, abs=1e-10)
+            d["stacking"]["z_ref"], d["stacking"]["theta_ref_deg"] = z2, th2

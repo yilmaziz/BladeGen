@@ -9,6 +9,8 @@
 #include "OcctView.hpp"
 
 #include <QApplication>
+#include <QComboBox>
+#include <QPushButton>
 #include <QMdiSubWindow>
 #include <QSet>
 #include <QToolBox>
@@ -135,6 +137,88 @@ int main(int argc, char** argv)
             if (auto* s = qobject_cast<QMdiSubWindow*>(v->parentWidget())) s->showNormal();
             w.gridLayout(6);
             w.session().design.restagger.angle_deg = 0.0;
+            w.submit();
+            w.settle();
+        }
+        // stacking on the centre of gravity: variant 1 puts every layer's centre of gravity at Z_ref,
+        // variant 2 follows the stream-surface normals (the meridional view draws the stacking line)
+        {
+            namespace D = BladeGen::Design;
+            auto& st = w.session().design.stacking;
+            st = {D::Stacking::Mode::ReferencePoint, D::Stacking::Variant::SameZTheta, D::Stacking::Reference::CG, 0.5, 2.0};
+            w.submit();
+            w.settle();
+            for (const auto& L : w.session().result->layers)
+                if (!w.session().result->ok() || std::abs(L.cg_xr.x() - 0.5) > 1e-9) {
+                    std::fprintf(stderr, "self-test: variant 1 did not stack the centres of gravity at Z_ref\n");
+                    return 19;
+                }
+            v->setContent(Designer::Content::MeridionalContour);
+            if (auto* s = qobject_cast<QMdiSubWindow*>(v->parentWidget())) s->showMaximized();
+            QApplication::processEvents();
+            v->image().save(dir + "/meridional_stacking_v1.png");
+            st.variant = D::Stacking::Variant::ClosestPoint;
+            w.submit();
+            w.settle();
+            if (!w.session().result->ok()) {
+                std::fprintf(stderr, "self-test: variant 2 did not evaluate\n");
+                return 20;
+            }
+            QApplication::processEvents();
+            v->image().save(dir + "/meridional_stacking_v2.png");
+            if (auto* s = qobject_cast<QMdiSubWindow*>(v->parentWidget())) s->showNormal();
+            w.gridLayout(6);
+            st = {};
+            w.submit();
+            w.settle();
+        }
+        // the panel: switching from the LE / TE lines keeps a re-staggered hub section, and pressing
+        // "Take Z_ref, θ_ref from the current hub section" again and again changes nothing
+        {
+            auto& des = w.session().design;
+            des.restagger.angle_deg = 4.0;
+            w.submit();
+            w.settle();
+            const auto hub0 = w.session().result->layers.front().conformal;
+            QComboBox* mode = nullptr;
+            QPushButton* take = nullptr;
+            for (auto* cb : w.findChildren<QComboBox*>())
+                if (cb->count() > 0 && cb->itemText(0) == "prescribed LE / TE lines") mode = cb;
+            for (auto* b : w.findChildren<QPushButton*>())
+                if (b->text().startsWith("Take Z_ref")) take = b;
+            if (!mode || !take) {
+                std::fprintf(stderr, "self-test: the stacking controls were not found\n");
+                return 21;
+            }
+            for (const int variant : {1, 2}) {
+                mode->setCurrentIndex(0);
+                w.submit();
+                w.settle();
+                mode->setCurrentIndex(variant);
+                w.submit();
+                w.settle();
+                const auto& Rs = *w.session().result;
+                double moved = Rs.ok() ? 0.0 : 1e300;
+                for (std::size_t i = 0; Rs.ok() && i < hub0.size(); ++i) moved = std::max(moved, (Rs.layers.front().conformal[i] - hub0[i]).norm());
+                if (moved > 1e-9) {
+                    std::fprintf(stderr, "self-test: switching to variant %d moved the hub section by %g\n", variant, moved);
+                    return 22;
+                }
+                const double z0 = des.stacking.z_ref, t0 = des.stacking.theta_ref_deg;
+                for (int k = 0; k < 5; ++k) {
+                    take->click();
+                    w.submit();
+                    w.settle();
+                }
+                if (std::abs(des.stacking.z_ref - z0) > 1e-9 || std::abs(des.stacking.theta_ref_deg - t0) > 1e-9) {
+                    std::fprintf(stderr, "self-test: variant %d: Z_ref, theta_ref drift on repeated presses (%g, %g -> %g, %g)\n", variant,
+                                 z0, t0, des.stacking.z_ref, des.stacking.theta_ref_deg);
+                    return 23;
+                }
+            }
+            mode->setCurrentIndex(0);
+            des.restagger.angle_deg = 0.0;
+            des.stacking = {};
             w.submit();
             w.settle();
         }

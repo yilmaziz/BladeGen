@@ -112,6 +112,8 @@ public:
 
     /// (x, r) at m'; beyond the ends straight along the end tangent.
     [[nodiscard]] Vec2 xr(double mprime) const;
+    /// d(x, r)/dm' at m' (= r t, t the unit tangent; the derivative of the interpolant xr).
+    [[nodiscard]] Vec2 dxr(double mprime) const;
     /// m' -> meridional arc length m (from the LE point).
     [[nodiscard]] double m_of_mprime(double mprime) const;
     /// (x, y, z) = (x, r sin theta, r cos theta) of (m', theta [rad]).

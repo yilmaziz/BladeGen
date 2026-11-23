@@ -77,10 +77,15 @@ private:
     Knob *restagger_ = nullptr, *restagger_chord_ = nullptr;
     QComboBox* restagger_axis_ = nullptr;
     QDoubleSpinBox *restagger_z_ = nullptr, *restagger_theta_ = nullptr;
+    QComboBox *stacking_mode_ = nullptr, *stacking_ref_ = nullptr;
+    QDoubleSpinBox *stacking_z_ = nullptr, *stacking_theta_ = nullptr;
+    QPushButton* stacking_take_ = nullptr;
+    /// Z_ref, theta_ref from the current blade's first layer (its reference point stays put).
+    void takeStackingPoint();
     // layer
     QButtonGroup* layers_ = nullptr;
     QComboBox* method_ = nullptr;
-    Knob *stagger_ = nullptr, *theta_le_ = nullptr, *solidity_ = nullptr, *cl0_ = nullptr, *tc_ = nullptr;
+    Knob *stagger_ = nullptr, *theta_le_ = nullptr, *solidity_ = nullptr, *cl0_ = nullptr, *tc_ = nullptr, *chord_scale_ = nullptr;
     QComboBox* variant_ = nullptr;
     QPushButton* fit_ = nullptr;
     QLabel* fit_status_ = nullptr;

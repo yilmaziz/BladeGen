@@ -41,6 +41,14 @@ T hermite(const T& f0, const T& f1, const T& d0, const T& d1, double h, double t
     return (2 * s3 - 3 * s2 + 1) * f0 + (s3 - 2 * s2 + s) * h * d0 + (-2 * s3 + 3 * s2) * f1 + (s3 - s2) * h * d1;
 }
 
+/// Its derivative d/dt.
+template <class T>
+T hermite_d(const T& f0, const T& f1, const T& d0, const T& d1, double h, double t)
+{
+    const double s = t / h, s2 = s * s;
+    return ((6 * s2 - 6 * s) * f0 + (-6 * s2 + 6 * s) * f1) / h + (3 * s2 - 4 * s + 1) * d0 + (3 * s2 - 2 * s) * d1;
+}
+
 }  // namespace
 
 std::string to_string(WallLaw w)
@@ -171,6 +179,17 @@ Vec2 StreamSurface::xr(double mp) const
     const auto k = static_cast<std::size_t>(it - mp_.begin());
     const double h = mp_[k] - mp_[k - 1];
     return hermite<Vec2>(xr_[k - 1], xr_[k], dxr_[k - 1], dxr_[k], h, mp - mp_[k - 1]);
+}
+
+Vec2 StreamSurface::dxr(double mp) const
+{
+    if (cylindrical_) return {r0_, 0.0};
+    if (mp <= mp_.front()) return dxr_.front();
+    if (mp >= mp_.back()) return dxr_.back();
+    const auto it = std::upper_bound(mp_.begin(), mp_.end(), mp);
+    const auto k = static_cast<std::size_t>(it - mp_.begin());
+    const double h = mp_[k] - mp_[k - 1];
+    return hermite_d<Vec2>(xr_[k - 1], xr_[k], dxr_[k - 1], dxr_[k], h, mp - mp_[k - 1]);
 }
 
 double StreamSurface::m_of_mprime(double mp) const

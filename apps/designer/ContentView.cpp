@@ -647,11 +647,15 @@ void ContentView::buildPlot(bool refit)
                     }
                 plot_->setColorBar(true, lo, hi, content_ == Content::MeridionalBeta ? "metal angle β [deg]" : "thickness t / c", cmap);
             }
-        } else if (R->ok()) {
+        } else if (R->ok() && !R->blade_le.empty()) {
+            // the blade between its rows' placed LE and TE (off the LE / TE lines when stacked on a point or re-staggered)
+            // hub camber LE -> TE, the TE up, the tip camber TE -> LE, the LE down
             QPolygonF blade;
-            const auto& h = R->layers.front(), &c = R->layers.back();
-            for (const auto& p : h.camber_xr) blade << QPointF(p.x(), p.y());
-            for (auto it = c.camber_xr.rbegin(); it != c.camber_xr.rend(); ++it) blade << QPointF(it->x(), it->y());
+            for (const auto& p : R->layers.front().camber_xr) blade << QPointF(p.x(), p.y());
+            for (const auto& p : R->blade_te) blade << QPointF(p.x(), p.y());
+            const auto& tip = R->layers.back().camber_xr;
+            for (auto it = tip.rbegin(); it != tip.rend(); ++it) blade << QPointF(it->x(), it->y());
+            for (auto it = R->blade_le.rbegin(); it != R->blade_le.rend(); ++it) blade << QPointF(it->x(), it->y());
             F << Fill{blade, QColor(225, 232, 250)};
         }
         auto poly = [&](const std::vector<Math::Vec2>& p, const QString& name, QColor col, double w, Qt::PenStyle st, bool legend) {
@@ -670,6 +674,15 @@ void ContentView::buildPlot(bool refit)
             poly(R->streamlines[j], layerName(j) + " layer", layerColor(j), 1.0, Qt::DashLine, content_ == Content::MeridionalContour);
         poly(R->le_line, "LE / TE lines", QColor(0, 0, 200), 1.2, Qt::SolidLine, true);
         poly(R->te_line, "LE / TE lines", QColor(0, 0, 200), 1.2, Qt::SolidLine, false);
+        if (D.stacking.mode == Design::Stacking::Mode::ReferencePoint && R->ok()) {
+            const auto& st = D.stacking;
+            const QString ref = st.reference == Design::Stacking::Reference::CG ? "centre of gravity"
+                                : st.reference == Design::Stacking::Reference::LE ? "LE" : "TE";
+            poly(R->stacking_xr, QString("stacking line (%1, variant %2)").arg(ref).arg(st.variant == Design::Stacking::Variant::SameZTheta ? 1 : 2),
+                 Qt::black, 1.6, Qt::DashDotLine, true);
+            for (std::size_t j = 0; j < R->layers.size(); ++j)
+                M << PointMarker{QPointF(R->layers[j].stack_xr.x(), R->layers[j].stack_xr.y()), Qt::black, 's', QString(), 3.5, 1.4};
+        }
         const auto& m = D.meridional;
         for (const auto* w : {&m.hub, &m.casing}) {
             M << PointMarker{QPointF(w->z_le, w->r_le), Qt::black, 's', QString("Z %1  R %2").arg(w->z_le).arg(w->r_le)};
@@ -1003,7 +1016,7 @@ void ContentView::buildTable()
                          "θ LE [deg]", "θ TE [deg]", "mapping", "R LE [mm]", "R TE [mm]", "conformal chord c'", "meridional length LE→TE [mm]",
                          "chord [mm]", "pitch at LE [mm]", "solidity (3-D, n_blades)", "solidity (2-D input)", "t_max / c", "x/c of t_max",
                          "LE radius / c", "TE radius / c", "area [mm²]", "centre of gravity Z [mm]", "centre of gravity R [mm]",
-                         "centre of gravity θ [deg]", "quality", "fit RMS / deviation [% c]",
+                         "centre of gravity θ [deg]", "stacking point Z [mm] / θ [deg]", "chord scale", "quality", "fit RMS / deviation [% c]",
                          "NACA 65 equivalent arc: γ + χ LE / γ − χ TE [deg]"};
     auto column = [&](std::size_t j) {
         QStringList v;
@@ -1023,6 +1036,8 @@ void ContentView::buildTable()
           << num(l.solidity, 4) << num(sec.camber.max_thickness, 4) << num(sec.camber.max_thickness_x, 4) << num(sec.le_radius, 4)
           << num(sec.te_radius, 4) << num(L.section_area, 5) << num(L.cg_xr.x(), 6) << num(L.cg_xr.y(), 6)
           << num(Math::rad2deg(L.cg_theta), 6)
+          << QString("%1 / %2").arg(num(L.stack_xr.x(), 6), num(Math::rad2deg(L.stack_point.y()), 6))
+          << (D.stacking.mode == Design::Stacking::Mode::ReferencePoint ? num(l.chord_scale, 4) : QString("— (LE / TE lines)"))
           << (ne ? QString("%1 error(s)").arg(ne) : nw ? QString("%1 warning(s)").arg(nw) : QString("OK"))
           << (sec.deviation_rms ? num(100.0 * *sec.deviation_rms, 3) : l.fitted_to ? num(100.0 * l.fit_rms, 3) : QString("—"))
           << (sec.equivalent_arc_deg ? QString("%1 / %2").arg(num(l.stagger_deg + (*sec.equivalent_arc_deg)[0], 5), num(l.stagger_deg - (*sec.equivalent_arc_deg)[1], 5))

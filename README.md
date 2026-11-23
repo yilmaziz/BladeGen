@@ -137,7 +137,7 @@ All builds use `-Wall -Wextra -Wpedantic -Wconversion …` / `/W4` with warnings
 | | |
 |---|---|
 | NACA 65 series | parametric NACA 65-(Cl0 A10) t/c, Kovach–Sandercock and Emery variants, C2 monotone-curvature LE; migrated from TURBOlenza and equal to its frozen C2 geometry to 5·10⁻⁸ c (Emery) |
-| BladeGen Designer | `tools/designer.cmd` / `tools/designer.sh`: C++ / Qt MDI views, meridional channel (Bell & Mehta / linear), five layers, NACA 65 / Custom / NACA 65 + Custom, draggable control points, live curvature, metal-angle contour, meshed 3-D blade, OpenCASCADE solid view (single blade or annulus; wireframe / solid / shaded), whole-blade re-stagger, 6 / 4 / 2 view layouts, STEP export |
+| BladeGen Designer | `tools/designer.cmd` / `tools/designer.sh`: C++ / Qt MDI views, meridional channel (Bell & Mehta / linear), five layers, NACA 65 / Custom / NACA 65 + Custom, draggable control points, live curvature, metal-angle contour, meshed 3-D blade, OpenCASCADE solid view (single blade or annulus; wireframe / solid / shaded), whole-blade re-stagger, stacking on the LE / TE lines or on a reference point (centre of gravity, LE, TE; DLR variants 1 and 2), 6 / 4 / 2 view layouts, STEP export |
 | Profile engine | port of blade2d (DLR-style characteristic points, SS B-spline, thickness-coupled PS), verified against the Python engine to 2·10⁻⁶ chord |
 | Continuity | curvature-continuous (G2) at all four junctions by construction, C4 inside the connectors; a parametric-C2 mode is available |
 | Quality check | curvature of SS and PS **from the LE point to the TE point**, S-shaped edges, inflections, curvature oscillation, self-intersection, thickness — reported as errors / warnings, the geometry is still built |
@@ -314,6 +314,18 @@ OpenCASCADE interface; their Fig. 15) is BladeGen's: `src/` library, `apps/` exe
   rigidly in its conformal plane about the point where the axis crosses its stream surface: the map
   (m′, θ) = P + R(Δγ)(nominal − P). The sections stay on their stream surfaces, the chord c′ is kept, and every
   metal angle changes by exactly Δγ.
+* **Stacking of the sections** (Initial Meridional Configuration; Vos et al. 2025, Sec. 4).
+  - *Prescribed LE / TE lines* (the default): every LE on the meridional LE line and every TE on the TE line,
+    so the chord is c′ = m′_TE / cos γ.
+  - *Reference point*: the centre of gravity, the LE or the TE of every section lands on a target (m′_k, θ_ref).
+    The chord is free: c′ = chord scale × m′_TE / cos γ. The placement is
+    (m′, θ) = T_k + c′ R(γ) diag(1, σ) ((ξ, η) − q_ref), with q_ref the reference point in the profile frame.
+  - *Variant 1*: m′_k from x_k(m′) = Z_ref, so the stacking line is radial.
+  - *Variant 2*: m′_k from (C_k(m′) − Q_{k−1})·dC_k/dm′ = 0, the point closest to the previous layer's
+    reference point. The line follows the stream-surface normals.
+  - The rows between the layers take Z of their reference point from a natural spline in span.
+  - The centre of gravity (the area centroid in the (m, r θ) plane) is put on its target by a fixed-point
+    shift of the section, converged to 1e-13.
 * **3D Solid (OpenCASCADE)** view (toolbar *3D Solid*, or any view's right-click menu). It shows the blade with
   hub and casing in OCCT's own viewer (V3d / AIS, OpenGL), rendered offscreen into the MDI window.
   - *Design mesh* (the default) updates with every change, in 3–11 ms. It is the design's mesh rows as
@@ -470,10 +482,16 @@ function is tested against a closed form, a published value or its defining equa
 * re-stagger: the placement map in closed form; about the hub LE, mid span, tip, hub TE and an arbitrary point,
   every layer is the nominal one rotated by Δγ about the axis crossing point and every metal angle is +Δγ;
   invalid input; JSON;
+* stacking: dC/dm′ against finite differences (|dC/dm′| = r); the closest point against a 200 000-point scan;
+  the edges mode equal to the v1.0.3 placement; variant 1 with the centre of gravity, the LE and the TE all at
+  (Z_ref, θ_ref) on every layer and mesh row; variant 2's closest-point condition on every layer; both variants
+  identical on cylindrical walls; the chord scale; a re-stagger of a stacked blade rigid about its axis;
+  invalid input; JSON;
 * solid view geometry: the annulus copies are exact rotations by k pitches (volume and centroid checked), the
   walls lie on the hub and casing contours, and the 360° walls have n_blades times the area of one pitch;
 * designer: `bladegen_designer --self-test` renders every view content for every layer offscreen. It also
-  checks that a stagger change and a 3° re-stagger reach the metal angle, builds the OCCT solid and renders it
+  checks that a stagger change and a 3° re-stagger reach the metal angle, that variant 1 stacks every
+  centre of gravity at Z_ref, builds the OCCT solid and renders it
   where OpenGL is available, and gets equal cells from the 6, 4 and 2 view layouts. A bad design file fails
   cleanly.
 

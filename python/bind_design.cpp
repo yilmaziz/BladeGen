@@ -74,6 +74,10 @@ py::dict result_dict(const D::DesignResult& r)
             l["cg_r"] = L.cg_xr.y();
             l["cg_theta_deg"] = Math::rad2deg(L.cg_theta);
             l["cg_mprime"] = L.cg_mprime;
+            l["stack_mprime"] = L.stack_point.x();
+            l["stack_theta_deg"] = Math::rad2deg(L.stack_point.y());
+            l["stack_z"] = L.stack_xr.x();
+            l["stack_r"] = L.stack_xr.y();
             l["theta_le_deg"] = Math::rad2deg(L.theta_le);
             l["chord"] = L.chord;
             l["r_le"] = L.r_le;
@@ -107,6 +111,10 @@ py::dict result_dict(const D::DesignResult& r)
         d["hub_wall"] = grid_np(r.hub_wall);
         d["casing_wall"] = grid_np(r.casing_wall);
         d["row_span"] = to_np(r.row_span);
+        d["blade_le"] = to_np<2>(r.blade_le);
+        d["blade_te"] = to_np<2>(r.blade_te);
+        d["stacking_xr"] = to_np<2>(r.stacking_xr);
+        d["stacking_xyz"] = to_np<3>(r.stacking_xyz);
         d["beta_field"] = field_dict(r.beta);
         d["thickness_field"] = field_dict(r.thickness);
     }
@@ -178,6 +186,13 @@ void bind_design(py::module_& m)
             }
             return result_dict(r);
         }, py::arg("design_json"), "Evaluate a design given as its JSON text; returns a dict of numpy arrays")
+        .def("hub_reference_point", [](D::Evaluator& ev, const std::string& design_json, const std::string& reference) {
+            const auto d = D::design_from_json(nlohmann::json::parse(design_json));
+            const Blade::FlowPath fp(d.meridional);
+            const auto p = D::hub_reference_point(d, fp, *ev.section(d.layers.front(), d.mesh), D::stacking_reference_from_string(reference));
+            return py::make_tuple(p.x(), Math::rad2deg(p.y()));
+        }, py::arg("design_json"), py::arg("reference") = "cg",
+           "(Z_ref [mm], theta_ref [deg]) of the hub section's reference point before any re-stagger")
         .def("write_step", [](D::Evaluator& ev, const std::string& design_json, const std::string& path) {
             const auto d = D::design_from_json(nlohmann::json::parse(design_json));
             py::gil_scoped_release nogil;

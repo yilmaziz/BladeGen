@@ -1,8 +1,43 @@
 # Changelog
 
-## v1.0.4 — `bladegen export-sections`: versioned JSON of section points
+## v1.0.4 — Stacking on a reference point (DLR variants 1 and 2, centre of gravity) and `bladegen export-sections`
 
 ### New
+- **Stacking of the sections** (Initial Meridional Configuration; Vos et al. 2025, Sec. 4). Two ways to fix
+  where each section sits on its stream surface:
+  - **prescribed LE / TE lines** (Sec. 4.2): what BladeGen did up to v1.0.3, and still the default. Each
+    section's LE sits on the meridional LE line and its TE on the TE line, so the chord follows.
+  - **reference point** (Sec. 4.1): each section's **centre of gravity**, **LE** or **TE** sits on a stacking
+    line, and the chord is free. Two variants place the reference points:
+    - **variant 1, same Z and θ**: every reference point at (Z_ref, θ_ref), so the stacking line is the
+      radial line through that point. With the centre of gravity this is the radial CG stack.
+    - **variant 2, closest point**: each layer's reference point is the point of its streamline closest to
+      the previous layer's, at the same θ. It solves (C(m′) − Q)·dC/dm′ = 0, so the line follows the normals
+      of the stream surfaces. In the default flaring channel the tip centre of gravity is then 4.7 mm
+      downstream of variant 1's.
+
+    On cylindrical walls both variants give the same blade.
+  - The centre of gravity is the physical one, the area centroid on the stream surface. The conformal map
+    does not carry it over from the profile's own frame except on cylinders, so the section is shifted until
+    its centre of gravity is on the target. On the default hub the correction is 0.011 in m′ (about 0.4 mm).
+  - *Take Z_ref, θ_ref from the current hub section* (also done automatically when you switch from the LE /
+    TE lines) keeps the hub section where it is. It takes the hub's reference point before the re-stagger, so a
+    re-staggered hub stays put too, and pressing it again changes nothing.
+  - A reference point may lie anywhere on the stream surface, extensions included. A point outside the
+    channel is reported as a design error.
+- **Chord scale** per layer (Layers and Profiles → Placement): with reference-point stacking,
+  c′ = scale × the chord of the prescribed edges. θ LE (lean) is not used there; θ_ref places the sections.
+- The **Meridional Contour View** draws the stacking line (dash-dot) with the layers' reference points. It
+  fills the blade between its actual LE and TE, which leave the LE / TE lines when the blade is stacked on a
+  point or re-staggered.
+- The information tables give each layer's stacking point (Z, θ) and chord scale.
+- The re-stagger axis through the hub, mid-span or tip section follows the stacked section.
+- Design files: a `"stacking"` block (`mode`, `variant`, `reference`, `z_ref`, `theta_ref_deg`) and each
+  layer's `chord_scale`. Files without them load with the prescribed edges, as before.
+- Python:
+  - `stack_z`, `stack_r`, `stack_theta_deg` and `stack_mprime` for each layer;
+  - `blade_le`, `blade_te`, `stacking_xr` and `stacking_xyz` for the mesh rows;
+  - `DesignEvaluator.hub_reference_point(design_json, reference)`: the (Z_ref, θ_ref) of the button above.
 - **`bladegen export-sections`** writes the section points as JSON, `"format": "bladegen.sections"`,
   `"version": 1`, for tools that read BladeGen geometry (first user: the ENIGMAgrid mesher). Two inputs:
   - a blade design (`BladeDefinition` JSON, e.g. `data/rotor67/rotor67_bladegen.json`) at span fractions
@@ -34,7 +69,20 @@
   `IO::export_design_sections`, `IO::export_naca65_cascade`, `IO::dump_sections` (`src/io/SectionExport`).
 
 ### Tests
-- The format and version fields; the point counts, order and pieces; both sides share the LE and TE points.
+- Stacking (`tests/design/test_stacking.cpp`):
+  - dC/dm′ against finite differences, with |dC/dm′| = r;
+  - the closest point against a 200 000-point scan;
+  - the LE / TE-lines mode equal to the v1.0.3 placement;
+  - variant 1 with the centre of gravity, the LE and the TE at (Z_ref, θ_ref) on every layer and mesh row;
+  - variant 2's closest-point condition on every layer;
+  - both variants identical on cylindrical walls;
+  - the chord scale;
+  - a re-stagger of a stacked blade rigid about its axis;
+  - *Take Z_ref, θ_ref* idempotent with a re-stagger;
+  - invalid input and JSON.
+
+  The designer self-test also clicks the real button five times.
+- Section export: the format and version fields; the point counts, order and pieces; both sides share the LE and TE points.
 - Every double of both kinds of file reads back bit-identical, through a string and through a file; awkward
   values (0.1, 1/3, subnormal, the largest double, −0) as well. Non-finite numbers are refused.
 - Rotor 67 hub: the written streamline is the channel's hub curve, point for point (bit-identical, the same
@@ -58,6 +106,7 @@
 - The NACA 65 section is BladeGen's (curvature-continuous G2 joints, C4 body; see the NACA 65 section of the
   README for its agreement with TURBOlenza's C2 geometry). `--stations` is the number of body points per side
   (cosine-clustered in √x), not a camber-station table.
+
 
 ## v1.0.3 — Blade Sections view (M-R·Theta, Z-R·Theta, axial X-Y) and centres of gravity
 

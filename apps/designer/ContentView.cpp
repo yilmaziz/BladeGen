@@ -850,7 +850,7 @@ void ContentView::build3D(bool refit)
     for (int i = 0; i <= n; ++i) tip.p.push_back({R->blade.at(i, j).x(), R->blade.at(i, j).y(), R->blade.at(i, j).z()});
     L.push_back(tip);
     // centres of gravity: the sections' (dashed line) and the blade's (cross)
-    const QColor cgc(150, 0, 170);
+    const QColor cgc(0, 0, 0);
     Line3D cgl;
     cgl.color = cgc;
     cgl.style = Qt::DashLine;

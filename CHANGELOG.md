@@ -25,6 +25,14 @@
     `blade_volume` and `blade_cg` for the design.
 - The information tables' area is the section's area on its stream surface; it was the chord-frame area
   scaled by the chord squared.
+- The axis triads of the 3D View and the 3D Solid view are labelled in the designer's machine convention:
+  - **Z axial**, as in the meridional input;
+  - **X = r sin θ** and **Y = r cos θ**, as in the axial view;
+  - X red, Y green, Z blue.
+
+  They were labelled with the internal frame, where x is axial. Only the labels change (a cyclic relabelling,
+  still right-handed); the geometry, the STEP / OBJ exports and the Python arrays keep the internal
+  (axial, r sin θ, r cos θ) order.
 
 ### Fixed
 - Re-staggered blades: the blade-to-blade view drew the camber line and the TE marker from the LE line rather

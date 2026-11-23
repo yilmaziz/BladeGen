@@ -1,6 +1,7 @@
 // DesignerWindow: the BladeGen designer main window (MDI).  Views are sub-windows whose
 // content is picked from their right-click menu; the parameter panel and the issue list
-// are docks.  Geometry runs on the Engine thread; every view redraws when it finishes.
+// are docks.  Geometry runs on the Engine thread; every view redraws when it finishes.  The
+// TURBOlenza menu opens the blade-to-blade solver in its own window (turbolenza/TurbolenzaWindow).
 #pragma once
 
 #include "ContentView.hpp"
@@ -17,6 +18,7 @@ class QLabel;
 namespace Designer {
 
 class ParameterPanel;
+class TurbolenzaWindow;
 
 class DesignerWindow : public QMainWindow
 {
@@ -39,6 +41,8 @@ public:
     [[nodiscard]] QList<ContentView*> views() const;
     /// Sends the session design to the engine.
     void submit();
+    /// Opens (or raises) the TURBOlenza window (menu TURBOlenza > TURBOlenza...).
+    TurbolenzaWindow* openTurbolenza();
 
 protected:
     void closeEvent(QCloseEvent* e) override;
@@ -70,6 +74,7 @@ private:
     QFutureWatcher<QString>* fit_watch_;
     bool dirty_ = false;
     int grid_n_ = 0;  ///< the equal-size grid in use (0: none)
+    TurbolenzaWindow* turbolenza_ = nullptr;
 };
 
 }  // namespace Designer

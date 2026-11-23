@@ -106,9 +106,9 @@ TEST_CASE("export-sections: format, version and the fields of a blade design", "
     REQUIRE(j["units"]["angle"] == "rad");
     REQUIRE(j["n_blades"] == 22);
     REQUIRE(j["pitch_angle"].get<double>() == 2.0 * Math::kPi / 22.0);
-    for (const char* w : {"hub", "shroud"}) REQUIRE(j["channel"][w]["zr"].size() == 201);
+    for (const char* w : {"hub", "shroud"}) REQUIRE(j["channel"][w]["zr"].size() == 2001);
     // hub below the shroud everywhere (z, r)
-    for (std::size_t i = 0; i < 201; ++i) REQUIRE(j["channel"]["hub"]["zr"][i][1] < j["channel"]["shroud"]["zr"][i][1]);
+    for (std::size_t i = 0; i < 2001; i += 10) REQUIRE(j["channel"]["hub"]["zr"][i][1] < j["channel"]["shroud"]["zr"][i][1]);
 
     REQUIRE(j["sections"].size() == 1);
     const auto& s = j["sections"][0];
@@ -189,56 +189,137 @@ TEST_CASE("export-sections: every double reads back bit-identical", "[export]")
                       std::invalid_argument);
 }
 
-TEST_CASE("export-sections: (m', theta) and (z, r, theta) are one evaluation of BladeGen's transform", "[export]")
-{
-    const auto j = ordered_json::parse(IO::dump_sections(rotor67_hub()));
-    const auto& s = j["sections"][0];
-    const Blade::Blade blade(rotor67());
-    const auto sl = blade.streamline_at(0.0);
-    const auto sec = blade.section(0.0, 40, 160);
-    const std::size_t ite = 2 * 40 + 160 - 3;
-    REQUIRE(sec.xyz.size() == 2 * ite + 1);
+namespace {
 
+/// Every (m', theta) point of a written section against (z, r, theta): BladeGen's own
+/// transform m' -> m -> (z, r) on `sl`, the curve the streamline was written from.  The 3-D
+/// points are within `max_move` of BladeGen's 3-D section (0: the same points).
+void check_pairs(const ordered_json& s, const Blade::MeridionalCurve& sl, const Blade::Section3D& sec, double max_move)
+{
+    const std::size_t ite = (sec.xyz.size() - 1) / 2;
     for (const char* side : {"suction_side", "pressure_side"}) {
         const bool ss = std::string(side) == "suction_side";
         const auto& mt = s[side]["mprime_theta"];
         const auto& zrt = s[side]["zrtheta"];
+        REQUIRE(mt.size() == ite + 1);
         for (std::size_t i = 0; i < mt.size(); ++i) {
             const double mp = mt[i][0], th = mt[i][1];
             const double z = zrt[i][0], r = zrt[i][1], th3 = zrt[i][2];
             REQUIRE(th3 == th);  // the same theta
-            // BladeGen's transform m' -> m -> (z, r) on the section's streamline
             const Vec2 p = sl.at_m(sl.m_of_mprime(mp));
             REQUIRE(z == Approx(p.x()).margin(1e-14));
             REQUIRE(r == Approx(p.y()).margin(1e-14));
-            // and its inverse: m' of the point's m
             REQUIRE(sl.mprime_of_m(sl.m_of_mprime(mp)) == Approx(mp).margin(1e-11));
-            // the same point as the 3-D section of the skin (Cartesian, axis = x)
             const std::size_t k = ss ? i : (i == 0 ? 0 : 2 * ite - i);
             const Vec3 x = Blade::cartesian(z, r, th);
-            REQUIRE((x - sec.xyz[k]).norm() < 1e-14);
-            // and the same (m', theta) as Blade::section
-            REQUIRE((Vec2(mp, th) - sec.conformal[k]).norm() < 1e-15);
+            if (max_move == 0.0) {
+                REQUIRE((x - sec.xyz[k]).norm() < 1e-14);
+                REQUIRE((Vec2(mp, th) - sec.conformal[k]).norm() < 1e-15);
+            } else {
+                // moved onto the written curve, to the foot point: the offset is normal to it
+                const Vec2 q = sec.streamline.at_m(sec.streamline.m_of_mprime(sec.conformal[k].x()));
+                const Vec2 off = q - p;
+                REQUIRE(off.norm() <= max_move);
+                REQUIRE(std::abs(off.dot(sl.tangent_at_m(sl.m_of_mprime(mp)))) < 1e-12);
+                REQUIRE(th == sec.conformal[k].y());
+            }
         }
     }
+    // LE / TE and the placement values describe the written points
+    const Vec2 le = v2(s["leading_edge"]["mprime_theta"]), te = v2(s["trailing_edge"]["mprime_theta"]);
+    REQUIRE(le.x() == Approx(s["mprime_le"].get<double>()).margin(1e-12));
+    REQUIRE(te.x() == Approx(s["mprime_te"].get<double>()).margin(1e-12));
+    REQUIRE(s["m_le_fraction"].get<double>() * sl.length() == Approx(sl.m_of_mprime(le.x())).margin(1e-12));
+    REQUIRE(s["m_te_fraction"].get<double>() * sl.length() == Approx(sl.m_of_mprime(te.x())).margin(1e-12));
+}
 
-    // the written streamline: m' = int dm / r by the trapezoidal rule over its own table
-    const auto& st = s["streamline"];
-    REQUIRE(st["zr"].size() == 201);
-    REQUIRE(st["mprime"][0].get<double>() == Approx(0.0).margin(1e-15));
+/// The written streamline: inlet to outlet of `sl`, equal steps in m no larger than
+/// `max_step`, and m' = int dm / r by the trapezoidal rule over its own table, whole range.
+void check_streamline(const ordered_json& st, const Blade::MeridionalCurve& sl, double max_step)
+{
+    const std::size_t n = st["zr"].size();
+    REQUIRE(st["n_points"] == n);
+    REQUIRE(st["m"].size() == n);
+    REQUIRE(st["mprime"].size() == n);
+    REQUIRE(st["m"][0].get<double>() == 0.0);
+    REQUIRE(st["mprime"][0].get<double>() == Approx(0.0).margin(1e-15));  // m' = 0 at the inlet
+    REQUIRE(st["m"].back().get<double>() == Approx(sl.length()).margin(1e-15));
     double integral = 0.0, worst = 0.0;
-    for (std::size_t i = 1; i < st["zr"].size(); ++i) {
+    for (std::size_t i = 1; i < n; ++i) {
         const double dm = st["m"][i].get<double>() - st["m"][i - 1].get<double>();
+        REQUIRE(dm <= max_step);
         integral += 0.5 * dm * (1.0 / st["zr"][i][1].get<double>() + 1.0 / st["zr"][i - 1][1].get<double>());
         worst = std::max(worst, std::abs(integral - st["mprime"][i].get<double>()));
-        // m is the arc length of the (z, r) polyline (to the chord-arc difference)
         const double chord = (v2(st["zr"][i]) - v2(st["zr"][i - 1])).norm();
-        REQUIRE(dm == Approx(chord).epsilon(1e-5));
+        REQUIRE(dm == Approx(chord).epsilon(1e-6));
     }
-    REQUIRE(worst < 1e-6 * st["mprime"].back().get<double>());
-    // the section's LE m' on that streamline
-    REQUIRE(s["mprime_le"].get<double>() ==
-            Approx(sl.mprime_of_m(s["m_le_fraction"].get<double>() * sl.length())).margin(1e-14));
+    REQUIRE(worst < 1e-7 * st["mprime"].back().get<double>());
+}
+
+}  // namespace
+
+TEST_CASE("export-sections: Rotor 67 hub on the channel's hub curve, inlet to outlet", "[export]")
+{
+    const auto j = ordered_json::parse(IO::dump_sections(rotor67_hub()));
+    const auto& s = j["sections"][0];
+    const auto& hub = rotor67().channel.hub();
+    const Blade::Blade blade(rotor67());
+    const auto sec = blade.section(0.0, 40, 160);
+
+    // the streamline is the hub curve itself (one curve, so to round-off), over its whole
+    // length, and no coarser than the former blade-length table (201 points, 0.47 mm)
+    const auto& st = s["streamline"];
+    REQUIRE(st["zr"].size() == 2001);
+    for (std::size_t i = 0; i < st["zr"].size(); ++i) {
+        const double m = st["m"][i];
+        REQUIRE((v2(st["zr"][i]) - hub.at_m(m)).norm() == 0.0);
+        REQUIRE(st["mprime"][i].get<double>() == hub.mprime_of_m(m));
+        REQUIRE(v2(st["zr"][i]) == v2(j["channel"]["hub"]["zr"][i]));  // the channel table: the same points
+    }
+    REQUIRE(st["zr"].front()[0].get<double>() < -0.18);  // inlet, upstream of the blade (LE at z ~ 0)
+    REQUIRE(st["zr"].back()[0].get<double>() > 0.35);    // outlet
+    check_streamline(st, hub, 0.47e-3);
+
+    // the section points: moved from the published section-1 surface onto the hub curve
+    // (TP-2879 tables: the two curves are ~10 um apart); (m', theta) <-> (z, r, theta) exact on it
+    check_pairs(s, hub, sec, 1.5e-5);
+    // m' from the inlet: the LE lies about 0.18 m downstream of it
+    REQUIRE(s["mprime_le"].get<double>() > 1.5);
+    REQUIRE(s["m_le_fraction"].get<double>() > 0.3);
+}
+
+TEST_CASE("export-sections: a channel design's sections are BladeGen's own, inlet to outlet", "[export]")
+{
+    auto def = Blade::BladeDefinition::demo_rotor();
+    def.channel = Blade::MeridionalChannel::straight(-0.1, 0.25, 0.25, 0.27, 0.40, 0.395);  // with inlet / outlet
+    IO::DesignExportOptions o;
+    o.spans = {0.0, 0.5, 1.0};
+    const auto j = ordered_json::parse(IO::dump_sections(IO::export_design_sections(def, o, "demo", "test")));
+    const Blade::Blade blade(def);
+    for (std::size_t k = 0; k < 3; ++k) {
+        const double span = o.spans[k];
+        const auto& s = j["sections"][k];
+        const auto sl = blade.streamline_at(span);
+        const auto sec = blade.section(span, 40, 160);
+        check_pairs(s, sl, sec, 0.0);  // BladeGen's own points, unchanged
+        check_streamline(s["streamline"], sl, 0.47e-3);
+        // the streamline written is the one BladeGen placed the section on (one curve, to round-off)
+        for (std::size_t i = 0; i < s["streamline"]["zr"].size(); i += 50)
+            REQUIRE((v2(s["streamline"]["zr"][i]) - sl.at_m(s["streamline"]["m"][i].get<double>())).norm() == 0.0);
+        REQUIRE(s["streamline"]["zr"].front()[0].get<double>() == Approx(-0.1).margin(1e-12));
+        REQUIRE(s["streamline"]["zr"].back()[0].get<double>() == Approx(0.25).margin(1e-12));
+        REQUIRE(s["mprime_le"].get<double>() == sec.mprime_le);
+        REQUIRE(s["chord_mprime"].get<double>() == sec.chord_mprime);
+    }
+    // span 0 of a channel design: BladeGen's channel streamline at span 0 against the hub curve
+    const auto sl0 = blade.streamline_at(0.0);
+    double worst = 0.0;
+    for (std::size_t i = 0; i < j["sections"][0]["streamline"]["zr"].size(); ++i) {
+        const double m = j["sections"][0]["streamline"]["m"][i];
+        const double mh = m * def.channel.hub().length() / sl0.length();
+        worst = std::max(worst, (sl0.at_m(m) - def.channel.hub().at_m(mh)).norm());
+    }
+    REQUIRE(worst < 1e-9);
 }
 
 TEST_CASE("export-sections: NACA 65 cascade chord, stagger and pitch from the points", "[export]")

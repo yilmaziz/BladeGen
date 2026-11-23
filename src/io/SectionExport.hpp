@@ -10,7 +10,11 @@
 ///    (z, r, theta) on the section's stream surface, from one evaluation: the points are
 ///    Blade::section()'s loop (Profile2D::sample_loop, the layout of the 3-D skin), with
 ///    (z, r) = streamline(m(m')) exactly as SectionMap::cartesian computes it.  The section's
-///    streamline is written with its m and m' tables, and the hub / shroud channel in (z, r).
+///    streamline is written over the whole channel, inlet to outlet, with its m and m' tables
+///    (m = m' = 0 at the inlet), and the hub / shroud channel in (z, r).  A design with its own
+///    blade-length section streamlines (Rotor 67) gets the channel's streamline instead (hub
+///    curve at span 0, shroud curve at span 1), and its section points are moved onto it, to
+///    their foot points in (z, r), theta kept.
 ///  * "naca65_cascade": a planar NACA 65 cascade section in cascade coordinates (axial x,
 ///    tangential y), scaled by the chord, staggered about the LE point and with the pitch
 ///    chord / solidity.
@@ -44,7 +48,7 @@ struct DesignExportOptions
     std::vector<double> spans{0.0};  ///< span fractions in [0, 1]; 0 = hub section
     int n_edge = 40;                 ///< points per half edge connector (Profile2D::sample_loop)
     int n_body = 160;                ///< points on each side's body
-    int n_channel = 201;             ///< points of the hub / shroud and streamline tables (equal steps in m)
+    int n_channel = 2001;            ///< points of the hub / shroud and streamline tables (equal steps in m)
 };
 
 /// A planar NACA 65 cascade.

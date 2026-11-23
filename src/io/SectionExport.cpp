@@ -35,6 +35,46 @@ void check_counts(int n_edge, int n_body, const char* what)
     if (n_edge < 2 || n_body < 2) throw std::invalid_argument(std::string(what) + ": need >= 2 points per piece");
 }
 
+/// The stream surface written for a section: the whole channel, inlet to outlet.
+///  * Designs without their own section streamlines: Blade::streamline_at(span), the
+///    channel streamline on which BladeGen places the section itself.
+///  * Designs with their own (blade-length) section streamlines, e.g. Rotor 67, whose
+///    published section surfaces stop at the blade: the channel's hub curve at span 0, its
+///    shroud curve at span 1, the channel streamline in between.  BladeGen's section points
+///    are then moved onto that curve (foot_m).
+///  * Own streamlines and no channel: the section's own streamline (blade extent only).
+struct ExportSurface
+{
+    Blade::MeridionalCurve curve;
+    bool moved = false;  ///< section points moved from their own streamline onto `curve`
+};
+
+ExportSurface export_surface(const Blade::BladeDefinition& def, const Blade::Blade& blade, double span)
+{
+    const bool own = def.stations.front().streamline.has_value();
+    if (!own || def.channel.hub().empty()) return {blade.streamline_at(span), false};
+    if (span == 0.0) return {def.channel.hub(), true};
+    if (span == 1.0) return {def.channel.shroud(), true};
+    return {def.channel.streamline(span), true};
+}
+
+/// Meridional distance m of the foot point of q on the curve: Gauss-Newton on
+/// (P(m) - q) . T(m) = 0, started from the nearest tabulated point.
+double foot_m(const Blade::MeridionalCurve& c, const std::vector<double>& m_tab, const std::vector<Vec2>& p_tab,
+              const Vec2& q)
+{
+    std::size_t best = 0;
+    for (std::size_t i = 1; i < p_tab.size(); ++i)
+        if ((p_tab[i] - q).squaredNorm() < (p_tab[best] - q).squaredNorm()) best = i;
+    double m = m_tab[best];
+    for (int it = 0; it < 60; ++it) {
+        const double dm = (q - c.at_m(m)).dot(c.tangent_at_m(m));
+        m += dm;
+        if (std::abs(dm) <= 1e-15 * c.length()) break;
+    }
+    return m;
+}
+
 }  // namespace
 
 ordered_json export_design_sections(const Blade::BladeDefinition& def, const DesignExportOptions& opt,
@@ -46,6 +86,9 @@ ordered_json export_design_sections(const Blade::BladeDefinition& def, const Des
     for (double s : opt.spans)
         if (!(s >= 0.0 && s <= 1.0)) throw std::invalid_argument("export_design_sections: span must lie in [0, 1]");
     const Blade::Blade blade(def);  // validates the definition
+    const bool own = def.stations.front().streamline.has_value();
+    const bool full = !own || !def.channel.hub().empty();
+    const bool moved = own && full;
 
     ordered_json j;
     j["format"] = kSectionsFormat;
@@ -60,15 +103,32 @@ ordered_json export_design_sections(const Blade::BladeDefinition& def, const Des
                   "internal (x axial, y, z) frame, theta = 0 on its +z axis; in the designer's machine labels "
                   "(Z axial, X = r sin(theta), Y = r cos(theta)) theta turns from +Y toward +X, i.e. clockwise seen "
                   "from downstream (from +Z looking toward -Z)"},
-        {"mprime", "m' = integral of dm / r along the section's streamline, measured from its first point (m = 0); "
-                   "m is the meridional arc length in the (z, r) plane; beyond the streamline's ends (m < 0 or m > its length, "
-                   "e.g. round the LE when the streamline starts at the blade) it continues straight along its end "
-                   "tangent, where m' = m'_end + ln(r / r_end) / (dr/dm)_end, or (m - m_end) / r_end when dr/dm = 0"},
-        {"blade_to_blade", "(m', theta): the conformal plane of the stream surface; the point (m', theta) lies at "
-                           "(z, r) = streamline(m(m')) with the same theta"},
-        {"placement", "m' = mprime_le + chord_mprime (xi cos(stagger) - s eta sin(stagger)), "
-                      "theta = theta_le + chord_mprime (xi sin(stagger) + s eta cos(stagger)), (xi, eta) the "
-                      "unstaggered unit-chord profile with LE (0, 0) and TE (1, 0), s = +1 (s = -1 when mirror)"},
+        {"mprime", std::string(full ? "m' = integral of dm / r along the section's streamline, which runs through the "
+                                      "whole channel: m = 0 and m' = 0 at the channel inlet (the streamline's first "
+                                      "point), not at the LE; "
+                                    : "m' = integral of dm / r along the section's streamline, which covers the blade "
+                                      "only (the design has no channel): m = 0 and m' = 0 at its first point; ") +
+                       "m is the meridional arc length in the (z, r) plane; the section points' mprime_theta, "
+                       "mprime_le and mprime_te use the same origin; beyond the streamline's ends (m < 0 or m > its "
+                       "length) it continues straight along its end tangent, m' = m'_end + ln(r / r_end) / "
+                       "(dr/dm)_end, or (m - m_end) / r_end when dr/dm = 0"},
+        {"blade_to_blade",
+         std::string("(m', theta): the conformal plane of the stream surface; the point (m', theta) lies at (z, r) = "
+                     "streamline(m(m')) with the same theta. ") +
+             (moved ? "The design has its own section streamlines over the blade only; the streamline written here is "
+                      "the channel's (its hub curve at span 0, its shroud curve at span 1, the channel streamline in "
+                      "between), and every BladeGen section point is moved onto it, to its foot point in the (z, r) "
+                      "plane with theta kept, i.e. by the distance between the two curves"
+                    : "The section points are BladeGen's own, on the streamline written here")},
+        {"placement", std::string("BladeGen places the profile by m' = mprime_le + chord_mprime (xi cos(stagger) - s eta "
+                                  "sin(stagger)), theta = theta_le + chord_mprime (xi sin(stagger) + s eta "
+                                  "cos(stagger)), (xi, eta) the unstaggered unit-chord profile with LE (0, 0) and TE "
+                                  "(1, 0), s = +1 (s = -1 when mirror); mprime_le, mprime_te, chord_mprime and stagger "
+                                  "are those of the written LE and TE points, m_le_fraction and m_te_fraction their m "
+                                  "over the streamline length") +
+                          (moved ? " (after the move onto the channel streamline the formula holds only to the "
+                                   "distance between the curves)"
+                                 : "")},
         {"stagger", "chord angle in the (m', theta) plane from the +m' axis toward +theta [rad]"},
         {"suction_side", "on the +theta side of the chord (the -theta side when mirror is true)"},
         {"point_order", "each side runs from the LE point to the TE point; both sides start at the same LE point "
@@ -95,14 +155,19 @@ ordered_json export_design_sections(const Blade::BladeDefinition& def, const Des
     for (double span : opt.spans) {
         const auto s = blade.section(span, opt.n_edge, opt.n_body);
         if (s.conformal.size() != 2 * ite + 1) throw std::logic_error("export_design_sections: unexpected loop layout");
-        const auto& sl = s.streamline;
+        const auto surf = export_surface(def, blade, span);
+        const auto& sl = surf.curve;
 
         ordered_json st;
         st["n_points"] = opt.n_channel;
         ordered_json zr = ordered_json::array(), m = ordered_json::array(), mp = ordered_json::array();
+        std::vector<double> m_tab;
+        std::vector<Vec2> p_tab;
         for (int i = 0; i < opt.n_channel; ++i) {
             const double mi = sl.length() * i / (opt.n_channel - 1);
             const Vec2 p = sl.at_m(mi);
+            m_tab.push_back(mi);
+            p_tab.push_back(p);
             zr.push_back(pair(p.x(), p.y()));
             m.push_back(mi);
             mp.push_back(sl.mprime_of_m(mi));
@@ -111,9 +176,19 @@ ordered_json export_design_sections(const Blade::BladeDefinition& def, const Des
         st["m"] = m;
         st["mprime"] = mp;
 
+        // (m', theta) of every loop point on the written streamline
+        std::vector<Vec2> conf(s.conformal.size());
+        for (std::size_t k = 0; k < conf.size(); ++k) {
+            if (!surf.moved) {
+                conf[k] = s.conformal[k];
+            } else {  // BladeGen's point on its own streamline, then its foot point on the written one
+                const Vec2 q = s.streamline.at_m(s.streamline.m_of_mprime(s.conformal[k].x()));
+                conf[k] = {sl.mprime_of_m(foot_m(sl, m_tab, p_tab, q)), s.conformal[k].y()};
+            }
+        }
         // the loop point k in both coordinate systems (one evaluation of m -> (z, r))
         auto point = [&](std::size_t k, ordered_json& a, ordered_json& b) {
-            const Vec2& q = s.conformal[k];
+            const Vec2& q = conf[k];
             const Vec2 p = sl.at_m(sl.m_of_mprime(q.x()));
             a = pair(q.x(), q.y());
             b = triple(p.x(), p.y(), q.y());
@@ -136,17 +211,29 @@ ordered_json export_design_sections(const Blade::BladeDefinition& def, const Des
         ordered_json le_a, le_b, te_a, te_b;
         point(0, le_a, le_b);
         point(ite, te_a, te_b);
-        const double mp_te = sl.mprime_of_m(s.placement.m_te * sl.length());
+        // placement values of the written LE / TE points (BladeGen's own when the points are not moved)
+        double mp_le = s.mprime_le, mp_te = sl.mprime_of_m(s.placement.m_te * sl.length());
+        double chord = s.chord_mprime, stagger = Math::deg2rad(s.placement.stagger_deg);
+        double f_le = s.placement.m_le, f_te = s.placement.m_te;
+        if (surf.moved) {
+            const Vec2 d = conf[ite] - conf[0];
+            mp_le = conf[0].x();
+            mp_te = conf[ite].x();
+            chord = d.norm();
+            stagger = std::atan2(d.y(), d.x());
+            f_le = sl.m_of_mprime(mp_le) / sl.length();
+            f_te = sl.m_of_mprime(mp_te) / sl.length();
+        }
         sections.push_back({
             {"span", span},
-            {"stagger", Math::deg2rad(s.placement.stagger_deg)},
+            {"stagger", stagger},
             {"theta_le", Math::deg2rad(s.placement.theta_le_deg)},
             {"mirror", s.placement.mirror},
-            {"m_le_fraction", s.placement.m_le},
-            {"m_te_fraction", s.placement.m_te},
-            {"mprime_le", s.mprime_le},
+            {"m_le_fraction", f_le},
+            {"m_te_fraction", f_te},
+            {"mprime_le", mp_le},
             {"mprime_te", mp_te},
-            {"chord_mprime", s.chord_mprime},
+            {"chord_mprime", chord},
             {"leading_edge", {{"mprime_theta", le_a}, {"zrtheta", le_b}}},
             {"trailing_edge", {{"mprime_theta", te_a}, {"zrtheta", te_b}}},
             {"suction_side", side(ss)},

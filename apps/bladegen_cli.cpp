@@ -9,7 +9,7 @@
 //   bladegen naca65 <cl0> <t_max/c> [--variant kovach_sandercock|emery_base] [--csv sides.csv] [--fit out.json]
 //       parametric NACA 65-(cl0 A10) t/c section: quality report, side coordinates and curvature,
 //       optionally the custom profile parameters fitted to it (NACA 65 + Custom)
-//   bladegen export-sections <blade.json> --span s[,s...] [--out f.json] [--n-edge 40] [--n-body 160] [--channel-points 201]
+//   bladegen export-sections <blade.json> --span s[,s...] [--out f.json] [--n-edge 40] [--n-body 160] [--channel-points 2001]
 //       versioned JSON (format "bladegen.sections") of the sections at the span fractions (0 = hub):
 //       SS / PS points LE -> TE in (m', theta) and (z, r, theta), LE / TE, streamline, channel, pitch
 //   bladegen export-sections naca65 <cl0> <t_max/c> --variant kovach_sandercock|emery_base --chord c
@@ -51,7 +51,7 @@ int usage()
                  "  bladegen fit <sides.csv> <out.json> [--ss x,y] [--ps x,y] [--negate-y] [--fairness w]\n"
                  "  bladegen naca65 <cl0> <t_max/c> [--variant kovach_sandercock|emery_base] [--csv sides.csv] [--fit out.json]\n"
                  "  bladegen export-sections <blade.json> --span s[,s...] [--out f.json] [--n-edge 40] [--n-body 160]\n"
-                 "                           [--channel-points 201]\n"
+                 "                           [--channel-points 2001]\n"
                  "  bladegen export-sections naca65 <cl0> <t_max/c> --variant kovach_sandercock|emery_base --chord c\n"
                  "                           --stagger deg --solidity s [--stations 101] [--n-edge 40] [--out f.json]\n"
                  "  bladegen demo <out dir>\n"

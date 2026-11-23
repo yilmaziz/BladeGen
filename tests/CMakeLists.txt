@@ -25,3 +25,23 @@ bladegen_add_test(test_fit     fit/test_fit.cpp)
 bladegen_add_test(test_io      io/test_io.cpp io/test_section_export.cpp)
 bladegen_add_test(test_naca    naca/test_naca65.cpp)
 bladegen_add_test(test_design  design/test_design.cpp design/test_restagger.cpp design/test_scene.cpp design/test_cg.cpp)
+
+# TURBOlenza (src/turbolenza): one executable, every tests/turbolenza/test_*.cpp (globbed).
+# The v1 reference comparisons SKIP when tests/turbolenza/data has not been generated.
+file(GLOB TURBOLENZA_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/turbolenza/test_*.cpp)
+if(TURBOLENZA_TESTS)
+    add_executable(test_turbolenza ${TURBOLENZA_TESTS})
+    target_link_libraries(test_turbolenza PRIVATE turbolenza::core bladegen::compiler_flags Catch2::Catch2WithMain)
+    if(TARGET turbolenza::bladegen)
+        target_link_libraries(test_turbolenza PRIVATE turbolenza::bladegen)
+    endif()
+    target_include_directories(test_turbolenza PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/turbolenza)
+    target_compile_definitions(test_turbolenza PRIVATE BLADEGEN_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+                                                       BLADEGEN_TEST_OUTPUT="${CMAKE_BINARY_DIR}/test_output")
+    set(_env "")
+    if(WIN32 AND BLADEGEN_OCCT_BIN_DIR)
+        set(_env "PATH=${BLADEGEN_OCCT_BIN_DIR}\;$ENV{PATH}")
+        string(REPLACE ";" "\;" _env "${_env}")
+    endif()
+    catch_discover_tests(test_turbolenza DISCOVERY_MODE PRE_TEST TEST_SPEC "${BLADEGEN_TEST_SPEC}" PROPERTIES ENVIRONMENT "${_env}")
+endif()

@@ -1,6 +1,8 @@
 // The v1 reference data reads back into the port's grid contract (GridData.hpp).
 #include "RefData.hpp"
 
+#include "turbolenza/Case.hpp"  // the contract headers compile on their own
+
 #include <catch2/catch_test_macros.hpp>
 
 TEST_CASE("v1 reference grid loads into turbolenza::Grid", "[turbolenza][v1ref]")

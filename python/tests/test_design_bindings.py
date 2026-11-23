@@ -83,6 +83,22 @@ def test_rotor67_default_layers():
         bg.rotor67_layer(1.5)
 
 
+def test_centres_of_gravity():
+    r = bg.DesignEvaluator().evaluate(bg.design_defaults())
+    assert r["blade_volume"] > 0.0
+    x, y, z = r["blade_cg"]
+    rad = math.hypot(y, z)
+    assert r["layers"][0]["r_le"] < rad < r["layers"][-1]["r_le"]
+    for lay in r["layers"]:
+        assert lay["section_area"] > 0.0
+        cx, cy, cz = lay["cg_xyz"]
+        assert math.hypot(cy, cz) == pytest.approx(lay["cg_r"], rel=1e-12)
+        assert cx == pytest.approx(lay["cg_z"], abs=1e-12)
+        assert math.degrees(math.atan2(cy, cz)) == pytest.approx(lay["cg_theta_deg"], abs=1e-9)
+    # the section centres of gravity rise from hub to tip
+    assert all(a["cg_r"] < b["cg_r"] for a, b in zip(r["layers"], r["layers"][1:]))
+
+
 def test_restagger_whole_blade_about_the_hub_le():
     ev = bg.DesignEvaluator()
     d = json.loads(bg.design_defaults())

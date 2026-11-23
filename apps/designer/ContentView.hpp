@@ -46,6 +46,7 @@ enum class Content
     ThicknessCurrent,
     ThicknessAll,
     Solid3D,  ///< the OCCT blade solid, hub and casing (single blade or whole annulus)
+    BladeSections,  ///< every layer's section in one plot (M-R.Theta, Z-R.Theta or the axial X-Y view)
 };
 
 [[nodiscard]] QString contentName(Content c);
@@ -53,6 +54,9 @@ enum class Content
 
 enum class HAxis { MeridionalFraction, MPrime, Meridional, ChordFraction };
 enum class B2BCoords { MPrimeTheta, MRTheta };
+/// Blade Sections view coordinates: (m, r theta) with m from each layer's LE line; (Z, r theta); the
+/// axial view (X, Y) = (r sin theta, r cos theta), the sections seen along the machine axis from downstream.
+enum class SectionCoords { MRTheta, ZRTheta, XYAxial };
 enum class CurvatureRange { Full, LeadingEdge, TrailingEdge };
 
 class ContentView : public QWidget
@@ -84,6 +88,7 @@ public:
     int layer = -1;  ///< -1: follow the active layer
     HAxis haxis = HAxis::MeridionalFraction;
     B2BCoords b2b = B2BCoords::MPrimeTheta;
+    SectionCoords sections = SectionCoords::MRTheta;
     CurvatureRange crange = CurvatureRange::Full;
 
 signals:

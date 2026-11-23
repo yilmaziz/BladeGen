@@ -26,6 +26,13 @@
 /// the unrolled (x, r theta) section.  A positive d closes the blade (higher stagger: more stall
 /// margin), a negative one opens it (more flow).
 ///
+/// Centres of gravity.  A section's centre of gravity is the area centroid of its loop in the
+/// stream surface's (m, r theta) plane (Green's theorem on the closed polygon), mapped back to the
+/// surface: m'_c from m_c, theta_c = (r theta)_c / r(m'_c).  On a cylindrical layer this plane is the
+/// unrolled cylinder, so the centroid is exact there.  The blade's centre of gravity is the volume
+/// centroid of the closed surface of the mesh rows with flat hub and tip caps (divergence theorem:
+/// signed tetrahedra from the origin), for a blade of uniform density.
+///
 /// Metal angle beta: the angle of the camber line from the meridional direction,
 /// beta = atan(d theta / d m') = atan(r d theta / d m) (conformal: the true angle on the
 /// stream surface).  Lengths in the unit of the meridional input (mm in the designer).
@@ -168,6 +175,24 @@ struct Placement
 /// m' where the stream surface reaches the axial position x (throws when it does not).
 [[nodiscard]] double mprime_at_x(const Blade::StreamSurface& S, double x);
 
+/// Area and area centroid of a closed polygon (the last point may repeat the first); the area is
+/// positive whatever the orientation.  Throws std::invalid_argument for a degenerate polygon.
+struct PolygonCentroid
+{
+    double area = 0.0;
+    Vec2 centroid{0.0, 0.0};
+};
+[[nodiscard]] PolygonCentroid polygon_centroid(const std::vector<Vec2>& p);
+
+/// Volume and volume centroid of a closed surface given by closed row loops p[i + ni j] (last point of a
+/// row = first, the LE at i = 0 and the TE at i = (ni - 1) / 2 for the caps, as the blade mesh): the rows
+/// as triangles plus flat caps on the first and last row.  Throws std::invalid_argument if degenerate.
+struct MassProperties
+{
+    double volume = 0.0;
+    Vec3 centroid{0.0, 0.0, 0.0};
+};
+
 /// Natural cubic spline weights: f(s) = sum_k w_k f_k through (spans_k, f_k).
 [[nodiscard]] std::vector<double> spline_weights(const std::vector<double>& spans, double s);
 /// Symmetric two-sided tanh distribution on [0, 1], n points (d = 0: uniform).
@@ -226,6 +251,12 @@ struct LayerResult
     std::vector<double> xc;           ///< chord fraction of the camber points (unstaggered x)
     std::vector<Vec2> camber_xr;      ///< meridional (x, r) of the camber points
     double beta_le = 0.0, beta_te = 0.0, theta_te_deg = 0.0;
+    // centre of gravity of the section (see the file comment)
+    double section_area = 0.0;        ///< area in the (m, r theta) plane [mm^2]
+    double cg_mprime = 0.0;           ///< m' of the centre of gravity
+    double cg_theta = 0.0;            ///< theta of the centre of gravity [rad]
+    Vec2 cg_xr{0.0, 0.0};             ///< (z, r) of the centre of gravity
+    Vec3 cg_xyz{0.0, 0.0, 0.0};       ///< Cartesian centre of gravity
 };
 
 /// Structured surface grid, i fastest: p[i + ni * j].
@@ -235,6 +266,8 @@ struct Grid
     std::vector<Vec3> p;
     [[nodiscard]] const Vec3& at(int i, int j) const { return p[static_cast<std::size_t>(i + ni * j)]; }
 };
+
+[[nodiscard]] MassProperties mass_properties(const Grid& rows);
 
 /// Scalar field on the meridional plane, i chordwise, j spanwise.
 struct MeridionalField
@@ -259,6 +292,8 @@ struct DesignResult
     std::vector<double> row_span;
     MeridionalField beta;                      ///< metal angle [deg] on the meridional plane
     MeridionalField thickness;                 ///< t / c on the meridional plane
+    double blade_volume = 0.0;                 ///< volume of the blade between the hub and tip rows [mm^3]
+    Vec3 blade_cg{0.0, 0.0, 0.0};              ///< its centre of gravity (Cartesian, uniform density)
     double seconds = 0.0;
 
     [[nodiscard]] bool ok() const;

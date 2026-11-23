@@ -43,6 +43,7 @@
 #include <Prs3d_IsoAspect.hxx>
 #include <Prs3d_LineAspect.hxx>
 #include <Standard_Failure.hxx>
+#include <V3d_Trihedron.hxx>
 #include <V3d_View.hxx>
 #include <V3d_Viewer.hxx>
 #if defined(_WIN32)
@@ -318,6 +319,10 @@ struct OcctView::Impl : public AIS_ViewController
             view->SetWindow(win);
             view->SetBgGradientColors(Quantity_Color(0.98, 0.98, 0.99, Quantity_TOC_sRGB), Quantity_Color(0.78, 0.81, 0.87, Quantity_TOC_sRGB),
                                       Aspect_GradientFillMethod_Vertical);
+            // machine convention, as the 3D View: internal x (axial) is Z, y (r sin theta) is X, z (r cos theta) is Y
+            view->Trihedron()->SetLabels("Z", "X", "Y");
+            view->Trihedron()->SetArrowsColor(Quantity_Color(0.0, 0.0, 0.86, Quantity_TOC_sRGB), Quantity_Color(0.78, 0.0, 0.0, Quantity_TOC_sRGB),
+                                              Quantity_Color(0.0, 0.59, 0.0, Quantity_TOC_sRGB));
             view->TriedronDisplay(Aspect_TOTP_LEFT_LOWER, Quantity_NOC_GRAY20, 0.08, V3d_ZBUFFER);
             view->ChangeRenderingParams().IsAntialiasingEnabled = Standard_True;
             view->ChangeRenderingParams().NbMsaaSamples = 4;

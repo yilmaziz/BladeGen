@@ -1,5 +1,60 @@
 # Changelog
 
+## v1.0.3 — Blade Sections view (M-R·Theta, Z-R·Theta, axial X-Y) and centres of gravity
+
+### New
+- **Blade Sections (all layers)**: a new view content (*New Auxiliary View* or *Auxiliary View Content*). It
+  draws every layer's section (Hub, 25 %, Mid, 75 %, Tip) in one plot: suction side blue, pressure side red,
+  LE / TE closures green and the camber line thin dark. Green **LE and TE lines** join the leading and the
+  trailing edges of all sections. Right-click → *Blade Sections Coordinates*:
+  - **M, RTheta Plot**: m from each layer's LE line against r θ (mm);
+  - **Z, RTheta Plot**: axial position Z against r θ (mm);
+  - **X, Y Plot (axial view)**: the sections seen along the machine axis from downstream,
+    X = r sin θ and Y = r cos θ (mm), with the hub and casing circles at the LE and TE radii dashed.
+- The window title shows the chosen coordinates.
+- **Centres of gravity**:
+  - **Sections**: each layer's area centroid in its stream surface's (m, r θ) plane, mapped back to the
+    surface. It is exact on cylindrical layers (the unrolled cylinder).
+  - **Blade**: the volume centroid of the closed blade (the mesh rows with flat hub and tip caps, by the
+    divergence theorem; uniform density).
+  - Shown in the Blade Information tables (centre of gravity Z, R, θ for every layer), as a CG marker in the
+    Blade-to-Blade View, and in the Blade Sections view as markers joined by a dashed line, with the blade's
+    centre of gravity and volume in the status box.
+  - In the 3D View: a dashed line through the section centres of gravity and a cross at the blade's.
+  - Python: `section_area`, `cg_xyz`, `cg_z`, `cg_r`, `cg_theta_deg` and `cg_mprime` for each layer;
+    `blade_volume` and `blade_cg` for the design.
+- The information tables' area is the section's area on its stream surface; it was the chord-frame area
+  scaled by the chord squared.
+- The axis triads of the 3D View and the 3D Solid view are labelled in the designer's machine convention:
+  - **Z axial**, as in the meridional input;
+  - **X = r sin θ** and **Y = r cos θ**, as in the axial view;
+  - X red, Y green, Z blue.
+
+  They were labelled with the internal frame, where x is axial. Only the labels change (a cyclic relabelling,
+  still right-handed); the geometry, the STEP / OBJ exports and the Python arrays keep the internal
+  (axial, r sin θ, r cos θ) order.
+
+### Fixed
+- Re-staggered blades: the blade-to-blade view drew the camber line and the TE marker from the LE line rather
+  than from the turned LE point. A blade without a re-stagger was not affected.
+- The blade-to-blade status box gives the stagger actually used, including the re-stagger, and notes the
+  re-stagger.
+
+### Tests
+- Centres of gravity:
+  - polygon area and centroid against closed forms (rectangle, triangle, either orientation, far from the
+    origin);
+  - the closed-surface volume and centroid of an N-gon prism and a sheared prism in closed form;
+  - on cylindrical layers, the section centre of gravity equals the chord-frame centroid mapped by the
+    placement (10⁻¹²), and its area is the chord-frame area × (c′ r)²;
+  - a re-stagger about the radial axis through the mid layer's centre of gravity leaves that centre of gravity
+    in place;
+  - the blade's centre of gravity is within 0.05 mm of the exact OCCT solid's centre of mass (measured
+    0.016 mm), and its volume within 1 % (+0.47 %, from the flat caps);
+  - pytest: the new fields.
+- The designer self-test renders the Blade Sections view in all three coordinate systems (the content loop
+  also renders it for every layer) and the tip section with a 15° re-stagger. That is 113 view renders.
+
 ## v1.0.2 — BladeGen Designer: meridional channel, five layers, conformal 3-D blade
 
 BladeGen gets a native **C++ / Qt designer** with the layout of a professional blade-design program: MDI views

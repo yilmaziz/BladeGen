@@ -160,11 +160,14 @@ void View3D::paintEvent(QPaintEvent*)
             p.drawEllipse(it.q[0], 1.4, 1.4);
         }
     }
-    // axis triad (bottom left): x axial red, y green, z blue
+    // axis triad (bottom left) in the machine convention of the designer: Z axial (as the meridional
+    // input), X = r sin(theta), Y = r cos(theta) (as the axial view).  The internal frame is
+    // (axial, r sin theta, r cos theta), so internal x is labelled Z, y is X and z is Y (a cyclic
+    // relabelling: still right-handed).  X red, Y green, Z blue.
     const QPointF o(46, height() - 46);
     const std::array<std::array<double, 3>, 3> axes = {{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
-    const QColor ac[3] = {QColor(200, 0, 0), QColor(0, 150, 0), QColor(0, 0, 220)};
-    const char* an[3] = {"x", "y", "z"};
+    const QColor ac[3] = {QColor(0, 0, 220), QColor(200, 0, 0), QColor(0, 150, 0)};
+    const char* an[3] = {"Z", "X", "Y"};
     for (int k = 0; k < 3; ++k) {
         const auto c0 = view(center_);
         auto e = axes[static_cast<std::size_t>(k)];

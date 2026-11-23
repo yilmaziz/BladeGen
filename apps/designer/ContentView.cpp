@@ -176,13 +176,14 @@ QString contentName(Content c)
     case Content::ThicknessCurrent: return "Thickness, Current Layer";
     case Content::ThicknessAll: return "Thickness, All Layers";
     case Content::Solid3D: return "3D Solid (OpenCASCADE)";
+    case Content::BladeSections: return "Blade Sections (all layers)";
     }
     return "?";
 }
 
 QList<QList<Content>> contentGroups()
 {
-    return {{Content::View3D, Content::Solid3D, Content::BladeToBlade, Content::ProfileSection, Content::MeridionalContour},
+    return {{Content::View3D, Content::Solid3D, Content::BladeToBlade, Content::BladeSections, Content::ProfileSection, Content::MeridionalContour},
             {Content::MeridionalBeta, Content::MeridionalThickness},
             {Content::MeridionalCurvature, Content::ProfileCurvature},
             {Content::LeTeTheta, Content::LeTeBeta, Content::LeTeParameters},
@@ -228,7 +229,7 @@ ContentView::~ContentView()
 void ContentView::setContent(Content c)
 {
     content_ = c;
-    const bool shape = c == Content::BladeToBlade || c == Content::ProfileSection || c == Content::MeridionalContour ||
+    const bool shape = c == Content::BladeToBlade || c == Content::BladeSections || c == Content::ProfileSection || c == Content::MeridionalContour ||
                        c == Content::MeridionalBeta || c == Content::MeridionalThickness;
     plot_->proportional = shape;
     plot_->swapAxes = plot_->flipX = plot_->flipY = false;
@@ -319,6 +320,8 @@ void ContentView::refresh(bool refit)
     }
     if (per_layer && k < static_cast<int>(s_.design.layers.size()))
         t += QString(" — %1 (span %2)").arg(QString::fromStdString(s_.design.layers[static_cast<std::size_t>(k)].name)).arg(s_.design.layers[static_cast<std::size_t>(k)].span);
+    if (content_ == Content::BladeSections)
+        t += sections == SectionCoords::MRTheta ? " — M, R·Theta" : sections == SectionCoords::ZRTheta ? " — Z, R·Theta" : " — X, Y (axial view)";
     setWindowTitle(t);
     emit titleChanged(t);
     if (content_ == Content::View3D) {
@@ -403,10 +406,11 @@ void ContentView::buildPlot(bool refit)
         const auto& L = R->layers[k];
         const auto& loop = L.section->loop;
         const double pitch = 2.0 * Math::kPi / std::max(D.n_blades, 1);
+        // (m', theta) on the layer's stream surface -> the chosen view coordinates
         auto map = [&](const Math::Vec2& mt, double dth) {
-            if (b2b == B2BCoords::MPrimeTheta) return QPointF(mt.x(), mt.y() + dth);
-            const double r = L.surface.xr(mt.x()).y();
-            return QPointF(L.surface.m_of_mprime(mt.x()), r * (mt.y() + dth));
+            const double th = mt.y() + dth;
+            if (b2b == B2BCoords::MPrimeTheta) return QPointF(mt.x(), th);
+            return QPointF(L.surface.m_of_mprime(mt.x()), L.surface.xr(mt.x()).y() * th);
         };
         for (double dth : {-pitch, pitch}) {
             Series s;
@@ -423,7 +427,7 @@ void ContentView::buildPlot(bool refit)
         cam.name = "camber line";
         cam.color = kCamber;
         cam.style = Qt::DashLine;
-        for (std::size_t i = 0; i < L.mprime.size(); ++i) cam.pts << map({L.mprime[i], Math::deg2rad(L.theta_deg[i])}, 0.0);
+        for (std::size_t i = 0; i < L.mprime.size(); ++i) cam.pts << map({L.mprime_le + L.mprime[i], Math::deg2rad(L.theta_deg[i])}, 0.0);
         S << cam;
         const auto cf = confOf(L, D.mirror);
         for (const auto& is : L.section->quality.issues) {
@@ -432,10 +436,112 @@ void ContentView::buildPlot(bool refit)
             M << issueMarker(map({c.x(), c.y()}, 0.0), is.severity);
         }
         M << PointMarker{map({L.mprime_le, L.theta_le}, 0.0), Qt::black, 'o', "LE"};
-        M << PointMarker{map({L.mprime.back(), Math::deg2rad(L.theta_deg.back())}, 0.0), Qt::black, 'o', "TE"};
+        M << PointMarker{map({L.mprime_le + L.mprime.back(), Math::deg2rad(L.theta_deg.back())}, 0.0), Qt::black, 'o', "TE"};
+        M << PointMarker{map({L.cg_mprime, L.cg_theta}, 0.0), QColor(0, 0, 0), 's', "CG", 4.0, 1.6};
         if (b2b == B2BCoords::MPrimeTheta) plot_->setLabels("m'", "θ [rad]");
         else plot_->setLabels("m [mm]", "r θ [mm]");
-        plot_->setBadge(badgeFor(L.section->quality, QString("%1 · γ %2° · %3").arg(QString::fromStdString(L.section->designation)).arg(D.layers[k].stagger_deg).arg(L.surface.cylindrical() ? "cylindrical wrap" : "surface of revolution")));
+        const QString rs = D.restagger.angle_deg != 0.0 ? QString(" (re-staggered %1%2°)").arg(D.restagger.angle_deg > 0 ? "+" : "").arg(D.restagger.angle_deg) : QString();
+        plot_->setBadge(badgeFor(L.section->quality, QString("%1 · γ %2°%3 · %4")
+                                                         .arg(QString::fromStdString(L.section->designation))
+                                                         .arg(Math::rad2deg(L.gamma), 0, 'f', 3)
+                                                         .arg(rs)
+                                                         .arg(L.surface.cylindrical() ? "cylindrical wrap" : "surface of revolution")));
+        break;
+    }
+    case Content::BladeSections: {
+        // every layer's section in one plot, joined by the LE and TE lines; the axial view also shows
+        // the hub and casing circles at the LE and TE radii (of the first and last layer)
+        std::vector<QPointF> le, te, cgs;
+        bool first = true;
+        double tmin = 1e300, tmax = -1e300;
+        for (std::size_t j = 0; j < R->layers.size(); ++j) {
+            const auto& L = R->layers[j];
+            if (!L.error.empty() || !L.section) continue;
+            auto map = [&](const Math::Vec2& mt) {
+                switch (sections) {
+                case SectionCoords::MRTheta: return QPointF(L.surface.m_of_mprime(mt.x()), L.surface.xr(mt.x()).y() * mt.y());
+                case SectionCoords::ZRTheta: {
+                    const Math::Vec2 xr = L.surface.xr(mt.x());
+                    return QPointF(xr.x(), xr.y() * mt.y());
+                }
+                case SectionCoords::XYAxial: {
+                    const Math::Vec3 p = L.surface.cartesian(mt.x(), mt.y());  // (axial, r sin theta, r cos theta)
+                    return QPointF(p.y(), p.z());
+                }
+                }
+                return QPointF(mt.x(), mt.y());
+            };
+            std::vector<QPointF> pts;
+            for (const auto& q : L.conformal) {
+                pts.push_back(map(q));
+                tmin = std::min(tmin, q.y());
+                tmax = std::max(tmax, q.y());
+            }
+            addPieces(S, pts, L.section->loop.piece, true, 1.0, first);
+            Series cam;
+            cam.name = "camber line";
+            cam.color = QColor(40, 40, 40);
+            cam.width = 0.7;
+            cam.legend = first;
+            for (std::size_t i = 0; i < L.mprime.size(); ++i) cam.pts << map({L.mprime_le + L.mprime[i], Math::deg2rad(L.theta_deg[i])});
+            S << cam;
+            le.push_back(map({L.mprime_le, L.theta_le}));
+            cgs.push_back(map({L.cg_mprime, L.cg_theta}));
+            M << PointMarker{cgs.back(), QColor(0, 0, 0), 's', j == 0 ? QString("CG") : QString(), 4.0, 1.6};
+            te.push_back(map({L.mprime_le + L.mprime.back(), Math::deg2rad(L.theta_deg.back())}));
+            first = false;
+        }
+        for (const auto* line : {&le, &te}) {
+            Series s;
+            s.name = "LE / TE lines";
+            s.color = kEdge;
+            s.width = 1.3;
+            s.legend = line == &le;
+            for (const auto& p : *line) s.pts << p;
+            S << s;
+        }
+        {
+            Series s;
+            s.name = "centres of gravity";
+            s.color = QColor(0, 0, 0);
+            s.style = Qt::DashLine;
+            s.width = 1.2;
+            for (const auto& p : cgs) s.pts << p;
+            S << s;
+        }
+        if (R->blade_volume > 0.0) {
+            const auto& g = R->blade_cg;
+            plot_->setBadge({QString("blade centre of gravity (uniform density): Z %1 mm · R %2 mm · θ %3° · volume %4 mm³")
+                                 .arg(g.x(), 0, 'f', 3)
+                                 .arg(std::hypot(g.y(), g.z()), 0, 'f', 3)
+                                 .arg(Math::rad2deg(std::atan2(g.y(), g.z())), 0, 'f', 3)
+                                 .arg(R->blade_volume, 0, 'f', 1),
+                             0});
+        }
+        if (sections == SectionCoords::XYAxial && !first) {
+            const auto& h = R->layers.front();
+            const auto& c = R->layers.back();
+            const double pad = 0.25 * (tmax - tmin) + 0.02;
+            bool leg = true;
+            for (const double r : {h.r_le, h.r_te, c.r_le, c.r_te}) {
+                Series s;
+                s.name = "hub / casing circles at LE, TE";
+                s.color = QColor(30, 30, 30);
+                s.style = Qt::DashLine;
+                s.legend = leg;
+                leg = false;
+                for (int i = 0; i <= 80; ++i) {
+                    const double t = tmin - pad + (tmax - tmin + 2.0 * pad) * i / 80.0;
+                    s.pts << QPointF(r * std::sin(t), r * std::cos(t));
+                }
+                S << s;
+            }
+        }
+        switch (sections) {
+        case SectionCoords::MRTheta: plot_->setLabels("M [mm] (from each layer's LE line)", "R·Theta [mm]"); break;
+        case SectionCoords::ZRTheta: plot_->setLabels("Z (axial) [mm]", "R·Theta [mm]"); break;
+        case SectionCoords::XYAxial: plot_->setLabels("X = r sin θ [mm]   (axial view from downstream)", "Y = r cos θ [mm]"); break;
+        }
         break;
     }
     case Content::ProfileSection: {
@@ -743,6 +849,21 @@ void ContentView::build3D(bool refit)
     tip.width = 1.5;
     for (int i = 0; i <= n; ++i) tip.p.push_back({R->blade.at(i, j).x(), R->blade.at(i, j).y(), R->blade.at(i, j).z()});
     L.push_back(tip);
+    // centres of gravity: the sections' (dashed line) and the blade's (cross)
+    const QColor cgc(0, 0, 0);
+    Line3D cgl;
+    cgl.color = cgc;
+    cgl.style = Qt::DashLine;
+    cgl.width = 1.5;
+    for (const auto& lay : R->layers)
+        if (lay.error.empty()) cgl.p.push_back({lay.cg_xyz.x(), lay.cg_xyz.y(), lay.cg_xyz.z()});
+    if (cgl.p.size() > 1) L.push_back(cgl);
+    if (R->blade_volume > 0.0) {
+        const auto& g = R->blade_cg;
+        const double h = 2.0;  // mm
+        for (const Math::Vec3& e : {Math::Vec3(h, 0, 0), Math::Vec3(0, h, 0), Math::Vec3(0, 0, h)})
+            L.push_back({{{g.x() - e.x(), g.y() - e.y(), g.z() - e.z()}, {g.x() + e.x(), g.y() + e.y(), g.z() + e.z()}}, cgc, Qt::SolidLine, 2.5});
+    }
     // rotation axis (dash-dot)
     double x0 = 1e300, x1 = -1e300;
     for (const auto& p : R->hub_wall.p) {
@@ -881,7 +1002,8 @@ void ContentView::buildTable()
     QStringList props = {"construction", "span fraction", "stagger [deg]", "β LE [deg]", "β TE [deg]", "camber β LE − β TE [deg]",
                          "θ LE [deg]", "θ TE [deg]", "mapping", "R LE [mm]", "R TE [mm]", "conformal chord c'", "meridional length LE→TE [mm]",
                          "chord [mm]", "pitch at LE [mm]", "solidity (3-D, n_blades)", "solidity (2-D input)", "t_max / c", "x/c of t_max",
-                         "LE radius / c", "TE radius / c", "area [mm²]", "quality", "fit RMS / deviation [% c]",
+                         "LE radius / c", "TE radius / c", "area [mm²]", "centre of gravity Z [mm]", "centre of gravity R [mm]",
+                         "centre of gravity θ [deg]", "quality", "fit RMS / deviation [% c]",
                          "NACA 65 equivalent arc: γ + χ LE / γ − χ TE [deg]"};
     auto column = [&](std::size_t j) {
         QStringList v;
@@ -899,7 +1021,8 @@ void ContentView::buildTable()
           << (L.surface.cylindrical() ? "cylindrical wrap" : "surface of revolution") << num(L.r_le, 6) << num(L.r_te, 6)
           << num(L.chord_mprime, 6) << num(L.surface.m_te(), 6) << num(L.chord, 6) << num(L.pitch_le, 6) << num(L.solidity_3d, 4)
           << num(l.solidity, 4) << num(sec.camber.max_thickness, 4) << num(sec.camber.max_thickness_x, 4) << num(sec.le_radius, 4)
-          << num(sec.te_radius, 4) << num(sec.area * L.chord * L.chord, 5)
+          << num(sec.te_radius, 4) << num(L.section_area, 5) << num(L.cg_xr.x(), 6) << num(L.cg_xr.y(), 6)
+          << num(Math::rad2deg(L.cg_theta), 6)
           << (ne ? QString("%1 error(s)").arg(ne) : nw ? QString("%1 warning(s)").arg(nw) : QString("OK"))
           << (sec.deviation_rms ? num(100.0 * *sec.deviation_rms, 3) : l.fitted_to ? num(100.0 * l.fit_rms, 3) : QString("—"))
           << (sec.equivalent_arc_deg ? QString("%1 / %2").arg(num(l.stagger_deg + (*sec.equivalent_arc_deg)[0], 5), num(l.stagger_deg - (*sec.equivalent_arc_deg)[1], 5))
@@ -1015,6 +1138,15 @@ void ContentView::showMenu(const QPoint& global)
         a->setCheckable(true);
         a->setChecked(b2b == c);
         bg->addAction(a);
+    }
+    auto* sc = m.addMenu("Blade Sections Coordinates");
+    auto* sg = new QActionGroup(&m);
+    for (const auto& [c, name] : {std::pair{SectionCoords::MRTheta, "M, RTheta Plot"}, std::pair{SectionCoords::ZRTheta, "Z, RTheta Plot"},
+                                  std::pair{SectionCoords::XYAxial, "X, Y Plot (axial view)"}}) {
+        auto* a = sc->addAction(name, this, [this, cv = c] { sections = cv; refresh(true); });
+        a->setCheckable(true);
+        a->setChecked(sections == c);
+        sg->addAction(a);
     }
     auto* cr = m.addMenu("Curvature Range");
     auto* cg = new QActionGroup(&m);

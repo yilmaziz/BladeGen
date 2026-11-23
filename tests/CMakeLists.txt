@@ -22,6 +22,6 @@ bladegen_add_test(test_profile profile/test_profile.cpp profile/test_quality.cpp
 bladegen_add_test(test_blade   blade/test_blade.cpp blade/test_flowpath.cpp)
 bladegen_add_test(test_occt    occt/test_occt.cpp)
 bladegen_add_test(test_fit     fit/test_fit.cpp)
-bladegen_add_test(test_io      io/test_io.cpp)
+bladegen_add_test(test_io      io/test_io.cpp io/test_section_export.cpp)
 bladegen_add_test(test_naca    naca/test_naca65.cpp)
 bladegen_add_test(test_design  design/test_design.cpp design/test_restagger.cpp design/test_scene.cpp design/test_cg.cpp)

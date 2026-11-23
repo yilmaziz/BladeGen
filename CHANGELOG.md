@@ -1,5 +1,42 @@
 # Changelog
 
+## v1.0.4 — Stacking on a reference point (DLR variants 1 and 2, centre of gravity)
+
+### New
+- **Stacking of the sections** (Initial Meridional Configuration; Vos et al. 2025, Sec. 4). Two ways to fix
+  where each section sits on its stream surface:
+  - **prescribed LE / TE lines** (Sec. 4.2): what BladeGen did up to v1.0.3, and still the default. Each
+    section's LE sits on the meridional LE line and its TE on the TE line, so the chord follows.
+  - **reference point** (Sec. 4.1): each section's **centre of gravity**, **LE** or **TE** sits on a stacking
+    line, and the chord is free. Two variants place the reference points:
+    - **variant 1, same Z and θ**: every reference point at (Z_ref, θ_ref), so the stacking line is the
+      radial line through that point. With the centre of gravity this is the radial CG stack.
+    - **variant 2, closest point**: each layer's reference point is the point of its streamline closest to
+      the previous layer's, at the same θ. It solves (C(m′) − Q)·dC/dm′ = 0, so the line follows the normals
+      of the stream surfaces. In the default flaring channel the tip centre of gravity is then 4.7 mm
+      downstream of variant 1's.
+
+    On cylindrical walls both variants give the same blade.
+  - The centre of gravity is the physical one, the area centroid on the stream surface. The conformal map
+    does not carry it over from the profile's own frame except on cylinders, so the section is shifted until
+    its centre of gravity is on the target. On the default hub the correction is 0.011 in m′ (about 0.4 mm).
+  - *Take Z_ref, θ_ref from the current hub section* (also done automatically when you switch from the LE /
+    TE lines) keeps the hub section where it is.
+  - A reference point may lie anywhere on the stream surface, extensions included. A point outside the
+    channel is reported as a design error.
+- **Chord scale** per layer (Layers and Profiles → Placement): with reference-point stacking,
+  c′ = scale × the chord of the prescribed edges. θ LE (lean) is not used there; θ_ref places the sections.
+- The **Meridional Contour View** draws the stacking line (dash-dot) with the layers' reference points. It
+  fills the blade between its actual LE and TE, which leave the LE / TE lines when the blade is stacked on a
+  point or re-staggered.
+- The information tables give each layer's stacking point (Z, θ) and chord scale.
+- The re-stagger axis through the hub, mid-span or tip section follows the stacked section.
+- Design files: a `"stacking"` block (`mode`, `variant`, `reference`, `z_ref`, `theta_ref_deg`) and each
+  layer's `chord_scale`. Files without them load with the prescribed edges, as before.
+- Python:
+  - `stack_z`, `stack_r`, `stack_theta_deg` and `stack_mprime` for each layer;
+  - `blade_le`, `blade_te`, `stacking_xr` and `stacking_xyz` for the mesh rows.
+
 ## v1.0.3 — Blade Sections view (M-R·Theta, Z-R·Theta, axial X-Y) and centres of gravity
 
 ### New

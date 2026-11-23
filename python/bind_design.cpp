@@ -74,6 +74,10 @@ py::dict result_dict(const D::DesignResult& r)
             l["cg_r"] = L.cg_xr.y();
             l["cg_theta_deg"] = Math::rad2deg(L.cg_theta);
             l["cg_mprime"] = L.cg_mprime;
+            l["stack_mprime"] = L.stack_point.x();
+            l["stack_theta_deg"] = Math::rad2deg(L.stack_point.y());
+            l["stack_z"] = L.stack_xr.x();
+            l["stack_r"] = L.stack_xr.y();
             l["theta_le_deg"] = Math::rad2deg(L.theta_le);
             l["chord"] = L.chord;
             l["r_le"] = L.r_le;
@@ -107,6 +111,10 @@ py::dict result_dict(const D::DesignResult& r)
         d["hub_wall"] = grid_np(r.hub_wall);
         d["casing_wall"] = grid_np(r.casing_wall);
         d["row_span"] = to_np(r.row_span);
+        d["blade_le"] = to_np<2>(r.blade_le);
+        d["blade_te"] = to_np<2>(r.blade_te);
+        d["stacking_xr"] = to_np<2>(r.stacking_xr);
+        d["stacking_xyz"] = to_np<3>(r.stacking_xyz);
         d["beta_field"] = field_dict(r.beta);
         d["thickness_field"] = field_dict(r.thickness);
     }

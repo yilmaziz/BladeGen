@@ -138,6 +138,38 @@ int main(int argc, char** argv)
             w.submit();
             w.settle();
         }
+        // stacking on the centre of gravity: variant 1 puts every layer's centre of gravity at Z_ref,
+        // variant 2 follows the stream-surface normals (the meridional view draws the stacking line)
+        {
+            namespace D = BladeGen::Design;
+            auto& st = w.session().design.stacking;
+            st = {D::Stacking::Mode::ReferencePoint, D::Stacking::Variant::SameZTheta, D::Stacking::Reference::CG, 0.5, 2.0};
+            w.submit();
+            w.settle();
+            for (const auto& L : w.session().result->layers)
+                if (!w.session().result->ok() || std::abs(L.cg_xr.x() - 0.5) > 1e-9) {
+                    std::fprintf(stderr, "self-test: variant 1 did not stack the centres of gravity at Z_ref\n");
+                    return 19;
+                }
+            v->setContent(Designer::Content::MeridionalContour);
+            if (auto* s = qobject_cast<QMdiSubWindow*>(v->parentWidget())) s->showMaximized();
+            QApplication::processEvents();
+            v->image().save(dir + "/meridional_stacking_v1.png");
+            st.variant = D::Stacking::Variant::ClosestPoint;
+            w.submit();
+            w.settle();
+            if (!w.session().result->ok()) {
+                std::fprintf(stderr, "self-test: variant 2 did not evaluate\n");
+                return 20;
+            }
+            QApplication::processEvents();
+            v->image().save(dir + "/meridional_stacking_v2.png");
+            if (auto* s = qobject_cast<QMdiSubWindow*>(v->parentWidget())) s->showNormal();
+            w.gridLayout(6);
+            st = {};
+            w.submit();
+            w.settle();
+        }
         // 3D Solid: the OCCT shapes are built; the viewer renders when OpenGL is available
         {
             v->setContent(Designer::Content::Solid3D);

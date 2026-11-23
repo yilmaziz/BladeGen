@@ -26,6 +26,28 @@
 /// the unrolled (x, r theta) section.  A positive d closes the blade (higher stagger: more stall
 /// margin), a negative one opens it (more flow).
 ///
+/// Stacking (Vos et al. 2025, Sec. 4).  Two ways fix where each section sits on its stream surface:
+///
+///  * prescribed edges (Sec. 4.2, the default): the LE at (0, theta_LE) on the meridional LE line and
+///    the TE on the TE line, so the chord follows: c' = m'_TE / cos(gamma);
+///  * a reference point (Sec. 4.1): the LE (0, 0), the TE (1, 0) or the centre of gravity of every
+///    section lands on a target T_k = (m'_k, theta_ref), and the chord is free: c' = f_k m'_TE / cos(gamma)
+///    with the layer's chord scale f_k (1: the chord of the prescribed edges).  The first layer's
+///    reference point is given by its axial position Z_ref and angle theta_ref; then
+///      variant 1: every layer's reference point has the same Z and theta (m'_k: x_k(m') = Z_ref), so the
+///                 stacking line is the radial line through (Z_ref, theta_ref);
+///      variant 2: every layer's reference point is the point of its streamline C_k(m') = (x, r)(m')
+///                 closest to the previous layer's, (C_k(m') - Q_{k-1}) . dC_k/dm' = 0, at the same theta,
+///                 so the stacking line follows the normals of the stream surfaces.
+///    The rows between the layers take Z of their reference point from a natural spline in span through
+///    the layers' (exact at the layers).  The centre of gravity is the physical one (below), which the
+///    conformal map does not carry over from the chord frame unless the layer is a cylinder: the
+///    section is shifted in (m', theta) until its centre of gravity is on the target (a fixed-point
+///    iteration, converged to 1e-13).  Cylindrical walls: the normals are radial, the variants agree.
+///    A reference point may lie anywhere on the stream surface, extensions included (with the LE as
+///    reference at the hub LE, the casing's reference point is upstream of a flaring channel's LE line).
+///    The layers' theta_LE (lean) is not used by reference-point stacking.
+///
 /// Centres of gravity.  A section's centre of gravity is the area centroid of its loop in the
 /// stream surface's (m, r theta) plane (Green's theorem on the closed polygon), mapped back to the
 /// surface: m'_c from m_c, theta_c = (r theta)_c / r(m'_c).  On a cylindrical layer this plane is the
@@ -83,6 +105,7 @@ struct Layer
     double stagger_deg = 30.0;               ///< chord angle from the m' axis toward +theta
     double theta_le_deg = 0.0;               ///< circumferential position of the LE point (lean)
     double solidity = 1.25;                  ///< 2-D cascade solidity (exports); the 3-D one follows from n_blades
+    double chord_scale = 1.0;                ///< reference-point stacking: c' = chord_scale m'_TE / cos(stagger)
 
     /// The profile used for the geometry: NACA 65 (section) or custom parameters.
     [[nodiscard]] bool uses_custom() const { return method == Method::Custom || (method == Method::Naca65Custom && fitted_to); }
@@ -100,6 +123,25 @@ struct Restagger
 };
 [[nodiscard]] std::string to_string(Restagger::Axis a);
 [[nodiscard]] Restagger::Axis restagger_axis_from_string(const std::string& s);
+
+/// Stacking of the sections (see the file comment).
+struct Stacking
+{
+    enum class Mode { Edges, ReferencePoint };
+    enum class Variant { SameZTheta, ClosestPoint };  ///< Vos et al. 2025, Sec. 4.1, variants 1 and 2
+    enum class Reference { CG, LE, TE };
+    Mode mode = Mode::Edges;
+    Variant variant = Variant::SameZTheta;
+    Reference reference = Reference::CG;
+    double z_ref = 0.0;          ///< axial position of the first layer's reference point [mm]
+    double theta_ref_deg = 0.0;  ///< angle of every reference point [deg]
+};
+[[nodiscard]] std::string to_string(Stacking::Mode m);
+[[nodiscard]] std::string to_string(Stacking::Variant v);
+[[nodiscard]] std::string to_string(Stacking::Reference r);
+[[nodiscard]] Stacking::Mode stacking_mode_from_string(const std::string& s);
+[[nodiscard]] Stacking::Variant stacking_variant_from_string(const std::string& s);
+[[nodiscard]] Stacking::Reference stacking_reference_from_string(const std::string& s);
 
 struct MeshOptions
 {
@@ -120,6 +162,7 @@ struct BladeDesign
     int n_blades = 18;
     bool mirror = false;                     ///< true: suction side toward -theta
     Restagger restagger{};                   ///< re-stagger of the whole blade
+    Stacking stacking{};                     ///< how the sections are stacked
     MeshOptions mesh{};
 
     /// Default: five Custom layers (0, 25, 50, 75, 100 % span) with the NASA Rotor 67 profiles
@@ -169,11 +212,50 @@ struct Placement
 [[nodiscard]] Placement placement(double stagger_deg, double theta_le_deg, double mprime_te, bool mirror,
                                   double restagger_deg = 0.0, const Vec2& pivot = Vec2::Zero());
 
+/// The same placement re-staggered by d [deg] about the conformal point P (see Placement).
+[[nodiscard]] Placement restaggered(const Placement& p, double d_deg, const Vec2& pivot);
+
 /// The re-stagger axis of a design: the radial line at (x_a, theta_a [rad]).  Throws
-/// std::invalid_argument when the reference section's pivot cannot be found.
+/// std::invalid_argument when the reference section's pivot cannot be found.  With reference-point
+/// stacking the reference section depends on the profiles, which are built here.
 [[nodiscard]] Vec2 restagger_axis(const BladeDesign& d, const Blade::FlowPath& fp);
 /// m' where the stream surface reaches the axial position x (throws when it does not).
 [[nodiscard]] double mprime_at_x(const Blade::StreamSurface& S, double x);
+/// m' of the point of the streamline (x, r)(m') closest to q: (xr(m') - q) . dxr(m') = 0.  Throws
+/// when the closest point is an end of the stream surface.
+[[nodiscard]] double closest_mprime(const Blade::StreamSurface& S, const Vec2& q);
+
+/// A design's stacking resolved on its channel (resolve_stacking).
+struct StackingLine
+{
+    Stacking::Mode mode = Stacking::Mode::Edges;
+    Stacking::Variant variant = Stacking::Variant::SameZTheta;
+    Stacking::Reference reference = Stacking::Reference::CG;
+    double theta = 0.0;          ///< theta of every reference point [rad]
+    std::vector<double> spans;   ///< the layer spans
+    std::vector<double> x;       ///< axial position of each layer's reference point
+    /// Axial position of the reference point at span s: natural spline through the layers.
+    [[nodiscard]] double x_at(double span) const;
+};
+/// Variant 1: x_k = Z_ref on every layer; variant 2: the closest-point chain from the first layer.
+/// Throws std::invalid_argument when a reference point is outside a stream surface.
+[[nodiscard]] StackingLine resolve_stacking(const BladeDesign& d, const Blade::FlowPath& fp);
+
+/// The placement of a section before any re-stagger: on the prescribed edges, or with its reference
+/// point on the stacking target of its stream surface (`loop`, the unstaggered profile, is used for
+/// the centre of gravity only; theta_le_deg only on the edges, chord_scale only off them).
+[[nodiscard]] Placement nominal_placement(const StackingLine& st, const Blade::StreamSurface& S, double stagger_deg,
+                                          double theta_le_deg, double chord_scale, const std::vector<Vec2>& loop, bool mirror);
+
+/// Area and centre of gravity of a section loop placed in (m', theta) on its stream surface (see the
+/// file comment: the area centroid in the (m, r theta) plane, mapped back).
+struct SectionCG
+{
+    double area = 0.0;     ///< in the (m, r theta) plane
+    double mprime = 0.0;
+    double theta = 0.0;    ///< [rad]
+};
+[[nodiscard]] SectionCG section_cg(const Blade::StreamSurface& S, const std::vector<Vec2>& conformal);
 
 /// Area and area centroid of a closed polygon (the last point may repeat the first); the area is
 /// positive whatever the orientation.  Throws std::invalid_argument for a degenerate polygon.
@@ -257,6 +339,9 @@ struct LayerResult
     double cg_theta = 0.0;            ///< theta of the centre of gravity [rad]
     Vec2 cg_xr{0.0, 0.0};             ///< (z, r) of the centre of gravity
     Vec3 cg_xyz{0.0, 0.0, 0.0};       ///< Cartesian centre of gravity
+    // stacking
+    Vec2 stack_point{0.0, 0.0};       ///< (m', theta) of the stacking point (the reference point; the LE on the edges)
+    Vec2 stack_xr{0.0, 0.0};          ///< its (z, r)
 };
 
 /// Structured surface grid, i fastest: p[i + ni * j].
@@ -285,7 +370,10 @@ struct DesignResult
     // meridional view
     std::vector<Vec2> hub, casing;             ///< wall polylines (inlet end -> outlet end)
     std::vector<std::vector<Vec2>> streamlines;///< one per layer
-    std::vector<Vec2> le_line, te_line;
+    std::vector<Vec2> le_line, te_line;        ///< the channel's (prescribed) LE / TE lines
+    std::vector<Vec2> blade_le, blade_te;      ///< (z, r) of the placed LE / TE point of every mesh row
+    std::vector<Vec2> stacking_xr;             ///< (z, r) of every mesh row's stacking point
+    std::vector<Vec3> stacking_xyz;            ///< the same in Cartesian
     // 3-D mesh (empty when a layer failed)
     Grid blade;                                ///< i around the loop, j hub -> tip
     Grid hub_wall, casing_wall;                ///< i meridional, j across one pitch
@@ -320,11 +408,13 @@ private:
 /// Builds the 2-D section of one layer (no cache).
 [[nodiscard]] Section2D build_section2d(const Layer& layer, const Naca::Naca65Section* naca, const MeshOptions& mesh);
 
-/// Places one layer (2-D section already built) on its stream surface; re-staggered by
-/// `restagger_deg` about the radial axis at (x_a, theta_a) = `axis` (restagger_axis).
+/// Places one layer (2-D section already built) on its stream surface, stacked by `stacking`
+/// (resolve_stacking; nullptr: the prescribed edges); re-staggered by `restagger_deg` about the
+/// radial axis at (x_a, theta_a) = `axis` (restagger_axis).
 [[nodiscard]] LayerResult place_layer(const Layer& layer, std::shared_ptr<const Section2D> sec,
                                       const Blade::FlowPath& fp, int n_blades, bool mirror,
-                                      double restagger_deg = 0.0, const Vec2& axis = Vec2::Zero());
+                                      double restagger_deg = 0.0, const Vec2& axis = Vec2::Zero(),
+                                      const StackingLine* stacking = nullptr);
 
 /// Fits the custom parameters of a NACA 65 + Custom layer to its NACA section (seconds).
 void fit_layer(Layer& layer, Evaluator& ev);

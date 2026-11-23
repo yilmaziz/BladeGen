@@ -11,6 +11,7 @@
 #include <cmath>
 #include <fstream>
 #include <future>
+#include <sstream>
 #include <stdexcept>
 
 namespace BladeGen::Design {
@@ -193,6 +194,40 @@ Restagger::Axis restagger_axis_from_string(const std::string& s)
     throw std::invalid_argument("unknown re-stagger axis '" + s + "' (hub, mid, tip, point)");
 }
 
+std::string to_string(Stacking::Mode m) { return m == Stacking::Mode::Edges ? "edges" : "reference_point"; }
+std::string to_string(Stacking::Variant v) { return v == Stacking::Variant::SameZTheta ? "same_z_theta" : "closest_point"; }
+std::string to_string(Stacking::Reference r)
+{
+    switch (r) {
+    case Stacking::Reference::CG: return "cg";
+    case Stacking::Reference::LE: return "le";
+    case Stacking::Reference::TE: return "te";
+    }
+    return "cg";
+}
+
+Stacking::Mode stacking_mode_from_string(const std::string& s)
+{
+    if (s == "edges") return Stacking::Mode::Edges;
+    if (s == "reference_point") return Stacking::Mode::ReferencePoint;
+    throw std::invalid_argument("unknown stacking mode '" + s + "' (edges, reference_point)");
+}
+
+Stacking::Variant stacking_variant_from_string(const std::string& s)
+{
+    if (s == "same_z_theta") return Stacking::Variant::SameZTheta;
+    if (s == "closest_point") return Stacking::Variant::ClosestPoint;
+    throw std::invalid_argument("unknown stacking variant '" + s + "' (same_z_theta, closest_point)");
+}
+
+Stacking::Reference stacking_reference_from_string(const std::string& s)
+{
+    if (s == "cg") return Stacking::Reference::CG;
+    if (s == "le") return Stacking::Reference::LE;
+    if (s == "te") return Stacking::Reference::TE;
+    throw std::invalid_argument("unknown stacking reference '" + s + "' (cg, le, te)");
+}
+
 void BladeDesign::validate() const
 {
     meridional.validate();
@@ -204,6 +239,7 @@ void BladeDesign::validate() const
         require(std::abs(l.stagger_deg) < 80.0, "|stagger| must be below 80 deg");
         require(std::abs(l.stagger_deg + restagger.angle_deg) < 80.0, "|stagger + re-stagger| must be below 80 deg");
         require(l.solidity > 0.0, "solidity must be > 0");
+        require(std::isfinite(l.chord_scale) && l.chord_scale >= 0.2 && l.chord_scale <= 5.0, "chord scale in [0.2, 5]");
         l.naca.validate();
         if (l.uses_custom()) Profile::validate(l.custom);
     }
@@ -212,6 +248,8 @@ void BladeDesign::validate() const
     require(std::isfinite(restagger.chord_fraction) && restagger.chord_fraction >= 0.0 && restagger.chord_fraction <= 1.0,
             "re-stagger pivot chord fraction in [0, 1]");
     require(std::isfinite(restagger.z) && std::isfinite(restagger.theta_deg), "re-stagger point must be finite");
+    require(std::isfinite(stacking.z_ref) && std::isfinite(stacking.theta_ref_deg) && std::abs(stacking.theta_ref_deg) <= 180.0,
+            "stacking reference point: finite Z, theta in [-180, 180] deg");
     require(mesh.n_edge >= 4 && mesh.n_body >= 8, "mesh: n_edge >= 4, n_body >= 8");
     require(mesh.n_rows >= 2 && mesh.n_rows <= 400, "mesh: n_rows in [2, 400]");
     require(mesh.n_wall_m >= 4 && mesh.n_wall_theta >= 2 && mesh.n_field_chord >= 3, "mesh: wall / field resolution");
@@ -229,6 +267,9 @@ json to_json(const BladeDesign& d)
     j["mirror"] = d.mirror;
     j["restagger"] = {{"angle_deg", d.restagger.angle_deg}, {"axis", to_string(d.restagger.axis)},
                       {"chord_fraction", d.restagger.chord_fraction}, {"z", d.restagger.z}, {"theta_deg", d.restagger.theta_deg}};
+    j["stacking"] = {{"mode", to_string(d.stacking.mode)}, {"variant", to_string(d.stacking.variant)},
+                     {"reference", to_string(d.stacking.reference)}, {"z_ref", d.stacking.z_ref},
+                     {"theta_ref_deg", d.stacking.theta_ref_deg}};
     const auto& m = d.meridional;
     j["meridional"] = {{"hub", wall_json(m.hub, m.hub_law)},
                        {"casing", wall_json(m.casing, m.casing_law)},
@@ -241,7 +282,8 @@ json to_json(const BladeDesign& d)
     for (const auto& l : d.layers) {
         json q = {{"name", l.name}, {"span", l.span}, {"method", to_string(l.method)}, {"naca", naca_json(l.naca)},
                   {"custom", IO::to_json(l.custom)}, {"stagger_deg", l.stagger_deg},
-                  {"theta_le_deg", l.theta_le_deg}, {"solidity", l.solidity}, {"fit_rms", l.fit_rms}};
+                  {"theta_le_deg", l.theta_le_deg}, {"solidity", l.solidity}, {"chord_scale", l.chord_scale},
+                  {"fit_rms", l.fit_rms}};
         q["fitted_to"] = l.fitted_to ? naca_json(*l.fitted_to) : json(nullptr);
         j["layers"].push_back(q);
     }
@@ -261,6 +303,7 @@ Layer layer_from(const json& q)
     l.stagger_deg = q.value("stagger_deg", l.stagger_deg);
     l.theta_le_deg = q.value("theta_le_deg", l.theta_le_deg);
     l.solidity = q.value("solidity", l.solidity);
+    l.chord_scale = q.value("chord_scale", l.chord_scale);
     if (q.contains("fit_rms") && q["fit_rms"].is_number()) l.fit_rms = q["fit_rms"].get<double>();
     if (q.contains("fitted_to") && q["fitted_to"].is_object()) l.fitted_to = naca_from(q["fitted_to"]);
     return l;
@@ -338,6 +381,15 @@ BladeDesign design_from_json(const json& j)
         R.chord_fraction = q.value("chord_fraction", R.chord_fraction);
         R.z = q.value("z", R.z);
         R.theta_deg = q.value("theta_deg", R.theta_deg);
+    }
+    if (j.contains("stacking")) {  // designs saved before v1.0.4: the prescribed edges
+        const auto& q = j.at("stacking");
+        auto& St = d.stacking;
+        St.mode = stacking_mode_from_string(q.value("mode", to_string(St.mode)));
+        St.variant = stacking_variant_from_string(q.value("variant", to_string(St.variant)));
+        St.reference = stacking_reference_from_string(q.value("reference", to_string(St.reference)));
+        St.z_ref = q.value("z_ref", St.z_ref);
+        St.theta_ref_deg = q.value("theta_ref_deg", St.theta_ref_deg);
     }
     if (j.contains("meridional")) {
         const auto& m = j["meridional"];
@@ -571,36 +623,167 @@ Vec2 Placement::operator()(const Vec2& q) const
     return {m0 + c * (q.x() * cg - sign * q.y() * sn), t0 + c * (q.x() * sn + sign * q.y() * cg)};
 }
 
+Placement restaggered(const Placement& p, double d_deg, const Vec2& pivot)
+{
+    if (d_deg == 0.0) return p;
+    const double d = Math::deg2rad(d_deg);
+    Placement q = p;
+    q.gamma = p.gamma + d;
+    const Vec2 v = Vec2(p.m0, p.t0) - pivot;
+    q.m0 = pivot.x() + std::cos(d) * v.x() - std::sin(d) * v.y();
+    q.t0 = pivot.y() + std::sin(d) * v.x() + std::cos(d) * v.y();
+    return q;
+}
+
 Placement placement(double stagger_deg, double theta_le_deg, double mprime_te, bool mirror, double restagger_deg, const Vec2& pivot)
 {
     Placement p;
-    const double g0 = Math::deg2rad(stagger_deg), d = Math::deg2rad(restagger_deg);
-    p.gamma = g0 + d;
+    const double g0 = Math::deg2rad(stagger_deg);
+    p.gamma = g0;
     p.c = mprime_te / std::cos(g0);
     p.sign = mirror ? -1.0 : 1.0;
-    const Vec2 v = Vec2(0.0, Math::deg2rad(theta_le_deg)) - pivot;
-    p.m0 = pivot.x() + std::cos(d) * v.x() - std::sin(d) * v.y();
-    p.t0 = pivot.y() + std::sin(d) * v.x() + std::cos(d) * v.y();
-    return p;
+    p.m0 = 0.0;
+    p.t0 = Math::deg2rad(theta_le_deg);
+    return restaggered(p, restagger_deg, pivot);
 }
 
 double mprime_at_x(const Blade::StreamSurface& S, double x)
 {
     const double a = S.mprime_inlet(), b = S.mprime_outlet();
     const auto f = [&](double mp) { return S.xr(mp).x() - x; };
-    if ((f(a) > 0.0) == (f(b) > 0.0)) throw std::invalid_argument("the re-stagger axis is outside the meridional channel");
+    if ((f(a) > 0.0) == (f(b) > 0.0)) {
+        std::ostringstream m;
+        m << "Z = " << x << " mm is outside the stream surface at span " << S.span() << " (Z " << S.xr(a).x() << " .. "
+          << S.xr(b).x() << ")";
+        throw std::invalid_argument(m.str());
+    }
     return Math::brent_root(f, a, b, 1e-13);
 }
 
+double closest_mprime(const Blade::StreamSurface& S, const Vec2& q)
+{
+    const double a = S.mprime_inlet(), b = S.mprime_outlet();
+    constexpr int n = 400;
+    const auto at = [&](int i) { return a + (b - a) * i / n; };
+    const auto f = [&](double mp) {
+        const Vec2 e = S.xr(mp) - q;
+        return e.dot(e);
+    };
+    int best = 0;
+    double fb = f(a);
+    for (int i = 1; i <= n; ++i)
+        if (const double v = f(at(i)); v < fb) {
+            fb = v;
+            best = i;
+        }
+    if (best == 0 || best == n) {
+        std::ostringstream m;
+        m << "the point of the stream surface at span " << S.span() << " closest to (Z " << q.x() << ", R " << q.y()
+          << ") is an end of the channel";
+        throw std::invalid_argument(m.str());
+    }
+    // d/dm' |xr - q|^2 / 2 = (xr - q) . dxr: negative before the minimum, positive after it
+    const auto g = [&](double mp) { return (S.xr(mp) - q).dot(S.dxr(mp)); };
+    const double lo = at(best - 1), hi = at(best + 1);
+    if ((g(lo) > 0.0) == (g(hi) > 0.0)) throw std::invalid_argument("closest_mprime: the closest point is not bracketed");
+    return Math::brent_root(g, lo, hi, 1e-14);
+}
+
+double StackingLine::x_at(double span) const
+{
+    if (x.empty() || x.size() != spans.size()) throw std::logic_error("StackingLine: no reference points");
+    if (variant == Stacking::Variant::SameZTheta) return x.front();
+    const auto w = spline_weights(spans, span);
+    double v = 0.0;
+    for (std::size_t k = 0; k < x.size(); ++k) v += w[k] * x[k];
+    return v;
+}
+
+StackingLine resolve_stacking(const BladeDesign& d, const Blade::FlowPath& fp)
+{
+    StackingLine st;
+    const auto& in = d.stacking;
+    st.mode = in.mode;
+    st.variant = in.variant;
+    st.reference = in.reference;
+    st.theta = Math::deg2rad(in.theta_ref_deg);
+    for (const auto& l : d.layers) st.spans.push_back(l.span);
+    if (st.mode == Stacking::Mode::Edges) return st;
+    const auto S0 = fp.surface(st.spans.front());
+    Vec2 Q = S0.xr(mprime_at_x(S0, in.z_ref));
+    st.x.push_back(in.z_ref);
+    for (std::size_t k = 1; k < st.spans.size(); ++k) {
+        const auto S = fp.surface(st.spans[k]);
+        if (st.variant == Stacking::Variant::SameZTheta) {
+            (void)mprime_at_x(S, in.z_ref);  // the radial line must cross every layer
+            st.x.push_back(in.z_ref);
+        } else {
+            Q = S.xr(closest_mprime(S, Q));
+            st.x.push_back(Q.x());
+        }
+    }
+    return st;
+}
+
+SectionCG section_cg(const Blade::StreamSurface& S, const std::vector<Vec2>& conformal)
+{
+    std::vector<Vec2> dev;
+    dev.reserve(conformal.size());
+    for (const auto& q : conformal) dev.emplace_back(S.m_of_mprime(q.x()), S.xr(q.x()).y() * q.y());
+    const auto pc = polygon_centroid(dev);
+    // m' of the centroid's m (m(m') increases; beyond the ends it continues straight)
+    const auto f = [&](double mp) { return S.m_of_mprime(mp) - pc.centroid.x(); };
+    double lo = S.mprime_inlet(), hi = S.mprime_outlet();
+    const double w = hi - lo;
+    for (int i = 0; i < 20 && f(lo) > 0.0; ++i) lo -= w;
+    for (int i = 0; i < 20 && f(hi) < 0.0; ++i) hi += w;
+    SectionCG r;
+    r.area = pc.area;
+    r.mprime = Math::brent_root(f, lo, hi, 1e-14);
+    r.theta = pc.centroid.y() / S.xr(r.mprime).y();
+    return r;
+}
+
+Placement nominal_placement(const StackingLine& st, const Blade::StreamSurface& S, double stagger_deg, double theta_le_deg,
+                            double chord_scale, const std::vector<Vec2>& loop, bool mirror)
+{
+    if (st.mode == Stacking::Mode::Edges) return placement(stagger_deg, theta_le_deg, S.mprime_te(), mirror);
+    if (!(chord_scale > 0.0)) throw std::invalid_argument("nominal_placement: chord scale must be > 0");
+    // c' = chord_scale m'_TE / cos(gamma); the reference point q_ref onto the target T
+    Placement p = placement(stagger_deg, 0.0, chord_scale * S.mprime_te(), mirror);
+    const Vec2 T(mprime_at_x(S, st.x_at(S.span())), st.theta);
+    const Vec2 q = st.reference == Stacking::Reference::LE   ? Vec2(0.0, 0.0)
+                   : st.reference == Stacking::Reference::TE ? Vec2(1.0, 0.0)
+                                                             : polygon_centroid(loop).centroid;
+    const Vec2 at = p(q);
+    p.m0 = T.x() - at.x();
+    p.t0 = T.y() - at.y();
+    if (st.reference != Stacking::Reference::CG) return p;
+    // the physical centre of gravity onto T: shift in (m', theta) until it is there
+    std::vector<Vec2> conf(loop.size());
+    for (int it = 0; it < 60; ++it) {
+        for (std::size_t i = 0; i < loop.size(); ++i) conf[i] = p(loop[i]);
+        const auto c = section_cg(S, conf);
+        const Vec2 dlt = T - Vec2(c.mprime, c.theta);
+        p.m0 += dlt.x();
+        p.t0 += dlt.y();
+        if (std::max(std::abs(dlt.x()), std::abs(dlt.y())) < 1e-13) return p;
+    }
+    throw std::invalid_argument("the centre-of-gravity stacking did not converge");
+}
+
 LayerResult place_layer(const Layer& layer, std::shared_ptr<const Section2D> sec, const Blade::FlowPath& fp,
-                        int n_blades, bool mirror, double restagger_deg, const Vec2& axis)
+                        int n_blades, bool mirror, double restagger_deg, const Vec2& axis, const StackingLine* stacking)
 {
     LayerResult r;
     r.section = sec;
     r.surface = fp.surface(layer.span);
     const auto& S = r.surface;
+    const StackingLine edges{};
+    const StackingLine& st = stacking ? *stacking : edges;
     const Vec2 pivot = restagger_deg == 0.0 ? Vec2::Zero() : Vec2(mprime_at_x(S, axis.x()), axis.y());
-    const auto conf = placement(layer.stagger_deg, layer.theta_le_deg, S.mprime_te(), mirror, restagger_deg, pivot);
+    const auto conf = restaggered(
+        nominal_placement(st, S, layer.stagger_deg, layer.theta_le_deg, layer.chord_scale, sec->loop.xy, mirror), restagger_deg, pivot);
     r.gamma = conf.gamma;
     r.chord_mprime = conf.c;
     r.mprime_le = conf.m0;
@@ -637,38 +820,78 @@ LayerResult place_layer(const Layer& layer, std::shared_ptr<const Section2D> sec
     r.pitch_le = 2.0 * Math::kPi * r.r_le / n_blades;
     r.solidity_3d = r.chord / (Math::kPi * (r.r_le + r.r_te) / n_blades);
     // centre of gravity: area centroid in the (m, r theta) plane, mapped back to the surface
-    std::vector<Vec2> dev;
-    dev.reserve(r.conformal.size());
-    for (const auto& q : r.conformal) dev.emplace_back(S.m_of_mprime(q.x()), S.xr(q.x()).y() * q.y());
-    const auto pc = polygon_centroid(dev);
-    r.section_area = pc.area;
-    r.cg_mprime = Math::brent_root([&](double mp) { return S.m_of_mprime(mp) - pc.centroid.x(); }, S.mprime_inlet(),
-                                   S.mprime_outlet(), 1e-14);
+    const auto cg = section_cg(S, r.conformal);
+    r.section_area = cg.area;
+    r.cg_mprime = cg.mprime;
+    r.cg_theta = cg.theta;
     r.cg_xr = S.xr(r.cg_mprime);
-    r.cg_theta = pc.centroid.y() / r.cg_xr.y();
     r.cg_xyz = S.cartesian(r.cg_mprime, r.cg_theta);
+    // stacking point
+    if (st.mode == Stacking::Mode::Edges || st.reference == Stacking::Reference::LE) r.stack_point = {conf.m0, conf.t0};
+    else if (st.reference == Stacking::Reference::TE) r.stack_point = te;
+    else r.stack_point = {r.cg_mprime, r.cg_theta};
+    r.stack_xr = S.xr(r.stack_point.x());
     return r;
 }
 
-Vec2 restagger_axis(const BladeDesign& d, const Blade::FlowPath& fp)
+namespace {
+
+/// The row at span s between the layers: stagger, lean, chord scale and (when `loops` is given)
+/// the unstaggered profile, by natural spline weights over the layer spans (exact at the layers).
+struct RowSpec
+{
+    double stagger_deg = 0.0, theta_le_deg = 0.0, chord_scale = 0.0;
+    std::vector<Vec2> loop;
+};
+
+RowSpec row_spec(const BladeDesign& d, const std::vector<const std::vector<Vec2>*>& loops, double s)
+{
+    std::vector<double> spans;
+    for (const auto& l : d.layers) spans.push_back(l.span);
+    const auto w = spline_weights(spans, s);
+    RowSpec r;
+    for (std::size_t k = 0; k < d.layers.size(); ++k) {
+        r.stagger_deg += w[k] * d.layers[k].stagger_deg;
+        r.theta_le_deg += w[k] * d.layers[k].theta_le_deg;
+        r.chord_scale += w[k] * d.layers[k].chord_scale;
+    }
+    if (loops.size() == d.layers.size()) {
+        r.loop.assign(loops.front()->size(), Vec2::Zero());
+        for (std::size_t k = 0; k < loops.size(); ++k)
+            for (std::size_t i = 0; i < r.loop.size(); ++i) r.loop[i] += w[k] * (*loops[k])[i];
+    }
+    return r;
+}
+
+Vec2 restagger_axis_impl(const BladeDesign& d, const Blade::FlowPath& fp, const StackingLine& st,
+                         const std::vector<const std::vector<Vec2>*>& loops)
 {
     const auto& R = d.restagger;
     if (R.axis == Restagger::Axis::Point) return {R.z, Math::deg2rad(R.theta_deg)};
-    std::vector<double> spans;
-    for (const auto& l : d.layers) spans.push_back(l.span);
-    const double s = R.axis == Restagger::Axis::Hub ? spans.front()
-                     : R.axis == Restagger::Axis::Tip ? spans.back()
-                                                      : 0.5 * (spans.front() + spans.back());
+    const double s0 = d.layers.front().span, s1 = d.layers.back().span;
+    const double s = R.axis == Restagger::Axis::Hub ? s0 : R.axis == Restagger::Axis::Tip ? s1 : 0.5 * (s0 + s1);
     // the nominal (un-re-staggered) reference section, interpolated in span like the mesh rows
-    const auto w = spline_weights(spans, s);
-    double gam = 0.0, th = 0.0;
-    for (std::size_t k = 0; k < d.layers.size(); ++k) {
-        gam += w[k] * d.layers[k].stagger_deg;
-        th += w[k] * d.layers[k].theta_le_deg;
-    }
+    const auto row = row_spec(d, loops, s);
     const auto S = fp.surface(s);
-    const Vec2 P = placement(gam, th, S.mprime_te(), d.mirror)({R.chord_fraction, 0.0});
+    const Vec2 P = nominal_placement(st, S, row.stagger_deg, row.theta_le_deg, row.chord_scale, row.loop, d.mirror)({R.chord_fraction, 0.0});
     return {S.xr(P.x()).x(), P.y()};
+}
+
+}  // namespace
+
+Vec2 restagger_axis(const BladeDesign& d, const Blade::FlowPath& fp)
+{
+    const auto st = resolve_stacking(d, fp);
+    std::vector<std::shared_ptr<const Section2D>> secs;
+    std::vector<const std::vector<Vec2>*> loops;
+    if (st.mode == Stacking::Mode::ReferencePoint && st.reference == Stacking::Reference::CG) {
+        Evaluator ev;
+        for (const auto& l : d.layers) {
+            secs.push_back(ev.section(l, d.mesh));
+            loops.push_back(&secs.back()->loop.xy);
+        }
+    }
+    return restagger_axis_impl(d, fp, st, loops);
 }
 
 // ── design ───────────────────────────────────────────────────────────────────
@@ -705,12 +928,23 @@ DesignResult Evaluator::evaluate(const BladeDesign& d)
             }
         }));
     for (auto& j : jobs) j.get();
+    // stacking
+    StackingLine st;
+    try {
+        st = resolve_stacking(d, *fp);
+    } catch (const std::exception& e) {
+        out.errors.push_back(std::string("stacking: ") + e.what());
+        return out;
+    }
+    std::vector<const std::vector<Vec2>*> loops;
+    if (std::all_of(secs.begin(), secs.end(), [](const auto& p) { return p != nullptr; }))
+        for (const auto& p : secs) loops.push_back(&p->loop.xy);
     // re-stagger axis
     Vec2 axis = Vec2::Zero();
     const double dg = d.restagger.angle_deg;
     if (dg != 0.0) {
         try {
-            axis = restagger_axis(d, *fp);
+            axis = restagger_axis_impl(d, *fp, st, loops);
             // the axis must cross every stream surface between hub and casing
             for (const double s : {0.0, 1.0}) (void)mprime_at_x(fp->surface(s), axis.x());
         } catch (const std::exception& e) {
@@ -726,7 +960,7 @@ DesignResult Evaluator::evaluate(const BladeDesign& d)
             continue;
         }
         try {
-            out.layers[k] = place_layer(d.layers[k], secs[k], *fp, d.n_blades, d.mirror, dg, axis);
+            out.layers[k] = place_layer(d.layers[k], secs[k], *fp, d.n_blades, d.mirror, dg, axis, &st);
         } catch (const std::exception& e) {
             out.layers[k].error = e.what();
         }
@@ -772,28 +1006,41 @@ DesignResult Evaluator::evaluate(const BladeDesign& d)
         }
     }
     double theta_hub = 0.0, theta_cas = 0.0;
+    std::vector<Vec2> row_conf(np);
     for (std::size_t j = 0; j < rows.size(); ++j) {
         const double s = s_lo + rows[j] * (s_hi - s_lo);
         out.row_span.push_back(s);
         const auto w = spline_weights(spans, s);
-        double gam = 0.0, th = 0.0;
-        for (std::size_t k = 0; k < nl; ++k) {
-            gam += w[k] * d.layers[k].stagger_deg;
-            th += w[k] * d.layers[k].theta_le_deg;
-        }
+        const auto row = row_spec(d, loops, s);
         const auto S = fp->surface(s);
-        const Vec2 pivot = dg == 0.0 ? Vec2::Zero() : Vec2(mprime_at_x(S, axis.x()), axis.y());
-        const auto conf = placement(gam, th, S.mprime_te(), d.mirror, dg, pivot);
+        Placement conf;
+        try {
+            const Vec2 pivot = dg == 0.0 ? Vec2::Zero() : Vec2(mprime_at_x(S, axis.x()), axis.y());
+            conf = restaggered(nominal_placement(st, S, row.stagger_deg, row.theta_le_deg, row.chord_scale, row.loop, d.mirror), dg, pivot);
+        } catch (const std::exception& e) {
+            out.errors.push_back(std::string("stacking: mesh row at span ") + std::to_string(s) + ": " + e.what());
+            out.blade = {};
+            return out;
+        }
         const double mp_le = conf.m0, mp_te = conf({1.0, 0.0}).x();
         double th_mean = 0.0;
         for (std::size_t i = 0; i < np; ++i) {
-            Vec2 q = Vec2::Zero();
-            for (std::size_t k = 0; k < nl; ++k) q += w[k] * out.layers[k].section->loop.xy[i];
-            const Vec2 mt = conf(q);
-            out.blade.p.push_back(S.cartesian(mt.x(), mt.y()));
-            th_mean += mt.y();
+            row_conf[i] = conf(row.loop[i]);
+            out.blade.p.push_back(S.cartesian(row_conf[i].x(), row_conf[i].y()));
+            th_mean += row_conf[i].y();
         }
         th_mean /= static_cast<double>(np);
+        // the row's LE / TE and stacking point
+        out.blade_le.push_back(S.xr(mp_le));
+        out.blade_te.push_back(S.xr(mp_te));
+        Vec2 sp(conf.m0, conf.t0);
+        if (st.mode == Stacking::Mode::ReferencePoint && st.reference == Stacking::Reference::TE) sp = conf({1.0, 0.0});
+        if (st.mode == Stacking::Mode::ReferencePoint && st.reference == Stacking::Reference::CG) {
+            const auto c = section_cg(S, row_conf);
+            sp = {c.mprime, c.theta};
+        }
+        out.stacking_xr.push_back(S.xr(sp.x()));
+        out.stacking_xyz.push_back(S.cartesian(sp.x(), sp.y()));
         if (j == 0) theta_hub = th_mean;
         if (j + 1 == rows.size()) theta_cas = th_mean;
         for (int i = 0; i < nf; ++i) {

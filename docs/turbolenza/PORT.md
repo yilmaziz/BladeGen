@@ -83,21 +83,38 @@ separation at 0.939 against 0.746. Why?
 
   | | Fig. 5-15 | ours on Fig. 5-6's Mach |
   |---|---|---|
-  | SS transition | station 3 (0.130) | station 3 |
+  | SS transition | station 3 (0.130) | station 3, on the threshold (see below) |
   | SS separation | station 17 (0.739) | station 17 |
   | PS transition | station 4 (0.174) | station 4 |
+
+  The SS transition cell is not firm. Re_θ at station 3 is 250.0 to 250.35, depending on the digitization.
+  An independent digitization of Fig. 5-6 gives station 4, and with ±0.004 noise station 3 comes out in
+  only 55 % of draws. The SS separation at station 17 (70 % under noise) and the PS transition at station 4
+  (100 %) are robust.
 
   Our suction-surface Mach distribution differs from Fig. 5-6 on all five grid levels (the levels agree with
   each other within 0.01 for 0.2 ≤ f ≤ 0.8). Near the LE ours accelerates more slowly (f = 0.043:
   0.837 against 0.870). In 0.3 ≤ f ≤ 0.6 ours is 0.03 to 0.05 lower; in 0.78 ≤ f ≤ 0.95 it is 0.01 to
   0.07 higher (medium, f = 0.5: 0.755 against 0.803; f = 0.87: 0.590 against 0.537). So our suction
-  surface diffuses less before f ≈ 0.8 and then abruptly at the end. Our separation (f 0.90 to 0.95) follows that abrupt rear diffusion. On our
-  input it stays within 0.902 to 0.951 for every boundary-layer ingredient in the table below.
+  surface diffuses less before f ≈ 0.8 and then abruptly at the end. Our separation (f 0.90 to 0.95)
+  follows that abrupt rear diffusion. On our input it stays within 0.902 to 0.951 for every boundary-layer
+  ingredient in the table below.
+- **The H levels still differ.** The stations match, but on Aungier's input our H does not reproduce the
+  figure's levels (the independent check found this):
+  - Our turbulent H before separation is systematically low. On SS stations 12 to 16 it is 0.05 to 0.18
+    below the figure (station 16: 2.42 to 2.46 against 2.60). On the PS, for f 0.5 to 0.9, it is 0.03 to
+    0.05 low.
+  - Our laminar H at station 1 misses too: SS 2.99 against 2.88, PS 3.00 against 3.21 (see "Discretization
+    of the laminar march" below).
+
+  So the agreement is in the stations, not in the H levels.
 
 **How firm this is.** The Fig. 5-6 Mach numbers are our own rough digitization: ±0.004, with the f = 0
-values extrapolated. Re_θ at suction-surface station 3 is 250.3, right at the threshold. With ±0.004 of
-random noise on the Mach numbers, the transition stays at station 3 in 64 % of 300 draws (station 4 in the
-rest). The separation stays at station 17 in 71 % (18: 11 %, 19: 18 %). Aungier's grid (24 stations,
+values extrapolated. One of its points, f 0.7958, lies on the experiment's dashed curve, not on the
+potential-flow line (0.611 against 0.599). Re_θ at suction-surface station 3 is 250.3 on our
+digitization, right at the threshold. With ±0.004 of random noise on the Mach numbers, the transition stays
+at station 3 in 64 % of 300 draws (station 4 in the rest); the independent check found 55 %. The
+separation stays at station 17 in 71 % (18: 11 %, 19: 18 %). Aungier's grid (24 stations,
 uniform in m) is inferred from the vertices. Our arc length per station is applied to his grid.
 
 **Ingredients, one at a time.** Each cell gives the transition station f, the Re_θ = 250 crossing f in
@@ -180,7 +197,8 @@ under test. At the switch the change was 3.7e-2, close to the fixed point.
 
 So the fixed point itself is unstable for omega ≥ 0.5, not only the first large step. The relaxed
 iteration m ← m + omega (F(m) − m) has a mode with growth factor 1 − omega (1 − μ). From the growth at
-0.5, 0.8 and 1.0, μ ≈ −5, so the limit is omega ≈ 2/(1 − μ) ≈ 0.3. At 0.3 that mode is barely damped (about
+0.5, 0.8 and 1.0, μ ≈ −5, so the limit is omega ≈ 2/(1 − μ) ≈ 0.3 (the independent check: about
+0.33). At 0.3 that mode is barely damped (about
 −0.8 per iteration). Without the ramp, the large first steps push it over. At 0.2 it is damped to about −0.2
 per iteration: the early β_out alternation at omega 0.2 (25.79, 25.09, 25.74, 25.64 deg). The slow monotone
 mode contracts at 0.88 (omega 0.1) and 0.77 (omega 0.2).
@@ -192,16 +210,31 @@ thinner separated layer) fits the known limit of direct, edge-velocity-driven co
 which inverse and semi-inverse couplings exist. That is cited from general knowledge; no paper was opened.
 
 **Recommendation (not applied).** Set the default omega_BL to 0.2 and max_bl_iterations to 60. At 0.2 the
-case converged in 35 iterations (constant wake) and 34 (marched), above today's default limit of 30. At 0.1
-it took 74. The current default, 0.5, diverges on the reference case.
+reference case converged in 35 iterations (constant wake) and 34 (marched), above today's default limit of
+30. The independent check also ran 0.2 at β1 42 deg (35 iterations, 25.70 deg) and at M1 0.5 (36
+iterations, 25.75 deg). At 0.1 it took 74. The current default, 0.5, diverges on the reference case.
+
+The stability limit depends on the case. It comes from one eigenvalue estimate on one case, and 0.2 leaves
+a margin of only about 1.6 below it. Another blade, incidence or Mach number can have a stronger
+separated-tail response and a lower limit.
 
 **User decisions.**
 
 1. Accept the station-fraction reading of Fig. 5-15's axis. The validation now reports both abscissae.
    Should the window and the files also give f for the transition and separation?
 2. Is the inviscid SS distribution against Fig. 5-6 (a potential-flow question) worth a study of its own?
-   Candidates: the blade geometry, the LE and TE node placement, the Kutta condition, our 42 stations
-   against his 24.
+   - **Ruled out:** the Kutta condition or the exit angle, and the station count. very_coarse (21 stations)
+     matches medium within 0.003.
+   - **The circulation check.** Integrating Fig. 5-6's W_SS − W_PS over the interior stations gives
+     Γ ≥ 12.65 m²/s. Γ = s ΔW_u is 12.17 at Aungier's 24.4 deg and 12.51 at our 23.57 deg. So Fig. 5-6
+     carries more circulation yet less turning, which a potential flow of our blade, pitch and inlet cannot
+     do.
+   - **Candidates first:**
+     - the blade geometry: the camber-line distribution and Aungier's Ch. 4 representation;
+     - the solidity or pitch: about 0.94 would reconcile the two, a hypothesis only;
+     - the inlet definition.
+   - **The LE:** our SS/PS first-station Mach 0.77/0.34 against his 0.76/0.66. The stagnation point sits
+     elsewhere.
 3. Keep or change the laminar start. The squared form removes the first-order start error, and shifts the
    transition by about one medium-grid station.
 4. The default omega_BL and max_bl_iterations: 0.2 and 60 recommended (above); defaults unchanged.

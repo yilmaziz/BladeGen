@@ -62,8 +62,8 @@ the chordwise x/c of each wall node. Aungier does not state this. The evidence:
   the LE; on the pressure surface 0.2191, 0.4789, 0.8705, 0.914, 0.9587 (= 5, 11, 20, 21, 22 /23). Fig. 5-6
   (p. 91) shows the same 1/23 vertex spacing.
 - The suction- and pressure-surface vertices **coincide** (within 0.0004). For a 33°-staggered blade, the
-  chordwise x/c of the two wall nodes of one station differ by 0.03 to 0.09 (TURBOlenza's medium grid).
-  Plotting against x/c would separate them by 25 to 75 px.
+  chordwise x/c of the two wall nodes of one station differ by about 0.01 to 0.07 (median 0.049) on
+  TURBOlenza's medium grid. Plotting against x/c would separate them by about 8 to 60 px (median 40).
 - Both curves start at 0 and end at 1, although the book says the first and last blade nodes lie inside the
   passage (2003 p. 91).
 - At the first station H is the Λ = 0 value of the station's Mach number in Fig. 5-6: 0.76 gives 2.965 and

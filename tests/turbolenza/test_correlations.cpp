@@ -824,6 +824,46 @@ TEST_CASE("the row-level leakage call and the p. 147 distribution", "[turbolenza
     CHECK_THROWS_AS(loss_coefficient_from_pressure(500.0, 1.0e5, 1.0e5), CorrelationError);
 }
 
+TEST_CASE("evaluate: a guide vane with beta1* >= 0 goes to Howell and keeps its deviation at any incidence",
+          "[turbolenza][correlations]")
+{
+    // its own test case, so that nothing earlier can throw first: with beta1* >= 0 Eq. 6-76 is defined, and
+    // only the guide-vane rule (6-77 without its incidence term, p. 144) keeps the deviation fixed
+    const CorrelationOptions opt;
+    const Gas gas;
+    CascadeGeometry v;
+    v.kind = BladeRowKind::InletGuideVane;
+    v.profile = ProfileFamily::Naca;
+    v.camberline = Camberline::Naca65;
+    v.max_camber_position = 0.5;
+    v.chord = 0.06;
+    v.solidity = 1.0;
+    v.stagger = 2.0 * kDeg;
+    v.camber = -25.0 * kDeg;
+    v.thickness_ratio = 0.10;
+    v.throat_over_pitch = 0.85;
+    v.pitch_over_height = 0.3;
+    const InletState axial = inlet(0.0, 0.3);
+    // a NACA 65 / circular-arc guide vane goes to Howell too, not to Lieblein's 6-19
+    {
+        const CascadePerformance p = evaluate(v, axial, discharge(axial), gas, opt);
+        const BladeAngles ba = blade_angles(Camberline::Naca65, -2.0, 25.0, 0.5);
+        const double howell = howell_design_deviation_deg(1.0, 1.0, 0.5, ba.kappa2_deg, 25.0, p.design_beta1_deg, 1.0);
+        CHECK(p.design_deviation_deg == Approx(howell).margin(1e-13));
+        CHECK(std::abs(howell - lieblein_design_deviation_deg(Camberline::Naca65, 1.0, 1.0, p.design_beta1_deg, 25.0, 1.0)) > 0.5);
+        // beta1* >= 0 here (stagger 2 deg): Eq. 6-76 would be defined, and still the guide vane's deviation
+        // does not move with incidence (6-77 without its incidence term, p. 144)
+        CHECK(p.design_beta1_deg > 0.0);
+        CHECK(p.deviation_slope == 0.0);  // reported as 0 for a guide vane (p. 144)
+        const InletState turned = inlet(-6.0 * kDeg, 0.3);  // +6 deg in the sign-changed cascade frame
+        const CascadePerformance q = evaluate(v, turned, discharge(turned), gas, opt);
+        CHECK(q.incidence_deg - p.incidence_deg == Approx(6.0).margin(1e-12));
+        CHECK(q.deviation_deg == Approx(p.deviation_deg).margin(1e-13));
+        CHECK(q.deviation_deg == Approx(p.design_deviation_deg).margin(1e-13));
+        CHECK(6.0 * deviation_incidence_slope(p.design_beta1_deg, 1.0) > 0.25);  // a non-IGV would add 0.27 deg (measured)
+    }
+}
+
 TEST_CASE("evaluate: guide vanes of every profile, the off-design and design W_max, i_m != i*, choke angle",
           "[turbolenza][correlations]")
 {
@@ -873,24 +913,6 @@ TEST_CASE("evaluate: guide vanes of every profile, the off-design and design W_m
                             (ksh * ktd - 1.0) * lieblein_zero_camber_deviation_deg(-p.design_beta1_deg, 1.0);
         CHECK(p.design_deviation_deg == Approx(hand).margin(1e-12));
         CHECK(p.beta2 == Approx(-(ba.kappa2_deg + p.deviation_deg) * kDeg).margin(1e-15));
-    }
-    // a NACA 65 / circular-arc guide vane goes to Howell too, not to Lieblein's 6-19
-    {
-        const CascadeGeometry v = vane(ProfileFamily::Naca, Camberline::Naca65, 0.5, 0.10, 2.0);
-        const CascadePerformance p = evaluate(v, axial, discharge(axial), gas, opt);
-        const BladeAngles ba = blade_angles(Camberline::Naca65, -2.0, 25.0, 0.5);
-        const double howell = howell_design_deviation_deg(1.0, 1.0, 0.5, ba.kappa2_deg, 25.0, p.design_beta1_deg, 1.0);
-        CHECK(p.design_deviation_deg == Approx(howell).margin(1e-13));
-        CHECK(std::abs(howell - lieblein_design_deviation_deg(Camberline::Naca65, 1.0, 1.0, p.design_beta1_deg, 25.0, 1.0)) > 0.5);
-        // beta1* >= 0 here (stagger 2 deg): Eq. 6-76 would be defined, and still the guide vane's deviation
-        // does not move with incidence (6-77 without its incidence term, p. 144)
-        CHECK(p.design_beta1_deg > 0.0);
-        const InletState turned = inlet(-6.0 * kDeg, 0.3);  // +6 deg in the sign-changed cascade frame
-        const CascadePerformance q = evaluate(v, turned, discharge(turned), gas, opt);
-        CHECK(q.incidence_deg - p.incidence_deg == Approx(6.0).margin(1e-12));
-        CHECK(q.deviation_deg == Approx(p.deviation_deg).margin(1e-13));
-        CHECK(q.deviation_deg == Approx(p.design_deviation_deg).margin(1e-13));
-        CHECK(6.0 * deviation_incidence_slope(p.design_beta1_deg, 1.0) > 0.25);  // a non-IGV would add 0.27 deg (measured)
     }
     // the A4K6 stall ranges: Eqs. 6-47 / 6-48 by default (noted), Dunavant's 10 deg on request
     {

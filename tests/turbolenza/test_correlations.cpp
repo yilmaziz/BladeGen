@@ -598,7 +598,7 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     }
     // the AVDR term of Eq. 6-77: W_m2/W_m1 = 0.95 adds 0.5 deg of deviation
     CHECK(ps.deviation_deg - evaluate(g, ip, discharge(ip, 1.0, 1.05), gas, opt).deviation_deg == Approx(0.5).margin(1e-12));
-    // a non-IGV row of negative camber after s_row is refused (contract Sec. 0.2)
+    // a non-IGV row of negative camber after s_row is refused (the row sign maps a mirrored section before the correlations)
     CascadeGeometry gwrong = g;
     gwrong.row_sign = -1;
     CHECK_THROWS_AS(evaluate(gwrong, ip, discharge(ip), gas, opt), CorrelationError);

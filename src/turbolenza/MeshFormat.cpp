@@ -3,8 +3,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <format>
+#include <limits>
 #include <fstream>
 #include <initializer_list>
 #include <set>
@@ -63,11 +66,32 @@ const json& need(const json& j, const char* key, const std::string& where)
     return j.at(key);
 }
 
+// An integer JSON number within the range of int (a float such as 3.0, or 3e9, is refused).
+int to_int(const json& v, const std::string& where)
+{
+    if (!v.is_number_integer()) fail(where + " must be an integer");
+    if (v.is_number_unsigned()) {
+        const auto u = v.get<std::uint64_t>();
+        if (u > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) fail(where + " is out of the range of an integer");
+        return static_cast<int>(u);
+    }
+    const auto x = v.get<std::int64_t>();
+    if (x < std::numeric_limits<int>::min() || x > std::numeric_limits<int>::max())
+        fail(where + " is out of the range of an integer");
+    return static_cast<int>(x);
+}
+
 int integer(const json& j, const char* key, const std::string& where)
 {
+    return to_int(need(j, key, where), std::format("{}: '{}'", where, key));
+}
+
+// [a, b] of two integers.
+std::array<int, 2> pair_of(const json& j, const char* key, const std::string& where)
+{
     const json& v = need(j, key, where);
-    if (!v.is_number_integer()) fail(std::format("{}: '{}' must be an integer", where, key));
-    return v.get<int>();
+    if (!(v.is_array() && v.size() == 2)) fail(std::format("{}: '{}' must be a pair of integers", where, key));
+    return {to_int(v[0], std::format("{}: '{}'[0]", where, key)), to_int(v[1], std::format("{}: '{}'[1]", where, key))};
 }
 
 double real(const json& v, const std::string& where)
@@ -166,11 +190,23 @@ std::string write_mesh_json(const GeneralMesh& mesh)
 GeneralMesh read_mesh_json(const std::string& source)
 {
     json root;
+    // a key twice in one object is refused (the parser itself would keep the last)
+    std::vector<std::set<std::string>> keys;
+    std::string duplicate;
+    const json::parser_callback_t check = [&](int, json::parse_event_t event, json& parsed) {
+        if (event == json::parse_event_t::object_start) keys.emplace_back();
+        else if (event == json::parse_event_t::object_end && !keys.empty()) keys.pop_back();
+        else if (event == json::parse_event_t::key && !keys.empty() && !keys.back().insert(parsed.get<std::string>()).second &&
+                 duplicate.empty())
+            duplicate = parsed.get<std::string>();
+        return true;
+    };
     try {
-        root = json::parse(source);
+        root = json::parse(source, check);
     } catch (const json::exception& e) {
         fail(std::string("not JSON: ") + e.what());
     }
+    if (!duplicate.empty()) fail(std::format("the key '{}' appears twice in one object", duplicate));
     only_keys(root, {"format", "version", "units", "description", "pitch", "blocks", "segments", "connections", "tags"},
               "the file");
     if (text(root, "format", "the file") != kMeshFormatName)
@@ -213,11 +249,9 @@ GeneralMesh read_mesh_json(const std::string& source)
         FaceSegment g;
         g.block = integer(s, "block", where);
         g.face = face_of(text(s, "face", where), where);
-        const json& range = need(s, "range", where);
-        if (!(range.is_array() && range.size() == 2 && range[0].is_number_integer() && range[1].is_number_integer()))
-            fail(where + ": 'range' must be [begin, end] (integers)");
-        g.begin = range[0].get<int>();
-        g.end = range[1].get<int>();
+        const auto range = pair_of(s, "range", where);
+        g.begin = range[0];
+        g.end = range[1];
         const std::string kind = text(s, "kind", where);
         bool known = false;
         for (SegmentKind c : {SegmentKind::Blade, SegmentKind::Inlet, SegmentKind::Outlet, SegmentKind::Periodic,
@@ -243,12 +277,10 @@ GeneralMesh read_mesh_json(const std::string& source)
         only_keys(c, {"kind", "segments", "reversed", "image"}, where);
         const std::string kind = text(c, "kind", where);
         if (kind != "periodic" && kind != "interface") fail(std::format("{}: kind '{}' is not periodic or interface", where, kind));
-        const json& pair = need(c, "segments", where);
-        if (!(pair.is_array() && pair.size() == 2 && pair[0].is_number_integer() && pair[1].is_number_integer()))
-            fail(where + ": 'segments' must be [first, second] (segment indices)");
+        const auto pair = pair_of(c, "segments", where);
         Connection cn;
-        cn.first = pair[0].get<int>();
-        cn.second = pair[1].get<int>();
+        cn.first = pair[0];
+        cn.second = pair[1];
         const json& rev = need(c, "reversed", where);
         if (!rev.is_boolean()) fail(where + ": 'reversed' must be true or false");
         cn.reversed = rev.get<bool>();
@@ -281,11 +313,9 @@ GeneralMesh read_mesh_json(const std::string& source)
         e.blade = integer(t, "blade", where);
         e.surface = surface_of(text(t, "surface", where), where);
         e.block = integer(t, "block", where);
-        const json& node = need(t, "node", where);
-        if (!(node.is_array() && node.size() == 2 && node[0].is_number_integer() && node[1].is_number_integer()))
-            fail(where + ": 'node' must be [i, j] (integers)");
-        e.i = node[0].get<int>();
-        e.j = node[1].get<int>();
+        const auto node = pair_of(t, "node", where);
+        e.i = node[0];
+        e.j = node[1];
         mesh.tags.push_back(e);
     }
     validate_mesh(mesh);

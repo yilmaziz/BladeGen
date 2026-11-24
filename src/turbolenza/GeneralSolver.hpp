@@ -21,7 +21,8 @@
 /// dm the m distance from each TE node to its upstream wall neighbour (the grid dm on Aungier's grid),
 /// averaged; cos beta of the wall tangent from the nodal difference along the wall; S = r (theta_- +
 /// pitch - theta_+) the passage width at the TE (both theta on the same blade); mean W_m the
-/// trapezoidal integral of W_m over theta along the outlet divided by the outlet's theta extent
+/// trapezoidal integral of W_m over theta along the outlet divided by the outlet's theta extent (each outlet
+/// segment taken toward +theta)
 /// (Aungier's int_0^1 W_m d eta at the far exit).  On Aungier's grid this is Kutta.cpp's correction
 /// except cos beta (there from the C2 curve's tangent).
 ///
@@ -129,6 +130,11 @@ public:
 /// The Kutta residual and the correction of tan(beta_out) at the given flow.
 [[nodiscard]] GeneralKutta general_kutta(const GeneralOperator& op, const GeneralTrailingEdge& te,
                                          const std::vector<double>& W_m, const std::vector<double>& W);
+
+/// The mass flow per unit b through the segments of one kind, int rho b r (W_m dtheta - W_theta dm'), each
+/// segment taken toward +theta (so segments whose node order runs either way add up).
+[[nodiscard]] double general_boundary_flux(const GeneralOperator& op, SegmentKind kind, const std::vector<double>& rho,
+                                           const std::vector<double>& W_m, const std::vector<double>& W_theta);
 
 /// The solve (see the file comment).  The mesh needs inlet and outlet segments; config.kutta needs the
 /// trailing-edge tags.

@@ -307,42 +307,51 @@ inline double order(double coarse, double fine) { return std::log2(coarse / fine
 
 namespace gfix {
 
-/// Aungier's H-grid layout on a manufactured problem: x in [0, 3], pitch P, a lens-shaped blade on
-/// 1 <= x <= 2 (suction side y = +h(x), pressure side y = -h(x), h = t sin(pi (x - 1))), its leading and
-/// trailing edges between two stations (the "inside" layout), uniform stations and eta; the walls are
-/// Dirichlet segments (exact values), the side lines periodic, inlet and outlet Dirichlet; `rounded`:
-/// h = t sqrt(sin(pi (x - 1))), round edges as a real blade's, whose first stations are thick.
-inline T::GeneralMesh hgrid_with_blade(int n_per_unit, int nj, double P, double t, bool rounded = false)
+/// The edge shapes of hgrid_with_blade: 0 zero thickness at the edge stations (h = 0, walls on the
+/// periodic lines), 1 sharp (h = t sin(pi (x - 1))), 2 round (h = t sqrt(sin)), 3 a C-infinity bump.
+inline const char* edge_name(int kind)
 {
-    const int ni = 3 * n_per_unit + 1;
-    auto h = [t, rounded](double x) {
-        if (!(x > 1.0 && x < 2.0)) return 0.0;
+    switch (kind) {
+    case 0: return "zero thickness";
+    case 1: return "sharp edge";
+    case 2: return "round edge";
+    default: return "C-infinity bump";
+    }
+}
+
+/// Aungier's H-grid layout on a manufactured problem (the layout of the independent review of 0ede48c):
+/// x in [0, 3], stations x_i = (i + 1/2) / n (none on an edge), pitch P, a blade on 1 < x < 2 with the
+/// suction side y = 0.2 x + h(x) on j = 0 and the pressure side of the +pitch neighbour P + 0.2 x - h(x) on
+/// j = n_j - 1 (h by `kind`, edge_name), periodic side lines outside it; walls, inlet and outlet Dirichlet.
+inline T::GeneralMesh hgrid_with_blade(int n, int nj, double P, double t, int kind)
+{
+    const int ni = 3 * n;
+    const double dx = 1.0 / n;
+    auto h = [t, kind](double x) {
+        if (!(x > 1.0 && x < 2.0) || kind == 0) return 0.0;
         const double s = std::sin(kPi * (x - 1.0));
-        return t * (rounded ? std::sqrt(s) : s);  // rounded: elliptic edges, thickness ~ sqrt(distance)
+        if (kind == 1) return t * s;
+        if (kind == 2) return t * std::sqrt(s);
+        const double q = 2.0 * (x - 1.5);
+        return t * std::exp(1.0 - 1.0 / (1.0 - q * q));
     };
-    // stations shifted by half a cell so that no station passes through an edge
-    const double dx = 3.0 / (ni - 1);
     T::GeneralMesh mesh;
     mesh.pitch = P;
     T::MeshBlock B;
     B.name = "h";
     B.ni = ni;
     B.nj = nj;
-    const std::size_t n = static_cast<std::size_t>(ni) * static_cast<std::size_t>(nj);
-    B.x.resize(n);
-    B.y.resize(n);
-    B.m.resize(n);
-    B.r.assign(n, 1.0);
-    B.b.assign(n, 1.0);
-    int f = -1, l = -1;
+    const std::size_t nn = static_cast<std::size_t>(ni) * static_cast<std::size_t>(nj);
+    B.x.resize(nn);
+    B.y.resize(nn);
+    B.m.resize(nn);
+    B.r.assign(nn, 1.0);
+    B.b.assign(nn, 1.0);
     for (int i = 0; i < ni; ++i) {
-        const double x = i == 0 ? 0.0 : (i == ni - 1 ? 3.0 : (i - 0.5) * dx * (ni - 1) / (ni - 2));
-        const bool blade = x > 1.0 && x < 2.0;
-        if (blade && f < 0) f = i;
-        if (blade) l = i;
+        const double x = (i + 0.5) * dx;
         for (int j = 0; j < nj; ++j) {
             const double eta = static_cast<double>(j) / (nj - 1);
-            const double y0 = h(x) + 0.2 * x, y1 = P - h(x) + 0.2 * x;
+            const double y0 = 0.2 * x + h(x), y1 = P + 0.2 * x - h(x);
             const std::size_t k = B.at(i, j);
             B.x[k] = x;
             B.y[k] = y0 + eta * (y1 - y0);
@@ -350,6 +359,7 @@ inline T::GeneralMesh hgrid_with_blade(int n_per_unit, int nj, double P, double 
         }
     }
     mesh.blocks.push_back(std::move(B));
+    const int f = n, l = 2 * n - 1;  // the first and last station inside 1 < x < 2
     using F = T::BlockFace;
     using K = T::SegmentKind;
     mesh.segments = {segment(0, F::JMin, 0, f - 1, K::Periodic), segment(0, F::JMin, f, l, K::Dirichlet),

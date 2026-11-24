@@ -189,6 +189,16 @@ TEST_CASE("general mesh: the reader refuses an inconsistent or foreign file", "[
     CHECK_THROWS_AS(read_mesh_json(replaced(text, "\"surface\": \"suction\", \"block\"", "\"surface\": \"pressure\", \"block\"")),
                     MeshError);  // a tag of a surface with no segment
     CHECK_THROWS_AS(read_mesh_json(replaced(text, "\"reversed\": false, \"image\": 1", "\"reversed\": false")), MeshFormatError);
+    // a key twice in one object; integers that are floats or out of the range of int
+    CHECK_THROWS_WITH(read_mesh_json(replaced(text, "\"pitch\":", "\"pitch\": 1.0, \"pitch\":")),
+                      Catch::Matchers::ContainsSubstring("twice"));
+    CHECK_THROWS_WITH(read_mesh_json(replaced(text, "\"block\": 0, \"face\": \"imin\"", "\"block\": 0, \"block\": 0, \"face\": \"imin\"")),
+                      Catch::Matchers::ContainsSubstring("twice"));
+    CHECK_THROWS_WITH(read_mesh_json(replaced(text, "\"version\": 1", "\"version\": 1.0")), Catch::Matchers::ContainsSubstring("integer"));
+    CHECK_THROWS_WITH(read_mesh_json(replaced(text, "\"block\": 0, \"face\": \"imin\"", "\"block\": 4294967296, \"face\": \"imin\"")),
+                      Catch::Matchers::ContainsSubstring("range"));
+    CHECK_THROWS_WITH(read_mesh_json(replaced(text, "\"block\": 0, \"face\": \"imin\"", "\"block\": -4294967296, \"face\": \"imin\"")),
+                      Catch::Matchers::ContainsSubstring("range"));
     // a Dirichlet segment is verification only: never written
     CHECK_THROWS_AS(write_mesh_json(gfix::dirichlet_box(gfix::block(gfix::family(1), 4, 4))), MeshFormatError);
 }
@@ -226,6 +236,23 @@ TEST_CASE("general mesh: the Aungier grid adapted node for node", "[turbolenza][
     CHECK(op.derivative(op.node(0, f - 1, 0), 0).size() == 3);
     CHECK(op.derivative(op.node(0, f, 0), 0).size() == 3);
     CHECK(op.derivative(op.node(0, f + 1, 0), 0).size() == 2);
+    // the run rule in action: a field 0 on the walls and 1 off them has no difference along the wall at the
+    // first blade station, nor along the side line at the last inlet station (central: -1/2 and +1/2)
+    std::vector<double> off_wall(static_cast<std::size_t>(op.n_nodes()), 1.0);
+    for (int g = 0; g < op.n_nodes(); ++g)
+        if (op.wall(g)) off_wall[static_cast<std::size_t>(g)] = 0.0;
+    CHECK(op.apply(op.derivative(op.node(0, f, 0), 0), off_wall, 0.0) == 0.0);
+    CHECK(op.apply(op.derivative(op.node(0, l, J), 0), off_wall, 0.0) == 0.0);
+    CHECK(op.apply(op.derivative(op.node(0, f - 1, 0), 0), off_wall, 0.0) == 0.0);
+    // the transition classes get a closure face across the blade thickness, and their control volume closes
+    const auto gcl = op.gcl_residual();
+    for (int i : {f - 1, l + 1}) {
+        const int r = op.representative(op.node(0, i, 0));
+        int closures = 0;
+        for (const FaceGeometry& fc : op.faces(r)) closures += fc.closure ? 1 : 0;
+        CHECK(closures == 1);
+        CHECK(std::abs(gcl[static_cast<std::size_t>(r)][0]) + std::abs(gcl[static_cast<std::size_t>(r)][1]) <= 1e-15);
+    }
     // unknowns: every node but the walls, one per periodic pair
     const int periodic_stations = grid.n_m() - (l - f + 1);
     CHECK(op.n_unknowns() == grid.n_m() * grid.n_eta() - 2 * (l - f + 1) - periodic_stations);

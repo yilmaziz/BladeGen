@@ -102,5 +102,14 @@ flow-angle conditions and the Kutta condition by trailing-edge tags. The derivat
 `GeneralOperator.hpp`, the solve and the rotation sign in `GeneralSolver.hpp`, the file format in
 `docs/turbolenza/mesh_format.md`. Rules 2 to 6 apply unchanged; the density loop reuses Eos, Convergence,
 Kutta (`next_exit_angle`) and LinearSolver. `solve_general` is a separate entry point: nothing of the
-Aungier solve changes. Choices that are ours are marked in the headers (the run rule of the differences
-along a boundary, the face averaging, the general form of the exit-angle correction).
+Aungier solve changes. Choices that are ours are marked in the headers (the run rule of the nodal differences
+along a boundary, the cell-vertex control volumes and their closure face at H-grid transition stations,
+the general form of the exit-angle correction).
+
+At an H-grid transition station (the last inlet and the first exit station) the two periodic images of a
+node meet the suction and the pressure wall, a blade thickness h_f apart; the control volume is closed by
+one face across that gap (GeneralOperator.hpp).  Without it (0ede48c) the discrete metric identities failed
+there by h_f / 2 and the scheme was first order (sharp edge) or about half order (round edge); with it they
+hold to round-off and the manufactured H-grid test is second order with a sharp edge and first order with a
+round one.  Aungier's own transition rows are of the same low order (independent review of 0ede48c): on a
+manufactured problem both converge to the exact solution with different error constants.

@@ -110,14 +110,16 @@ GeneralKutta general_kutta(const GeneralOperator& op, const GeneralTrailingEdge&
     double integral = 0.0, extent = 0.0;
     for (std::size_t s = 0; s < op.mesh().segments.size(); ++s) {
         if (op.mesh().segments[s].kind != SegmentKind::Outlet) continue;
+        // each segment in the direction of increasing theta (its node order may run either way)
         const std::vector<int> nodes = op.segment_nodes(static_cast<int>(s));
+        const double sense = op.y(nodes.back()) >= op.y(nodes.front()) ? 1.0 : -1.0;
         for (std::size_t q = 0; q + 1 < nodes.size(); ++q) {
-            const double dth = op.y(nodes[q + 1]) - op.y(nodes[q]);
+            const double dth = sense * (op.y(nodes[q + 1]) - op.y(nodes[q]));
             integral += 0.5 * (W_m[z(nodes[q])] + W_m[z(nodes[q + 1])]) * dth;
             extent += dth;
         }
     }
-    if (!(extent != 0.0)) throw KuttaError("the mesh has no outlet to carry the exit-angle correction");
+    if (!(extent > 0.0)) throw KuttaError("the mesh has no outlet extent in theta to carry the exit-angle correction");
     k.outlet_mean_W_m = integral / extent;
     if (!(k.outlet_mean_W_m > 0.0))
         throw KuttaError(std::format("the mean W_m at the outlet is {}: no flow leaves, the exit angle cannot carry an "
@@ -126,6 +128,27 @@ GeneralKutta general_kutta(const GeneralOperator& op, const GeneralTrailingEdge&
     const double delta_c = 2.0 * k.wall_difference * te.dm / (te.passage_width * (te.cos_plus + te.cos_minus));  // Eq. 13-57
     k.delta_tan = delta_c / k.outlet_mean_W_m;                                                                   // Eq. 13-59
     return k;
+}
+
+double general_boundary_flux(const GeneralOperator& op, SegmentKind kind, const std::vector<double>& rho,
+                             const std::vector<double>& W_m, const std::vector<double>& W_theta)
+{
+    const std::size_t n = static_cast<std::size_t>(op.n_nodes());
+    if (rho.size() != n || W_m.size() != n || W_theta.size() != n)
+        throw GeneralOperatorError("general_boundary_flux: the fields must have one value per node");
+    double flux = 0.0;
+    for (std::size_t s = 0; s < op.mesh().segments.size(); ++s) {
+        if (op.mesh().segments[s].kind != kind) continue;
+        const std::vector<int> nodes = op.segment_nodes(static_cast<int>(s));
+        const double sense = op.y(nodes.back()) >= op.y(nodes.front()) ? 1.0 : -1.0;  // toward +theta
+        auto f = [&](int g, const std::vector<double>& w) { return rho[z(g)] * op.b(g) * op.r(g) * w[z(g)]; };
+        for (std::size_t q = 0; q + 1 < nodes.size(); ++q) {
+            const int a = nodes[q], b = nodes[q + 1];
+            flux += sense * (0.5 * (f(a, W_m) + f(b, W_m)) * (op.y(b) - op.y(a)) -
+                             0.5 * (f(a, W_theta) + f(b, W_theta)) * (op.x(b) - op.x(a)));
+        }
+    }
+    return flux;
 }
 
 namespace {
@@ -161,21 +184,10 @@ ScalarState state_at(const Setup& c, int g, double W)
     return static_state_at(W, c.gas, ref);
 }
 
-// |int rho b r (W_m dtheta - W_theta dm') / mdot' - 1| along the segments of the nodes' kind.
+// |flux / mdot' - 1| through the segments of one kind.
 double boundary_flow_error(const Setup& c, SegmentKind kind, const PassState& p)
 {
-    const GeneralOperator& op = *c.op;
-    double flux = 0.0;
-    for (std::size_t s = 0; s < op.mesh().segments.size(); ++s) {
-        if (op.mesh().segments[s].kind != kind) continue;
-        const std::vector<int> nodes = op.segment_nodes(static_cast<int>(s));
-        for (std::size_t q = 0; q + 1 < nodes.size(); ++q) {
-            const int a = nodes[q], b = nodes[q + 1];
-            auto f = [&](int g, const std::vector<double>& w) { return p.rho[z(g)] * op.b(g) * op.r(g) * w[z(g)]; };
-            flux += 0.5 * (f(a, p.W_m) + f(b, p.W_m)) * (op.y(b) - op.y(a)) - 0.5 * (f(a, p.W_theta) + f(b, p.W_theta)) * (op.x(b) - op.x(a));
-        }
-    }
-    return std::abs(std::abs(flux) / c.mdot - 1.0);
+    return std::abs(general_boundary_flux(*c.op, kind, p.rho, p.W_m, p.W_theta) / c.mdot - 1.0);
 }
 
 PassState density_pass(const Setup& c, const std::vector<double>& rho, double exit_angle)

@@ -345,59 +345,148 @@ GeneralOperator::GeneralOperator(GeneralMesh mesh, const MeshCheckOptions& optio
             throw GeneralOperatorError(std::format("{}: the nodal Jacobian is {:.3e} <= 0", describe(g), mt.J));
     }
 
-    // the faces of the PDE classes: every member contributes the part of the class's control volume that
-    // lies in its own block (ours: the dual cell split along the block faces).  A member's faces toward a
-    // block face it lies on are left out; its faces along such a face carry half their flux, and its source
-    // a half per block face it lies on.  For a regular periodic or interface node the parts add up to the
-    // one nine-point equation; at an H-grid transition (Aungier's last inlet / first exit station) the
-    // two images see the two blade surfaces, and the class's equation averages them.
+    // The control volume of each PDE class (ours, the cell-vertex dual of the user's scheme): around the
+    // class's point, the quarter of every cell incident to a member (in that member's block, shifted into
+    // the representative's frame by the member's images).  Its boundary, counterclockwise, runs from cell
+    // centroid to edge midpoint to the next centroid.  The two half-edges on the edge to one neighbour make
+    // one face from centroid C1 to centroid C2: t = C2 - C1, d = Q - P, and the tangential difference
+    // psi(C2) - psi(C1) with psi(C) the mean of the cell's four corners.  For a node with four neighbours
+    // in its own block this is the nine-point scheme of the file comment exactly.  Where the half-edges
+    // of two members end at different nodes (an H-grid transition station: the two images of the last
+    // inlet / first exit station meet the suction wall node (f, 0) and the pressure wall node (f, J) one
+    // pitch down), the two half-edges and the gap between their midpoints are closed by one face from
+    // C1 to C2 to the mean of the two nodes, Q* = (Q1 + Q2) / 2, psi(Q*) = (psi(Q1) + psi(Q2)) / 2: the
+    // control volume is a closed polygon, so the discrete metric identities hold to round-off there too.
     members_.assign(N, {});
     for (int g = 0; g < n_nodes_; ++g) members_[z(rep_[z(g)])].push_back(g);
     faces_.assign(N, {});
     source_weight_.assign(N, 0.0);
-    for (int P = 0; P < n_nodes_; ++P) {
-        if (equation_[z(rep_[z(P)])] != NodeEquation::Pde) continue;
-        std::vector<FaceGeometry>& fs = faces_[z(P)];
-        const NodalMetric& mP = metric_[z(P)];
-        const auto [bP, iP, jP] = location(P);
-        const MeshBlock& BP = mesh_.blocks[z(bP)];
-        const bool on_i = iP == 0 || iP == BP.ni - 1, on_j = jP == 0 || jP == BP.nj - 1;
-        source_weight_[z(P)] = (on_i ? 0.5 : 1.0) * (on_j ? 0.5 : 1.0);
-        for (int a = 0; a < 2; ++a)
-            for (int s : {-1, 1}) {
-                const int ii = iP + (a == 0 ? s : 0), jj = jP + (a == 1 ? s : 0);
-                if (!(0 <= ii && ii < BP.ni && 0 <= jj && jj < BP.nj)) continue;  // toward a block face: the other member's
-                const auto q = step(P, a, s);
-                const NodalMetric& mQ = metric_[z(q->node)];
-                const int t = 1 - a;
-                FaceGeometry f;
-                f.axis = a;
-                f.sign = s;
-                f.q = *q;
-                f.weight = (a == 0 ? on_j : on_i) ? 0.5 : 1.0;
-                const double sd = static_cast<double>(s);
-                f.x_n = sd * (X[z(q->node)] - X[z(P)]);
-                f.y_n = sd * (Y[z(q->node)] - static_cast<double>(q->images) * mesh_.pitch - Y[z(P)]);
-                const double xtP = t == 0 ? mP.x_z : mP.x_e, ytP = t == 0 ? mP.y_z : mP.y_e;
-                const double c0 = static_cast<double>(q->T[z(t)]), c1 = static_cast<double>(q->T[z(2 + t)]);
-                const double xtQ = c0 * mQ.x_z + c1 * mQ.x_e, ytQ = c0 * mQ.y_z + c1 * mQ.y_e;
-                f.x_t = 0.5 * (xtP + xtQ);
-                f.y_t = 0.5 * (ytP + ytQ);
-                f.J = (a == 0 ? 1.0 : -1.0) * (f.x_n * f.y_t - f.x_t * f.y_n);
-                if (!(f.J > 0.0))
-                    throw GeneralOperatorError(std::format("{}: the face toward {}{} has the Jacobian {:.3e} <= 0", describe(P),
-                                                           s < 0 ? "-" : "+", a == 0 ? "i" : "j", f.J));
-                f.G_nn = (f.x_t * f.x_t + f.y_t * f.y_t) / f.J;
-                f.G_nt = -(f.x_n * f.x_t + f.y_n * f.y_t) / f.J;
-                for (const StencilEntry& e : derivative(P, t)) f.psi_t.push_back({e.node, 0.5 * e.w, e.images});
-                for (int c = 0; c < 2; ++c) {
-                    const double factor = c == 0 ? c0 : c1;
-                    if (factor == 0.0) continue;
-                    for (const StencilEntry& e : derivative(q->node, c))
-                        f.psi_t.push_back({e.node, 0.5 * factor * e.w, e.images});
+    struct HalfEdge
+    {
+        int q = 0, q_images = 0;    // the neighbour and the images of its block relative to the representative
+        int key_rep = 0, key_img = 0;
+        bool ends_at_mid = false;   // centroid -> midpoint (else midpoint -> centroid)
+        double cx = 0.0, cy = 0.0;  // the cell's centroid (representative's frame)
+        double mx = 0.0, my = 0.0;  // the edge midpoint
+        Stencil cpsi;               // psi at the centroid
+        int member = 0, axis = 0, sign = 0;
+    };
+    for (int R = 0; R < n_nodes_; ++R) {
+        if (rep_[z(R)] != R || equation_[z(R)] != NodeEquation::Pde) continue;
+        std::vector<HalfEdge> half;
+        for (int M : members_[z(R)]) {
+            const auto [bM, iM, jM] = location(M);
+            const MeshBlock& BM = mesh_.blocks[z(bM)];
+            source_weight_[z(M)] = ((iM == 0 || iM == BM.ni - 1) ? 0.5 : 1.0) * ((jM == 0 || jM == BM.nj - 1) ? 0.5 : 1.0);
+            const int m = images_[z(M)];
+            const double shift = static_cast<double>(m) * mesh_.pitch;
+            const int base = offset_[z(bM)], ni = BM.ni;
+            auto at = [base, ni](int i, int j) { return base + i + ni * j; };
+            for (int di : {-1, 1})
+                for (int dj : {-1, 1}) {
+                    if (!(0 <= iM + di && iM + di < BM.ni && 0 <= jM + dj && jM + dj < BM.nj)) continue;
+                    const int A = at(iM + di, jM), Bn = at(iM, jM + dj), D = at(iM + di, jM + dj);
+                    const double cx = 0.25 * (X[z(M)] + X[z(A)] + X[z(Bn)] + X[z(D)]);
+                    const double cy = 0.25 * (Y[z(M)] + Y[z(A)] + Y[z(Bn)] + Y[z(D)]) - shift;
+                    const Stencil cpsi = {{M, 0.25, m}, {A, 0.25, m}, {Bn, 0.25, m}, {D, 0.25, m}};
+                    // counterclockwise round M in a right-handed cell: first the neighbour along i when
+                    // di dj > 0, else the one along j; the first half-edge leaves its midpoint, the second
+                    // ends at its midpoint
+                    const bool i_first = di * dj > 0;
+                    for (int k = 0; k < 2; ++k) {
+                        const bool along_i = (k == 0) == i_first;
+                        HalfEdge h;
+                        h.q = along_i ? A : Bn;
+                        h.q_images = m;
+                        h.key_rep = rep_[z(h.q)];
+                        h.key_img = images_[z(h.q)] - m;
+                        h.ends_at_mid = k == 1;
+                        h.cx = cx;
+                        h.cy = cy;
+                        h.mx = 0.5 * (X[z(M)] + X[z(h.q)]);
+                        h.my = 0.5 * (Y[z(M)] + Y[z(h.q)]) - shift;
+                        h.cpsi = cpsi;
+                        h.member = M;
+                        h.axis = along_i ? 0 : 1;
+                        h.sign = along_i ? di : dj;
+                        half.push_back(std::move(h));
+                    }
                 }
-                fs.push_back(std::move(f));
+        }
+        const double px = X[z(R)], py = Y[z(R)];
+        auto make_face = [&](const HalfEdge& in, const HalfEdge& out, bool closure) {
+            FaceGeometry f;
+            f.closure = closure;
+            if (!closure && in.member == R) {
+                f.axis = in.axis;
+                f.sign = in.sign;
+            } else if (!closure && out.member == R) {
+                f.axis = out.axis;
+                f.sign = out.sign;
             }
+            const double w = closure ? 0.5 : 1.0;
+            const double yin = Y[z(in.q)] - static_cast<double>(in.q_images) * mesh_.pitch;
+            const double yout = Y[z(out.q)] - static_cast<double>(out.q_images) * mesh_.pitch;
+            const double qx = closure ? 0.5 * (X[z(in.q)] + X[z(out.q)]) : X[z(in.q)];
+            const double qy = closure ? 0.5 * (yin + yout) : yin;
+            f.neighbours = closure ? std::vector<int>{in.q, out.q} : std::vector<int>{in.q};
+            f.x_n = qx - px;
+            f.y_n = qy - py;
+            f.x_t = out.cx - in.cx;
+            f.y_t = out.cy - in.cy;
+            f.J = f.x_n * f.y_t - f.y_n * f.x_t;
+            if (!(f.J > 0.0))
+                throw GeneralOperatorError(std::format("{}: a face of its control volume has the Jacobian {:.3e} <= 0",
+                                                       describe(R), f.J));
+            f.G_nn = (f.x_t * f.x_t + f.y_t * f.y_t) / f.J;
+            f.G_nt = -(f.x_n * f.x_t + f.y_n * f.y_t) / f.J;
+            f.dpsi = {{R, -1.0, 0}, {in.q, w, in.q_images}};
+            if (closure) f.dpsi.push_back({out.q, w, out.q_images});
+            f.kappa = {{R, 0.5}, {in.q, 0.5 * w}};
+            if (closure) f.kappa.emplace_back(out.q, 0.5 * w);
+            for (const StencilEntry& e : out.cpsi) f.psi_t.push_back(e);
+            for (const StencilEntry& e : in.cpsi) f.psi_t.push_back({e.node, -e.w, e.images});
+            faces_[z(R)].push_back(std::move(f));
+        };
+        // pair the two half-edges of each neighbour; what remains is closed across the gaps
+        std::vector<char> used(half.size(), 0);
+        for (std::size_t a = 0; a < half.size(); ++a) {
+            if (used[a] || !half[a].ends_at_mid) continue;
+            int match = -1, count = 0;
+            for (std::size_t c = 0; c < half.size(); ++c)
+                if (!used[c] && !half[c].ends_at_mid && half[c].key_rep == half[a].key_rep &&
+                    half[c].key_img == half[a].key_img) {
+                    match = static_cast<int>(c);
+                    ++count;
+                }
+            if (count > 1)
+                throw GeneralOperatorError(std::format("{}: the control volume meets one neighbour on more than two "
+                                                       "half-edges (a singular vertex is not supported)",
+                                                       describe(R)));
+            if (match < 0) continue;
+            used[a] = used[z(match)] = 1;
+            make_face(half[a], half[z(match)], false);
+        }
+        std::vector<std::size_t> ends, starts;
+        for (std::size_t a = 0; a < half.size(); ++a)
+            if (!used[a]) (half[a].ends_at_mid ? ends : starts).push_back(a);
+        if (ends.size() != starts.size())
+            throw GeneralOperatorError(std::format("{}: its control volume does not close ({} open half-edges in, {} out)",
+                                                   describe(R), ends.size(), starts.size()));
+        for (std::size_t a : ends) {  // the next half-edge counterclockwise starts at the nearest midpoint
+            std::size_t best = starts.size();
+            double dist = 0.0;
+            for (std::size_t k = 0; k < starts.size(); ++k) {
+                if (used[starts[k]]) continue;
+                const double d = std::hypot(half[starts[k]].mx - half[a].mx, half[starts[k]].my - half[a].my);
+                if (best == starts.size() || d < dist) {
+                    best = k;
+                    dist = d;
+                }
+            }
+            used[a] = used[starts[best]] = 1;
+            make_face(half[a], half[starts[best]], true);
+        }
     }
 }
 
@@ -439,18 +528,15 @@ static double relation(const GeneralOperator& op, int r, const OperatorFields& f
 {
     switch (op.equation(r)) {
     case NodeEquation::Pde: {
-        double source = 0.0;
-        for (int M : op.members(r)) {
-            const double cM = fields.coefficient[static_cast<std::size_t>(M)];
-            for (const FaceGeometry& f : op.faces(M)) {
-                const double kf = f.weight * 0.5 * (cM + fields.coefficient[static_cast<std::size_t>(f.q.node)]);
-                emit(f.q.node, kf * f.G_nn, f.q.images);
-                emit(M, -kf * f.G_nn, 0);
-                const double w = static_cast<double>(f.sign) * kf * f.G_nt;
-                for (const StencilEntry& e : f.psi_t) emit(e.node, w * e.w, e.images);
-            }
-            if (!fields.source.empty()) source += op.source_weight(M) * fields.source[static_cast<std::size_t>(M)];
+        for (const FaceGeometry& f : op.faces(r)) {
+            double kf = 0.0;
+            for (const auto& [node, w] : f.kappa) kf += w * fields.coefficient[static_cast<std::size_t>(node)];
+            for (const StencilEntry& e : f.dpsi) emit(e.node, kf * f.G_nn * e.w, e.images);
+            for (const StencilEntry& e : f.psi_t) emit(e.node, kf * f.G_nt * e.w, e.images);
         }
+        double source = 0.0;
+        if (!fields.source.empty())
+            for (int M : op.members(r)) source += op.source_weight(M) * fields.source[static_cast<std::size_t>(M)];
         return source;
     }
     case NodeEquation::FlowAngle: {
@@ -585,10 +671,9 @@ std::vector<std::array<double, 2>> GeneralOperator::gcl_residual() const
 {
     std::vector<std::array<double, 2>> out(z(n_nodes_), {0.0, 0.0});
     for (int g = 0; g < n_nodes_; ++g)
-        for (const FaceGeometry& f : faces_[z(g)]) {
-            const double s = static_cast<double>(f.sign) * f.weight, sigma = f.axis == 0 ? 1.0 : -1.0;
-            out[z(rep_[z(g)])][0] += s * sigma * f.y_t;
-            out[z(rep_[z(g)])][1] -= s * sigma * f.x_t;
+        for (const FaceGeometry& f : faces_[z(g)]) {  // the outward normals (t_y, -t_x) of the boundary
+            out[z(g)][0] += f.y_t;
+            out[z(g)][1] -= f.x_t;
         }
     for (int g = 0; g < n_nodes_; ++g) out[z(g)] = out[z(rep_[z(g)])];
     return out;

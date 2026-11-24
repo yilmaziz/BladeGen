@@ -23,35 +23,54 @@
 ///    [[C, -B], [-B, A]] (Eqs. 5-22 to 5-24), the flux form is Eq. 5-20 and J f = 2 S omega sin(phi).
 ///
 /// The discretization (ours; the user's scheme, the nine-point table re-derived in the tests):
-///  * the residual at a node P is the balance of the four face fluxes, (F_E - F_W) + (F_N - F_S) = (J f)_P;
-///  * F through the face between P and its neighbour Q in index direction n (t the other one) is
-///        F = K_nn (psi_Q - psi_P) + K_nt (psi_t(P) + psi_t(Q)) / 2,
-///    with K at the face from face metrics: x_n = x_Q - x_P (the compact difference across the face) and
-///    x_t = (x_t(P) + x_t(Q)) / 2 (the nodal tangential differences averaged), kappa_f = (kappa_P +
-///    kappa_Q) / 2; at nodes whose eight neighbours all have central differences this is the nine-point
-///    stencil P: -(pE + pW + pN + pS), E: pE + cN - cS, W: pW - cN + cS, N: pN + cE - cW, S: pS - cE + cW,
+///  * the residual of a class is the outward flux through the boundary of its control volume, the dual
+///    cell round the node: from the centroid of each incident cell to the midpoint of the next edge to the
+///    next centroid, counterclockwise.  Sum of the face fluxes = (J f)_P (the source shared by the members);
+///  * the face toward a neighbour Q runs between the centroids C1, C2 of the two cells on the edge PQ:
+///        F = kappa_f (|t|^2 dpsi - (d . t) dpsi_t) / (d x t),  d = Q - P, t = C2 - C1,
+///        dpsi = psi_Q - psi_P, dpsi_t = psi(C2) - psi(C1), psi(C) the mean of the cell's four corners,
+///    kappa_f = (kappa_P + kappa_Q) / 2: the gradient at the face from its two directional differences.
+///    For the face E this is F_E = K11_E (psi_E - psi_P) + K12_E (psi_NE - psi_SE + psi_N - psi_S) / 4
+///    with K11 = kappa (x_eta^2 + y_eta^2) / J, K12 = -kappa (x_zeta x_eta + y_zeta y_eta) / J of the face
+///    metrics x_zeta = x_E - x_P, x_eta = (x_N + x_NE - x_S - x_SE) / 4 (the central nodal differences of P
+///    and E averaged), and for a node with four neighbours in its block it is the nine-point stencil
+///    P: -(pE + pW + pN + pS), E: pE + cN - cS, W: pW - cN + cS, N: pN + cE - cW, S: pS - cE + cW,
 ///    NE: cE + cN, NW: -cW - cN, SE: -cE - cS, SW: cW + cS, p = K_nn of the face, c = K_nt / 4;
-///  * nodal differences: central (Q+ - Q-) / 2 when both neighbours exist; otherwise second-order
-///    one-sided (-3 P + 4 Q1 - Q2) / 2 into the block (Aungier Eqs. 5-40 to 5-43).  Along a boundary face a
-///    difference does not cross between a wall node and a non-wall node (Aungier's runs, Metrics.hpp):
-///    it is one-sided on both sides of such a transition.  Neighbours across periodic and interface
-///    connections are the nodes of the other side (their theta and psi shifted by the image);
-///  * the face fluxes telescope: a face shared by two blocks carries one flux, which leaves one control
-///    volume and enters the other (conservation across interfaces and the periodic cut); the discrete
-///    metric identities d_zeta (y_eta) - d_eta (y_zeta) = 0 hold to round-off wherever all eight
-///    neighbours have central differences, so a uniform flow (psi linear in x, y, kappa constant) is an
-///    exact discrete solution there.
+///  * a periodic or interface class collects the cells of all its members (each in its own block, shifted
+///    into the representative's frame by its images): one control volume across blocks and the periodic
+///    cut.  Where the half-edges of two members end at different nodes (the last inlet and the first exit
+///    station of Aungier's H-grid: the two images of the periodic node meet the suction wall node (f, 0)
+///    and the pressure wall node (f, J) one pitch down, a blade thickness h_f apart), one closure face runs
+///    across the gap, from the last centroid of one member to the first of the other, toward the mean of
+///    the two wall nodes (psi their mean).  Without it the control volume would leave a gap of h_f / 2 in
+///    its boundary and the discrete metric identities would fail there by h_f / 2 (measured, see the
+///    tests); with it every control volume is a closed polygon, the metric identities
+///    d_zeta (J zeta_x) + d_eta (J eta_x) = 0 (likewise for y) hold to round-off at every PDE class, and
+///    a uniform flow (psi linear in x, y, kappa constant) is an exact discrete solution of every PDE row;
+///  * every face is computed once per class from the same nodes from both sides, so the fluxes telescope:
+///    conservation across interfaces and the periodic cut;
+///  * nodal differences (flow-angle rows, velocity recovery, sources): central (Q+ - Q-) / 2 when both
+///    neighbours exist; otherwise second-order one-sided (-3 P + 4 Q1 - Q2) / 2 into the block (Aungier
+///    Eqs. 5-40 to 5-43).  Along a boundary face a nodal difference does not cross between a wall node and
+///    a non-wall node (Aungier's runs, Metrics.hpp): it is one-sided on both sides of such a transition.
+///    Neighbours across periodic and interface connections are the nodes of the other side (their theta
+///    and psi shifted by the image).
+/// Accuracy at H-grid transitions (measured on a manufactured problem with Aungier's layout,
+/// test_general_operator.cpp): psi second order with zero thickness at the edge stations, with a sharp edge
+/// (thickness ~ h at the first station) and with a C-infinity bump; first order with a round edge
+/// (thickness ~ sqrt(h)), whose velocity next to the edge does not converge in the max norm.  Without the
+/// closure face (0ede48c: the two halves only) the GCL failed there by h_f / 2 and the orders were 1 and
+/// 0.57.  Aungier's own transition rows (v1), re-implemented by the independent review of 0ede48c, are
+/// first order with a sharp edge and about half order with a round one; on the manufactured problem both
+/// schemes converge to the exact solution (two slow schemes with different error constants, not
+/// different limits).
 ///
 /// Boundary relations (one equation per unknown):
 ///  * blade walls psi = blade (the index, Eqs. 5-27, 5-28); Dirichlet segments psi given (verification);
 ///  * periodic and interface nodes are one unknown per node class: psi(node) = u(class) + images (Eq. 5-29,
-///    images the pitches between the node and the class representative).  The class's PDE is the flux
-///    balance of its whole control volume, each member contributing the part in its own block (ours):
-///    its faces into the block, those along a block face it lies on with half their flux, and its share of
-///    the source (1/2 per block face it lies on).  For a regular periodic or interface node the parts add
-///    up to the nine-point equation; where the two images see different neighbours (the transition
-///    stations of Aungier's H-grid, next to the leading and trailing edge) the equation averages the
-///    suction- and the pressure-side halves;
+///    images the pitches between the node and the class representative); the class's PDE is the flux
+///    balance of its control volume (above), its source the members' (J f) weighted 1/2 per block face
+///    each lies on;
 ///  * inlet and outlet: the flow angle T_f = tan(beta_f) prescribed, Psi_x + T_f Psi_y = 0 (from
 ///    tan(beta) = W_theta / W_m = -Psi_x / Psi_y), multiplied by J:
 ///        (y_eta - T_f x_eta) psi_zeta + (T_f x_zeta - y_zeta) psi_eta = 0
@@ -60,9 +79,10 @@
 ///
 /// Velocity recovery: psi_x = (y_eta psi_zeta - y_zeta psi_eta) / J, psi_y = (x_zeta psi_eta - x_eta psi_zeta) / J
 /// from the nodal differences, at every node, each class taking its representative's values (Eqs. 5-30 to
-/// 5-32 exactly).  Refusals (std::invalid_argument types): an invalid mesh (MeshError), a PDE node
-/// without four neighbours, a node without a difference in a direction, a face or nodal Jacobian <= 0,
-/// inputs of the wrong size or not finite (GeneralOperatorError).
+/// 5-32 exactly).  Refusals (std::invalid_argument types): an invalid mesh (MeshError); a node without a
+/// nodal difference in a direction; a nodal or face Jacobian <= 0; a control volume that does not close or
+/// meets one neighbour on more than two half-edges (a singular vertex); inputs of the wrong size or not
+/// finite (GeneralOperatorError).
 #pragma once
 
 #include "turbolenza/GeneralMesh.hpp"
@@ -108,15 +128,20 @@ struct NodalMetric
     double x_z = 0.0, x_e = 0.0, y_z = 0.0, y_e = 0.0, J = 0.0;
 };
 
-/// The geometry of one face of a PDE node: F = kappa_f (G_nn dpsi + G_nt psi_t,f).
+/// One face of the control volume of a PDE class (see the file comment), in the representative's frame:
+/// the outward flux is kappa_f (G_nn dpsi + G_nt psi_t), kappa_f = sum w kappa(node).
 struct FaceGeometry
 {
-    int axis = 0, sign = 1;  ///< n = axis, the face toward sign
-    double weight = 1.0;     ///< 1/2 along a block face the node lies on (its block's half of the face)
-    NodeRef q;               ///< the neighbour across the face (always in the node's block)
-    double x_n = 0.0, y_n = 0.0, x_t = 0.0, y_t = 0.0, J = 0.0;
-    double G_nn = 0.0, G_nt = 0.0;  ///< K / kappa_f: K_nn = kappa_f G_nn, K_nt = kappa_f G_nt
-    Stencil psi_t;           ///< (psi_t(P) + psi_t(Q)) / 2 in P's frame
+    int axis = -1, sign = 0;          ///< the representative's index direction toward the neighbour (-1: none)
+    bool closure = false;             ///< a face closing the gap between two half-edges (H-grid transition)
+    std::vector<int> neighbours;      ///< the node across the face (two for a closure face)
+    double x_n = 0.0, y_n = 0.0;      ///< d = Q - P (Q the mean of the two nodes of a closure face)
+    double x_t = 0.0, y_t = 0.0;      ///< t = C2 - C1 between boundary corners (cell centroids), counterclockwise
+    double J = 0.0;                   ///< d x t > 0
+    double G_nn = 0.0, G_nt = 0.0;    ///< |t|^2 / J, -(d . t) / J
+    Stencil dpsi;                     ///< psi(Q) - psi(P)
+    Stencil psi_t;                    ///< psi(C2) - psi(C1), psi(C) the mean of the cell's corners
+    std::vector<std::pair<int, double>> kappa;  ///< kappa_f = (kappa_P + kappa_Q) / 2
 };
 
 /// The per-pass inputs of the operator, one value per node (n_nodes()).
@@ -179,7 +204,7 @@ public:
     /// The nodes of segment s, in its order.
     [[nodiscard]] std::vector<int> segment_nodes(int s) const;
 
-    /// The in-block faces of a node of a PDE class (empty for other nodes), in the order W, E, S, N.
+    /// The faces of the control volume of a PDE class, at its representative (empty for other nodes).
     [[nodiscard]] const std::vector<FaceGeometry>& faces(int g) const;
     /// The members of the class whose representative is r (r itself first is not guaranteed).
     [[nodiscard]] const std::vector<int>& members(int r) const { return members_[static_cast<std::size_t>(r)]; }
@@ -198,8 +223,9 @@ public:
     [[nodiscard]] StreamGradient gradient(const std::vector<double>& psi) const;
     /// (J f) of the rotation term at every node: omega (y_eta (r^2)_zeta - y_zeta (r^2)_eta).
     [[nodiscard]] std::vector<double> rotation_source(double omega) const;
-    /// The discrete metric identities at every PDE node (0 elsewhere): {sum of s sigma y_t,f, sum of
-    /// -s sigma x_t,f} over the four faces = d_zeta (J zeta_x) + d_eta (J eta_x), likewise for y.
+    /// The discrete metric identities of every PDE class (each member gets its class's; 0 elsewhere): the
+    /// sum of the outward normals (t_y, -t_x) over the faces of the control volume, = d_zeta (J zeta_x) +
+    /// d_eta (J eta_x) and likewise for y; zero to round-off because the control volume is closed.
     [[nodiscard]] std::vector<std::array<double, 2>> gcl_residual() const;
     /// Applies a stencil to a node field (jump: the value of one image: pitch for theta, 1 for psi).
     [[nodiscard]] double apply(const Stencil& s, const std::vector<double>& values, double jump) const;

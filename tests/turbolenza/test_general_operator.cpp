@@ -21,22 +21,19 @@ namespace {
 
 std::size_t z(int k) { return static_cast<std::size_t>(k); }
 
-/// The flux of face f of node P in its +axis direction at psi.
-double face_flux(const GeneralOperator& op, int P, const FaceGeometry& f, const std::vector<double>& psi,
-                 const std::vector<double>& c)
+/// kappa_f of a face.
+double face_kappa(const FaceGeometry& f, const std::vector<double>& c)
 {
-    const double kf = 0.5 * (c[z(P)] + c[z(f.q.node)]);
-    const double dpsi = static_cast<double>(f.sign) * (psi[z(f.q.node)] - f.q.images - psi[z(P)]);
-    return kf * (f.G_nn * dpsi + f.G_nt * op.apply(f.psi_t, psi, 1.0));
+    double k = 0.0;
+    for (const auto& [node, w] : f.kappa) k += w * c[z(node)];
+    return k;
 }
 
-bool all_central(const GeneralOperator& op, int g)
+/// The outward flux of face f at psi.
+double face_flux(const GeneralOperator& op, const FaceGeometry& f, const std::vector<double>& psi,
+                 const std::vector<double>& c)
 {
-    auto central = [&](int n) { return op.derivative(n, 0).size() == 2 && op.derivative(n, 1).size() == 2; };
-    if (!central(g)) return false;
-    for (const FaceGeometry& f : op.faces(g))
-        if (!central(f.q.node)) return false;
-    return !op.faces(g).empty();
+    return face_kappa(f, c) * (f.G_nn * op.apply(f.dpsi, psi, 1.0) + f.G_nt * op.apply(f.psi_t, psi, 1.0));
 }
 
 }  // namespace
@@ -55,10 +52,15 @@ TEST_CASE("general: the nine-point table of the flux form, derived again", "[tur
     const int P = op.node(0, i, j);
     REQUIRE(op.equation(P) == NodeEquation::Pde);
     std::map<std::pair<int, int>, double> p, c;  // by (axis, sign)
+    REQUIRE(op.faces(P).size() == 4);
     for (const FaceGeometry& f : op.faces(P)) {
-        const double kf = 0.5 * (fields.coefficient[z(P)] + fields.coefficient[z(f.q.node)]);
+        REQUIRE(!f.closure);
+        // t runs counterclockwise: along +eta on E (d along +zeta), -eta on W (d along -zeta), -zeta on N,
+        // +zeta on S; G_nt = -(d . t) / J is the user's K12 / kappa on E and W, -K12 / kappa on N and S
+        const double kf = face_kappa(f, fields.coefficient);
+        const double orient = f.axis == 0 ? 1.0 : -1.0;
         p[{f.axis, f.sign}] = kf * f.G_nn;
-        c[{f.axis, f.sign}] = kf * f.G_nt / 4.0;
+        c[{f.axis, f.sign}] = orient * kf * f.G_nt / 4.0;
     }
     const double pW = p[{0, -1}], pE = p[{0, 1}], pS = p[{1, -1}], pN = p[{1, 1}];
     const double cW = c[{0, -1}], cE = c[{0, 1}], cS = c[{1, -1}], cN = c[{1, 1}];
@@ -138,38 +140,43 @@ TEST_CASE("general: metric identities of Aungier's mapping (analytic and discret
 
 TEST_CASE("general: discrete metric identities and the uniform flow", "[turbolenza][general]")
 {
-    for (int fam : {4, 5}) {
-        const GeneralOperator op(gfix::dirichlet_box(gfix::block(gfix::family(fam), 25, 21)));
+    // every control volume is a closed polygon: the metric identities hold to round-off at every PDE class,
+    // and the residual of a uniform flow is exactly kappa (a R_x + b R_y) of them, so ~ round-off
+    struct Case
+    {
+        const char* name;
+        GeneralMesh mesh;
+    };
+    std::vector<Case> cases;
+    cases.push_back({"stretched non-orthogonal", gfix::dirichlet_box(gfix::block(gfix::family(4), 25, 21))});
+    cases.push_back({"curvilinear", gfix::dirichlet_box(gfix::block(gfix::family(5), 25, 21))});
+    cases.push_back({"three turned blocks", gfix::three_block_periodic(12, 0.8, SegmentKind::Dirichlet, SegmentKind::Dirichlet)});
+    cases.push_back({"O-block", gfix::oblock(41, 17)});
+    for (int kind = 0; kind < 4; ++kind)
+        cases.push_back({gfix::edge_name(kind), gfix::hgrid_with_blade(20, 17, 0.8, 0.12, kind)});
+    for (const Case& c : cases) {
+        const GeneralOperator op(c.mesh);
         const auto gcl = op.gcl_residual();
-        double inner = 0.0, edge = 0.0;
-        for (int g = 0; g < op.n_nodes(); ++g) {
-            const double v = std::max(std::abs(gcl[z(g)][0]), std::abs(gcl[z(g)][1]));
-            (all_central(op, g) ? inner : edge) = std::max(all_central(op, g) ? inner : edge, v);
-        }
-        CHECK(measure(std::format("general GCL residual, all-central nodes, {}", gfix::family_name(fam)), inner) <= 1e-15);  // measured ~1e-17
-        measure(std::format("general GCL residual, nodes next to one-sided differences, {}", gfix::family_name(fam)), edge);
+        double worst = 0.0;
+        for (int g = 0; g < op.n_nodes(); ++g) worst = std::max({worst, std::abs(gcl[z(g)][0]), std::abs(gcl[z(g)][1])});
+        CHECK(measure(std::format("general GCL residual, every PDE class, {}", c.name), worst) <= 1e-15);  // measured <= 2e-16
 
-        // psi = a x + b y with a constant coefficient: zero residual wherever the GCL holds
+        // psi = a x + b y, constant coefficient (b = 1 / P on a periodic mesh: psi rises by 1 per pitch)
+        const double a = 0.7, b = op.mesh().connections.empty() ? -1.9 : 1.0 / op.mesh().pitch;
         OperatorFields f;
         f.coefficient.assign(z(op.n_nodes()), 1.3);
-        f.dirichlet = [&](int g) { return 0.7 * op.x(g) - 1.9 * op.y(g); };
+        f.dirichlet = [&](int g) { return a * op.x(g) + b * op.y(g); };
         std::vector<double> psi(z(op.n_nodes()));
         for (int g = 0; g < op.n_nodes(); ++g) psi[z(g)] = f.dirichlet(g);
         const auto res = op.residual(psi, f);
-        double rin = 0.0, rout = 0.0;
+        double r = 0.0, relation = 0.0;
         for (int g = 0; g < op.n_nodes(); ++g) {
             if (op.equation(g) != NodeEquation::Pde) continue;
-            (all_central(op, g) ? rin : rout) = std::max(all_central(op, g) ? rin : rout, std::abs(res[z(g)]));
-            // the residual of a uniform flow is the GCL: a R_y - b R_x ... (F = c (a y_t - b x_t) sigma)
-            const double expect = 1.3 * (0.7 * gcl[z(g)][0] + (-1.9) * gcl[z(g)][1]);
-            CHECK(std::abs(res[z(g)] - expect) <= 1e-13);
+            r = std::max(r, std::abs(res[z(g)]));
+            relation = std::max(relation, std::abs(res[z(g)] - 1.3 * (a * gcl[z(g)][0] + b * gcl[z(g)][1])));
         }
-        CHECK(measure(std::format("general uniform-flow residual, all-central nodes, {}", gfix::family_name(fam)), rin) <= 1e-13);
-        measure(std::format("general uniform-flow residual, other PDE nodes, {}", gfix::family_name(fam)), rout);
-        const auto psi_h = gfix::mms_solve(op, f);
-        double err = 0.0;
-        for (int g = 0; g < op.n_nodes(); ++g) err = std::max(err, std::abs(psi_h[z(g)] - psi[z(g)]));
-        measure(std::format("general uniform flow solved, max error, {}", gfix::family_name(fam)), err);
+        CHECK(relation <= 1e-13);
+        CHECK(measure(std::format("general uniform-flow residual, every PDE class, {}", c.name), r) <= 1e-13);  // measured <= 4e-15
     }
 }
 
@@ -219,9 +226,11 @@ TEST_CASE("general: manufactured solutions on three turned blocks with periodic 
                 for (int g = 0; g < op.n_nodes(); ++g) {
                     if (op.equation(g) == NodeEquation::Pde && op.representative(g) == g) total += res[z(g)];
                     for (const FaceGeometry& fa : op.faces(g)) {
-                        const double F = fa.sign * fa.weight * face_flux(op, g, fa, psi, f.coefficient);
+                        const double F = face_flux(op, fa, psi, f.coefficient);
                         scale += std::abs(F);
-                        if (op.equation(fa.q.node) != NodeEquation::Pde) boundary += F;
+                        bool to_boundary = false;
+                        for (int q : fa.neighbours) to_boundary = to_boundary || op.equation(q) != NodeEquation::Pde;
+                        if (to_boundary) boundary += F;
                     }
                 }
                 CHECK(measure("general telescoping of the face fluxes (relative)", std::abs(total - boundary) / scale) <= 1e-13);
@@ -342,22 +351,49 @@ TEST_CASE("general: refusals of the operator", "[turbolenza][general]")
 TEST_CASE("general: manufactured solution on Aungier's H-grid layout with blade walls and transitions",
           "[turbolenza][general][mms]")
 {
-    // The stations next to the leading and trailing edges are the transitions of Aungier's grid: the two
-    // periodic images of the last inlet station see the suction and the pressure wall.  A smooth
-    // manufactured field (Dirichlet on the walls): the order shows whether the transition treatment is
-    // consistent.
+    // The first and last blade stations lie inside the blade (Aungier's layout): the two images of the
+    // last inlet / first exit station meet the suction and the pressure wall, a blade thickness h_f
+    // apart, and the closure face of their control volume crosses that gap.  A smooth manufactured field
+    // with Dirichlet walls (the exact values), four edge shapes.  Measured (N = 10 .. 160 per unit): psi
+    // order 2.00 for zero thickness, the sharp edge (h_f ~ dx) and the C-infinity bump, 1.00 for the round
+    // edge (h_f ~ sqrt(dx)); the gradient converges at second order except at the round edge, where it stays
+    // 3.6e-2 next to the edge.  The control volumes close: GCL 0 at the transition classes.  (Before the
+    // closure face, 0ede48c: sharp 0.99, round 0.57, GCL h_f / 2 there.)  Bounds about 1.5 x measured.
     const double P = 0.8;
     const gfix::Manufactured M = gfix::quasi_periodic(P);
-    for (bool rounded : {false, true}) {
-        std::vector<gfix::MmsError> e;
+    struct Want
+    {
+        double order_min, err160_max, grad160_max;
+    };
+    // measured at N = 160: psi 5.05e-5, 4.33e-5, 1.58e-4, 4.33e-5; grad 1.40e-3, 1.47e-3, 3.62e-2, 1.40e-3
+    const Want want[4] = {{1.9, 7.6e-5, 2.2e-3}, {1.9, 6.5e-5, 2.2e-3}, {0.9, 2.4e-4, 5.4e-2}, {1.9, 6.5e-5, 2.2e-3}};
+    for (int kind = 0; kind < 4; ++kind) {
+        std::vector<double> err, grad;
+        double gcl_tr = 0.0;
         for (int N : {10, 20, 40, 80, 160}) {
-            const GeneralOperator op(gfix::hgrid_with_blade(N, static_cast<int>(0.8 * N) + 1, P, 0.12, rounded));
-            e.push_back(gfix::mms_error(op, M, gfix::mms_solve(op, gfix::mms_fields(op, M))));
+            const GeneralMesh mesh = gfix::hgrid_with_blade(N, static_cast<int>(0.8 * N) + 1, P, 0.12, kind);
+            const GeneralOperator op(mesh);
+            const gfix::MmsError e = gfix::mms_error(op, M, gfix::mms_solve(op, gfix::mms_fields(op, M)));
+            err.push_back(e.psi);
+            grad.push_back(e.grad);
+            const auto gcl = op.gcl_residual();
+            for (int g = 0; g < op.n_nodes(); ++g)
+                for (const FaceGeometry& f : op.faces(g))
+                    if (f.closure) gcl_tr = std::max({gcl_tr, std::abs(gcl[z(g)][0]), std::abs(gcl[z(g)][1])});
+            if (N == 10 && kind != 0) {  // the transition classes have closure faces (zero thickness: none needed)
+                int closures = 0;
+                for (int g = 0; g < op.n_nodes(); ++g)
+                    for (const FaceGeometry& f : op.faces(g)) closures += f.closure ? 1 : 0;
+                CHECK(closures == 2);
+            }
         }
-        const std::string name = rounded ? "H-grid with a round-edged blade" : "H-grid with a sharp-edged blade";
-        for (std::size_t k = 0; k < e.size(); ++k) measure(std::format("general mms psi error {} N={}", name, 10 << k), e[k].psi);
-        const double p = measure("general mms psi order 80->160 " + name, gfix::order(e[3].psi, e[4].psi));
-        measure("general mms grad order 80->160 " + name, gfix::order(e[3].grad, e[4].grad));
-        CHECK(p > 0.5);  // measured: see the MEASURE lines (first order at the transitions)
+        const std::string name = gfix::edge_name(kind);
+        for (std::size_t k = 0; k < err.size(); ++k) measure(std::format("general mms psi error H-grid, {}, N={}", name, 10 << k), err[k]);
+        const double p = measure("general mms psi order 80->160 H-grid, " + name, gfix::order(err[3], err[4]));
+        for (std::size_t k = 0; k < grad.size(); ++k) measure(std::format("general mms grad error H-grid, {}, N={}", name, 10 << k), grad[k]);
+        CHECK(measure("general GCL at the transition classes, " + name, gcl_tr) <= 1e-15);
+        CHECK(p >= want[kind].order_min);
+        CHECK(err[4] <= want[kind].err160_max);
+        CHECK(grad[4] <= want[kind].grad160_max);
     }
 }

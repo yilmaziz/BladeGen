@@ -43,7 +43,10 @@ Numbers are written with 17 significant digits (`{:.17g}`), so a double reads ba
 
 - `format` must be `"turbolenza.mesh"`, `version` must be `1`, `units` must be exactly the object above.
 - `pitch` is the periodic shift in θ [rad] between a passage and its neighbour (2π/N for N blades).
-- `description` is optional. No other key is allowed (at any level).
+- `description` is optional (default empty). No other key is allowed (at any level), and no key may
+  appear twice in one object.
+- Every integer (`version`, `ni`, `nj`, `block`, `range`, `segments`, `image`, `blade`, `node`) is a JSON
+  integer within the range of a 32-bit signed int; `3.0` or `3e9` is refused.
 
 ## 3. Blocks
 
@@ -52,6 +55,7 @@ Numbers are written with 17 significant digits (`{:.17g}`), so a double reads ba
  "m_prime": [...], "theta": [...], "m": [...], "r": [...], "b": [...]}
 ```
 
+- `name` is optional (default empty); every other key of a block is required.
 - `ni × nj` nodes, `ni, nj ≥ 3`. Each array has `ni·nj` finite values, **i fastest**: node (i, j) is
   element `i + ni·j` (ENIGMAgrid's and CGNS's order, without ghost nodes).
 - **Orientation** (ENIGMAgrid ENG-334): every block is right-handed in (m', θ). Every corner Jacobian of
@@ -123,8 +127,8 @@ Numbers are written with 17 significant digits (`{:.17g}`), so a double reads ba
 
 ## 7. What the reader refuses
 
-Schema (`MeshFormatError`): not JSON; another format name or version; other units; a missing or
-unknown key; a wrong type; an unknown face, kind, surface or edge; a connection whose kind differs
+Schema (`MeshFormatError`): not JSON; a key twice in one object; another format name or version; other
+units; a missing or unknown key; a wrong type; an integer out of range; an unknown face, kind, surface or edge; a connection whose kind differs
 from its segments' kind; an `image` on an interface; `blade`/`surface` on a non-blade segment.
 
 Consistency (`MeshError`, `validate_mesh`): a block smaller than 3 × 3; array sizes that differ from

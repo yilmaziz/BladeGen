@@ -2,12 +2,13 @@
 # Aungier (2003) Ch. 5: the C++ port of the verified TURBOlenza v1 Python package
 # (turbolenza.b2b).  A library of its own, without OpenCASCADE or Qt:
 #   turbolenza_core      cascade, grid, metrics .. solver, postprocess (Eigen; OpenMP, MKL PARDISO optional)
-#   turbolenza_bladegen  the BladeGen adapter: a design layer's profile -> the cascade's surface curves
-# Every .cpp in this folder except the adapter belongs to the core (globbed, so modules can be
+#   turbolenza_bladegen  the BladeGen adapters: a design layer's profile -> the cascade's surface curves,
+#                        and a design -> the through-flow's quasi-normals and blade row (ThroughflowBladeGen.cpp)
+# Every .cpp in this folder except the adapters belongs to the core (globbed, so modules can be
 # added without editing this file).
 
 file(GLOB TURBOLENZA_CORE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
-list(FILTER TURBOLENZA_CORE_SOURCES EXCLUDE REGEX "BladeGenSource\.cpp$")
+list(FILTER TURBOLENZA_CORE_SOURCES EXCLUDE REGEX "(BladeGenSource|ThroughflowBladeGen)\.cpp$")
 if(NOT TURBOLENZA_CORE_SOURCES)
     set(TURBOLENZA_CORE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/Version.cpp)
 endif()
@@ -53,7 +54,11 @@ endif()
 
 # The BladeGen adapter (links the BladeGen core library).
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/BladeGenSource.cpp)
-    add_library(turbolenza_bladegen STATIC ${CMAKE_CURRENT_SOURCE_DIR}/BladeGenSource.cpp)
+    set(TURBOLENZA_BLADEGEN_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/BladeGenSource.cpp)
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/ThroughflowBladeGen.cpp)
+        list(APPEND TURBOLENZA_BLADEGEN_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/ThroughflowBladeGen.cpp)
+    endif()
+    add_library(turbolenza_bladegen STATIC ${TURBOLENZA_BLADEGEN_SOURCES})
     add_library(turbolenza::bladegen ALIAS turbolenza_bladegen)
     target_link_libraries(turbolenza_bladegen PUBLIC turbolenza::core bladegen::lib PRIVATE bladegen::compiler_flags)
 endif()

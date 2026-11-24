@@ -530,6 +530,21 @@ TEST_CASE("throughflow-eq: near and beyond choke on a 45-degree cone, all four m
             std::printf("[throughflow-eq] cone mdot %.0f, %s: converged, QN 0 mean M_m %.4f, %d flow iterations on QN 0\n",
                         mdot, TF::to_string(model).c_str(), r.stations[0].mean_mach_m, r.stations[0].iterations);
         }
+        // the full and approximate models at the edge of their choke (74.9 .. 75.8): the target iteration
+        // alternates between met and choke-limited profiles here; the result must be a converged
+        // profile, either carrying the target or the choke (never "not converged")
+        if (!simple_model[k])
+            for (double mdot : {75.0, 75.5, 76.0, 76.5, 77.0}) {
+                auto c = channel(model, 7, 0.1, 0.0, cone_h, cone_s);
+                c.mass_flow = mdot;
+                const auto r = TF::solve_throughflow(c);
+                INFO(r.message);
+                CHECK(r.status != TF::ThroughflowResult::Status::NotConverged);
+                CHECK(r.stations.back().converged);
+                std::printf("[throughflow-eq] cone mdot %.1f, %s: %s, QN 0 mdot %.4f, %d flow iterations on QN 0\n", mdot,
+                            TF::to_string(model).c_str(), TF::to_string(r.status).c_str(), r.stations[0].mass_flow,
+                            r.stations[0].iterations);
+            }
         // the simple models converge up to their (radial) choke
         if (simple_model[k])
             for (double mdot : {78.0, 82.0, 85.0}) {

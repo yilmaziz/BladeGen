@@ -40,8 +40,14 @@ the chapter does not make is marked "ours" in the code.
    - Damp the move with Novak's factor (Eq. 7-57, M_m ≤ 0.95). Lower B* by Eq. 7-59 when the position
      error grows.
    - Recompute m (Eq. 7-58), φ (Eq. 7-2) and κ_m (Eq. 7-9) with Eqs. 7-67 and 7-70, then go back to 2.
-4. **Choke.** The full model ends on a choke only after one completed repositioning (Fig. 7-3). The
-   simplified models end on it at once (Fig. 7-4). A choke is a reported status, not an exception.
+4. **Choke.**
+   - A choke is declared only on a **converged** profile (p. 161: Eqs. 7-34 and 7-5 are iterated "until
+     mass is conserved and the normal momentum equation is satisfied"; p. 162: the choke is the maximum
+     flow of that profile).
+   - While W_m(0) is held at the choke limit, the coefficients of Eq. 7-34 are iterated further.
+   - The full model ends on a choke only after one completed repositioning (Fig. 7-3). The simplified
+     models end on it at once (Fig. 7-4).
+   - A choke is a reported status, not an exception.
 
 The four models (Sec. 7.6, `ThroughflowModel`). In every model, the mass equations (7-5, 7-32/7-33,
 7-54) use the **geometric** φ and ε = φ − λ; the model level sets only what the normal-momentum equation
@@ -123,7 +129,20 @@ about 1.7 per halving.
   - It starts where the smallest W_m is 0 and brackets upward.
   - It is stopped by Eq. 7-39 (or by Ch. 12's Eq. 12-37, `ChokeTest`), then solved by Illinois regula
     falsi to |Δṁ|/ṁ ≤ 1e-12.
+  - It tells a choke (the state just beyond the limit is valid and fails the choke test) from a stop at an
+    invalid state (h ≤ 0 before the choke test fails). The latter is never a choke: a converged profile
+    still stopped that way is refused.
   - A target that would need reverse flow is refused, and so is W_m ≤ 0 on a converged quasi-normal.
+  - Non-finite coefficients of Eq. 7-34, or a solution of Eq. 7-35 that is not finite, are refused (e.g.
+    the limit of Eq. 7-30 set near 0).
+- **The flow-field iteration** (the linking loop).
+  - The new profile is under-relaxed: the factor is halved when the change grows (down to 1/64) and
+    raised by 1.5 after three contracting steps.
+  - Near the choke the target iteration can alternate between met and choke-limited profiles. After 4
+    alternations, or half the iteration budget once a limit has been hit, the profile is converged at the
+    choke limit itself.
+  - Its mass flow is then the choke mass flow. A target above it is reported as choked; a target at or
+    below it as not converged.
 - **Repositioning (Eq. 7-54, "by interpolation from this function").** The three-point series of
   Eqs. 7-72 and 7-73 is integrated inside the segment, and the position found by bisection.
 - **Novak's Δm.** The smaller meridional spacing to the two neighbouring quasi-normals.
@@ -137,8 +156,11 @@ about 1.7 per halving.
     LE and TE lines. The surface's row span is the mean of the two crossing fractions; the walls are 0
     and 1.
   - The section is interpolated linearly in span, and the pitch is taken at the mean radius.
-  - BladeGen's throat o (Eq. 6-53) is the smallest distance from the neighbouring blade's LE to the
-    section, in the conformal plane at the LE radius (approximate).
+  - BladeGen's throat o (Eq. 6-53) is the cascade module's geometric throat (`closest_points` of
+    Cascade.hpp, suction side against the neighbour's pressure side). It is computed on BladeGen's side
+    samples, placed as the design places them in the conformal plane, and scaled by r_LE c'
+    (approximate where r varies across the passage). It agrees with `make_cascade` on the fitted section
+    to 1.3e-5.
 - **Wake blockage.** K_W acts only on the row's discharge quasi-normal.
 - **Blade height** = the mean of the LE and TE line lengths. N_row is the row's position in the flow
   direction, and rows must be listed in that order.
@@ -216,7 +238,7 @@ All of them are declared in `Throughflow.hpp`, with their conventions at its top
 
 ## Tests and measured values
 
-`tools\turbolenza_build.cmd tl-tf test_turbolenza "[throughflow]"` runs 36 cases. Their numbers are
+`tools\turbolenza_build.cmd tl-tf test_turbolenza "[throughflow]"` runs 38 cases. Their numbers are
 printed in the test output.
 
 ### Numerics
@@ -250,8 +272,11 @@ The annulus is r = 0.3 to 0.5 m with 7 radial quasi-normals, ṁ = 50 kg/s, and 
   | 41 | 1.13e-4 | 4.25e-6 |
 
   The ratios per halving are 2.3, 3.0, 3.4 (tube form, approaching 4) and 5.1, 6.0, 6.8 (direct form).
-  With Ω = 200 the profile at the shroud falls steeply (W_m ≈ 40 m/s). There the tube form's wall
-  extrapolation of 1/W_m converges more slowly (1.06e-2 at n_ss = 11).
+  The test was moved from Ω = 200 to 150.
+  - With Ω = 200 the whole profile is steep (W_m falls to ≈ 40 m/s at the shroud), and the tube form's
+    ratios are 1.6, 2.0, 2.4, 2.8, 3.2 up to n_ss = 161.
+  - That is pre-asymptotic for the whole profile: the interior errors converge at the same ratios as the
+    shroud node's. It is not a defect of the wall extrapolation.
 - **45° cone with swirl, self-convergence against 81 surfaces** (ψ = 0, 0.5, 1):
   - tube form: 4.1e-5, 1.2e-5, 2.5e-6 for n_ss = 11, 21, 41 (ratios 3.6, 4.6);
   - direct form: 5.0e-5, 1.7e-5, 3.8e-6 (ratios 3.0, 4.3).
@@ -266,7 +291,10 @@ The annulus is r = 0.3 to 0.5 m with 7 radial quasi-normals, ṁ = 50 kg/s, and 
 
 ### The geometric ε in every model
 
-ṁ is recomputed from the node data by the trapezoid rule with the test's own λ and ε, on 41 surfaces:
+ṁ is recomputed from the node data by the trapezoid rule, with the test's own λ and with ε from the test's
+own φ. That φ is recomputed by the model's rule from the reported positions (two-point chords for the
+simple models, Eq. 7-67 along the surfaces for the full one, the walls' angles for the approximate one).
+The code's φ agrees with it to 2.2e-16. On 41 surfaces:
 
 | Geometry | Full | Approximate | Simple |
 |---|---|---|---|
@@ -295,10 +323,32 @@ The annulus is r = 0.3 to 0.5 m with 7 radial quasi-normals, ṁ = 50 kg/s, and 
   - In the solver: F = 0.6740856508 against 0.6740856594 recomputed from the converged nodes.
 - **Eq. 7-59.** The sequence 1, 0.9, 0.93, 0.96 drops B* from 8 to 4.5. In the solver, B* = 1e4 is first
   lowered to 5000.5.
-- **Eq. 7-30.** With the limit 0.97 the limit is active on the 10° cone, and W_m differs by 3.3e-4 from
-  the run with 0.1.
-- **Choke.**
-  - ṁ = 500 chokes at 121.2603 kg/s (by Eq. 7-39 and by Eq. 12-37).
+- **Eq. 7-30 near choke.** On the 45° cone at 74 kg/s the limit is active: max M_m is 0.98 (full) and 1.03
+  (approximate). With the limit set to 1e-6 both are refused, because Eq. 7-35 has no finite solution.
+- **Choke on the 45° cone** (radial quasi-normals, uniform axial inflow, 7 quasi-normals).
+  - **Two 1-D chokes of quasi-normal 0:**
+    - through the radial line, ρ*a* π(r_s² − r_h²) cos 45° = **85.744 kg/s**;
+    - through the section normal to the walls at the hub point of quasi-normal 0 = **75.026 kg/s**. That
+      is the narrowest section the flow at that quasi-normal has passed: 0.875 of the radial value.
+  - The simple models have W_m uniform along the radial line (ε = 0 in their momentum equation) and
+    choke at the radial value.
+  - The full and approximate models have W_m falling along the line (the sin ε ∂W_m/∂m term) and choke
+    near the normal-section value. The four models therefore do not agree between 75 and 85.7 kg/s.
+
+  | ṁ input | full | approximate | simple (both) |
+  |---|---|---|---|
+  | 70, 72, 74 | converged | converged | converged |
+  | 78, 82, 85 | choked at 75.7744 (QN 0 converged, 21 iterations) | choked at 74.9029 | converged (QN 0 mean M_m 0.69, 0.78, 0.90) |
+  | 90, 100, 150, 200 | choked at 75.7744 | choked at 74.9029 | choked at 85.7440 |
+  | choke / normal-section 1-D | 1.0100 | 0.9984 | 1.1429 |
+  | choke / radial 1-D | 0.8837 | 0.8736 | 1.0000 |
+
+  - Every choke is the same for all inputs. It has mean M_m = 1 (Eq. 7-39), a converged profile, and h > 0
+    at every node.
+  - The full and approximate choke profiles have max M_m 1.80 and 3.66 at the hub. That lies outside the
+    validity of Eq. 7-29, which the limit of Eq. 7-30 bounds but does not make valid.
+- **Other chokes.**
+  - ṁ = 500 in the straight annulus chokes at 121.2603 kg/s (by Eq. 7-39 and by Eq. 12-37).
   - With swirl it chokes at 107.4274 kg/s with mean M_m = 1.000000 (trapezoid 1.000045) and max M 1.064.
   - The full model ends after 1, 2, 3 passes for 0, 1, 2 required repositionings.
 - **K_W = 0.8 and K_B = 0.85** (a stator, an entropy gradient).
@@ -327,6 +377,8 @@ Radial quasi-normals (one station per extension), ṁ = 3 kg/s.
     extensions.
 - **Sheet thickness:** |b_mass/b − 1| is 3.9e-2 at the walls and 1.1e-2 inside. The sheets'
   b/(K_B b_geometric) − 1 is 7.2e-4.
+- **Throat o of the five layers:** 10.71, 14.38, 15.96, 16.09, 14.75 mm. o/(r_LE c') agrees with
+  `make_cascade` on the fitted sections to 7e-11 … 1.3e-5.
 - **Rotor at 15000 rpm** (β'₂ = κ₂ of the layers, ω̄ = 0.05):
 
   | Model | Passes | β'₁ / β'₂ [deg] | W_m1 → W_m2 [m/s] | max ΔH [J/kg] | max P_t2/P_t1 |

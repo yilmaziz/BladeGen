@@ -47,7 +47,8 @@ Work through the tree on the left, top to bottom:
        check box switches it on for any case. Compare against it on f.
      - Below: the coupling history (change of m and β_out per BL iteration).
      - `bl_suction.csv` and `bl_pressure.csv` give both x_c and f. Save results also writes
-       `bl_H_f.png`, H against f.
+       `bl_H_f.png`, H against f. `bl_history.csv`, `run_summary.json` and the run report still
+       give the transition and separation in x/c only.
 
    **Save results...** writes CSV/JSON files and the plots as PNG to a folder you choose.
 
@@ -95,7 +96,7 @@ Both headers list every equation with its number and mark every choice that is o
 Validation, measured on 2026-11-24 (hidden test `[.validation]`, a report and not a pass/fail
 test). The case is Dunavant's NACA 65-(12A10)10 on v1's frozen blade: β1 45°, M1 0.65,
 Re = 1.034e6, medium level, λ_ρ = λ_K = 0.3, tolerances 1e-5. The reference is Aungier's
-Fig. 5-15, digitized:
+Fig. 5-15, digitized. "BL iterations" counts the inviscid solve k = 0 too, so 36 means k = 0 .. 35:
 
 | run | BL iterations | β_out [°] | ω | SS transition x/c | PS transition x/c | SS separation x/c |
 |---|---|---|---|---|---|---|

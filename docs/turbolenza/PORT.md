@@ -212,8 +212,9 @@ which inverse and semi-inverse couplings exist. That is cited from general knowl
 **Defaults (changed 2026-11-24, the user's decision).** omega_BL = 0.2 and max_bl_iterations = 60. They
 were 0.5 and 30. Both live in `CaseSettings` and `ViscousSettings`, and the window's Solver page takes
 them from `CaseSettings`. At 0.2 the reference case converged in 35 iterations (constant wake) and 34
-(marched), above the old limit of 30. The independent check also ran 0.2 at β1 42 deg (35 iterations, 25.70 deg) and at M1 0.5 (36
-iterations, 25.75 deg). At 0.1 it took 74. The old default, 0.5, diverges on the reference case.
+(marched), above the old limit of 30. These counts are coupled iterations after k = 0, which is what
+max_bl_iterations counts; README.md's table counts k = 0 too (36 and 35). The independent check also
+ran 0.2 at β1 42 deg (35 iterations, 25.70 deg) and at M1 0.5 (36 iterations, 25.75 deg). At 0.1 it took 74. The old default, 0.5, diverges on the reference case.
 A test checks that this case converges with the defaults (`test_bl_validation.cpp`, `[slow]`).
 
 The stability limit depends on the case. It comes from one eigenvalue estimate on one case, and 0.2 leaves

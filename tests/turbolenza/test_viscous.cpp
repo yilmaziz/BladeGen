@@ -387,6 +387,41 @@ TEST_CASE("viscous: the layers and bl_*.csv carry f beside x/c", "[turbolenza][v
         CHECK(std::isnan(d->laminar_separation_f) == std::isnan(d->laminar_separation_x_c));
         CHECK(std::isnan(d->separation_f) == std::isnan(d->separation_x_c));
     }
+    // the separation events by value: a low H_k limit (turbulent separation) and no transition (the laminar
+    // march reaches Lambda = -12), so each event exists on at least one surface
+    auto station_of = [](const BoundaryLayerSurfaceData& d, double x_c) {
+        for (std::size_t k = 0; k < d.x_c.size(); ++k)
+            if (d.x_c[k] == x_c) return static_cast<int>(k);
+        return -1;
+    };
+    struct Variant
+    {
+        const char* name;
+        void (*set)(CaseSettings&);
+        bool laminar;
+    };
+    for (const Variant& variant : {Variant{"separation H_k 1.5", [](CaseSettings& x) { x.separation_hk = 1.5; }, false},
+                                   Variant{"no transition", [](CaseSettings& x) { x.transition_re_theta = 1e12; }, true}}) {
+        INFO(variant.name);
+        CaseSettings sv = s;
+        variant.set(sv);
+        const RunResult rv = run_case(build_case(sv, fixture::synthetic_section()));
+        INFO(rv.error);
+        REQUIRE(rv.viscous);
+        int found = 0;
+        for (const BoundaryLayerSurfaceData* d : {&rv.viscous->suction, &rv.viscous->pressure_side}) {
+            const double x_c = variant.laminar ? d->laminar_separation_x_c : d->separation_x_c;
+            const double fv = variant.laminar ? d->laminar_separation_f : d->separation_f;
+            CHECK(std::isnan(x_c) == std::isnan(fv));
+            if (std::isnan(x_c)) continue;
+            const int k = station_of(*d, x_c);
+            REQUIRE(k >= 0);
+            CHECK(fv == f[static_cast<std::size_t>(k)]);
+            CHECK(fv != d->x_c[static_cast<std::size_t>(k)]);  // the two abscissae differ there (the check can fail)
+            ++found;
+        }
+        CHECK(found >= 1);
+    }
     const auto dir = std::filesystem::path(BLADEGEN_TEST_OUTPUT) / "viscous_station_fraction";
     std::filesystem::remove_all(dir);
     (void)export_run(r, c, dir.string());

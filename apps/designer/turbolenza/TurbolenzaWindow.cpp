@@ -1161,6 +1161,22 @@ int TurbolenzaWindow::selfTest(const QString& dir, int passes)
         if (!label || xs.size() < 2 || xs.size() > f.size() || f.front() != 0.0 || f.back() != 1.0 || xs.front() != f.front() ||
             xs.back() != f.back())
             return fail("the Boundary layer plot on the station fraction f does not run over the layer's f = 0 .. 1", 45);
+        // the event markers sit at the layers' f (they vanish when the plot looks for them at x/c)
+        auto marked = [&](const char* name, double x) {
+            for (const PointMarker& m : bl_plot_->markers())
+                if (m.label == name && m.p.x() == x) return true;
+            return false;
+        };
+        for (const auto* d : {&result_->viscous->suction, &result_->viscous->pressure_side}) {
+            if (std::isfinite(d->transition_f) && !marked("transition", d->transition_f))
+                return fail("the Boundary layer plot on f has no transition marker at the layer's transition f", 46);
+            if (std::isfinite(d->separation_f) && !marked("separation", d->separation_f))
+                return fail("the Boundary layer plot on f has no separation marker at the layer's separation f", 46);
+            if (std::isfinite(d->laminar_separation_f) && !marked("laminar separation", d->laminar_separation_f))
+                return fail("the Boundary layer plot on f has no laminar separation marker at its f", 46);
+        }
+        if (!std::isfinite(result_->viscous->suction.transition_f))
+            return fail("the self-test case has no suction-surface transition to mark", 46);
         std::printf("turbolenza self-test: boundary layer on f, %zu points, f %.3f .. %.3f, transition SS f %.3f / PS f %.3f\n",
                     xs.size(), xs.front(), xs.back(), result_->viscous->suction.transition_f,
                     result_->viscous->pressure_side.transition_f);

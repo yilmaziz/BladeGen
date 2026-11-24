@@ -88,6 +88,7 @@ public:
 
     void zoomFit();
     [[nodiscard]] QString csv() const;  ///< every series as name,x,y rows
+    [[nodiscard]] const QVector<PointMarker>& markers() const { return markers_; }  ///< for the self-tests
     [[nodiscard]] QImage image();
 
 signals:

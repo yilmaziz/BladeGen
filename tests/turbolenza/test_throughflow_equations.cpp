@@ -175,8 +175,15 @@ TEST_CASE("throughflow-eq: every model keeps the geometric epsilon in Eq. 7-5 (c
             double wm = 0.0;
             for (const auto& nd : st.nodes) wm += nd.Wm / static_cast<double>(st.nodes.size());
             mean_wm.push_back(wm);
+            // the geometric phi of every node: 45 deg on the cones (straight walls, nearly straight
+            // surfaces), 0 in the straight annulus, on every quasi-normal (the first included)
+            const double phi_true = gm.rh == flat_h ? 0.0 : kPi / 4.0;
+            double ephi = 0.0;
+            for (const auto& s : r.stations)
+                for (const auto& nd : s.nodes) ephi = std::max(ephi, std::abs(nd.phi - phi_true));
             std::printf("[throughflow-eq] %s, %s: max |mdot(trapezoid, own eps) / mdot - 1| = %.3e, mean W_m(QN 3) = %.4f, "
-                        "wall phi %.4f\n", gm.name, TF::to_string(model).c_str(), e, wm, st.nodes.front().phi);
+                        "max |phi - phi_wall| %.2e\n", gm.name, TF::to_string(model).c_str(), e, wm, ephi);
+            CHECK(ephi <= 2e-2);  // measured: see the report
             CHECK(e <= 2e-3);  // the trapezoid rule on 41 surfaces (measured: see the report)
             CHECK(max_mass_error(r) <= 1e-11);
             if (gm.rh == flat_h) {  // uniform flow: rho W_m pi (rs^2 - rh^2) = mdot exactly
@@ -238,13 +245,14 @@ TEST_CASE("throughflow-eq: radial and leaned quasi-normals give the same flow on
 {
     // the epsilon terms of Eqs. 7-16, 7-19 and 7-29 vanish on radial quasi-normals of a nearly axial
     // channel only where phi = 0; with the shroud ends leaned upstream the same hub points must see
-    // the same W_m (up to the discretization)
+    // the same W_m (up to the discretization).  A free vortex at the true radii of quasi-normal 0
+    // makes the two inlets the same flow
     for (auto model : {TF::ThroughflowModel::FullNormalEquilibrium, TF::ThroughflowModel::Approximate}) {
         auto rad = channel(model, 21, 0.05, 0.0, bump_h, bump_s);
         auto lean = channel(model, 21, 0.05, 0.04, bump_h, bump_s);
         for (auto* c : {&rad, &lean}) {
             c->options.n_stream_surfaces = 21;
-            c->inlet = swirl(0.3, 0.5, 2, [](double r) { return 150.0 * r; });
+            c->inlet = swirl(c->quasi_normals[0].r_hub, c->quasi_normals[0].r_shroud, 401, [](double r) { return 45.0 / r; });
         }
         const auto rr = TF::solve_throughflow(rad);
         const auto rl = TF::solve_throughflow(lean);
@@ -258,8 +266,40 @@ TEST_CASE("throughflow-eq: radial and leaned quasi-normals give the same flow on
         std::printf("[throughflow-eq] bump, %s: radial vs leaned quasi-normals, max |dW_m| / W_m on the hub %.3e "
                     "(max |eps| hub %.3f rad)\n", TF::to_string(model).c_str(), d, emax);
         CHECK(emax >= 0.2);
-        // measured 1.35e-2 (full), 2.01e-2 (approximate): the discretization of two different grids
-        CHECK(d <= (model == TF::ThroughflowModel::FullNormalEquilibrium ? 2e-2 : 3e-2));
+        // measured 2.0e-3 (full: the discretization of two different grids), 8.7e-3 (approximate: its
+        // linear phi and kappa_m depend on the quasi-normal's orientation)
+        CHECK(d <= (model == TF::ThroughflowModel::FullNormalEquilibrium ? 5e-3 : 2e-2));
+    }
+}
+
+TEST_CASE("throughflow-eq: the (1 + M_theta^2) sin(phi) / r term of Eq. 7-29: radial and leaned quasi-normals on a swirling cone",
+          "[turbolenza][throughflow]")
+{
+    // a 45-degree cone with a strong free vortex (M_theta ~ 0.6 at the hub against M_m ~ 0.2): the
+    // dW_m/dm term of Eq. 7-29 enters f1 with sin(epsilon), so radial (eps = 45 deg) and leaned
+    // (eps = 26.6 deg) quasi-normals weight it differently; the hub W_m at the same hub points must agree
+    for (auto model : {TF::ThroughflowModel::FullNormalEquilibrium, TF::ThroughflowModel::Approximate}) {
+        auto rad = channel(model, 7, 0.1, 0.0, cone_h, cone_s);
+        auto lean = channel(model, 7, 0.1, 0.05, cone_h, cone_s);
+        for (auto* c : {&rad, &lean}) {
+            c->options.n_stream_surfaces = 21;
+            c->inlet = swirl(c->quasi_normals[0].r_hub, c->quasi_normals[0].r_shroud, 401, [](double r) { return 60.0 / r; });
+        }
+        const auto rr = TF::solve_throughflow(rad);
+        const auto rl = TF::solve_throughflow(lean);
+        REQUIRE(rr.status == TF::ThroughflowResult::Status::Converged);
+        REQUIRE(rl.status == TF::ThroughflowResult::Status::Converged);
+        double d = 0.0, mt = 0.0;
+        for (std::size_t i = 1; i < rr.stations.size(); ++i) {
+            d = std::max(d, std::abs(rl.stations[i].nodes.front().Wm / rr.stations[i].nodes.front().Wm - 1.0));
+            mt = std::max(mt, rr.stations[i].nodes.front().mach_theta);
+        }
+        std::printf("[throughflow-eq] swirling cone, %s: radial vs leaned, max |dW_m| / W_m on the hub %.3e (M_theta hub %.3f)\n",
+                    TF::to_string(model).c_str(), d, mt);
+        CHECK(mt >= 0.4);
+        // measured 4.1e-4 (full), 6.3e-3 (approximate: its linear phi and kappa_m depend on the
+        // quasi-normal's orientation)
+        CHECK(d <= (model == TF::ThroughflowModel::FullNormalEquilibrium ? 2e-3 : 1.5e-2));
     }
 }
 

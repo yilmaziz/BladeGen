@@ -113,3 +113,16 @@ there by h_f / 2 and the scheme was first order (sharp edge) or about half order
 hold to round-off and the manufactured H-grid test is second order with a sharp edge and first order with a
 round one.  Aungier's own transition rows are of the same low order (independent review of 0ede48c): on a
 manufactured problem both converge to the exact solution with different error constants.
+
+Open items of the general operator (independent review of 407b811, not settled):
+
+1. On the NACA 65 cascade at fixed angle the inlet-corner psi(0,0) of the two solvers differs by a steady
+   0.0195 (M1 0.3: Aungier -0.0421, -0.0444, -0.0450; general -0.0631, -0.0644, -0.0644 at very_coarse,
+   coarse, medium), each changing by less than 1e-3 over the last level.  The manufactured tests point at
+   Aungier's transition rows (order 0.2 to 0.5 with a round edge, nearly stalling for one edge position,
+   against order 1 for the general operator); not proven for the cascade.  Needs fine / very_fine levels
+   or a leading-edge topology without transition cells (an O- or C-grid).
+2. beta_out depends by about 0.9 deg on how the trailing-edge node speeds are differenced (the run rule;
+   M1 0.3 medium: 24.91 with it, 24.02 without): the Kutta condition reads speeds that do not converge next
+   to a round edge on this layout.  Both solvers share this limitation of Aungier's grid.
+3. The synthetic Kutta cascade test bounds beta_out only to about 1.5 deg.

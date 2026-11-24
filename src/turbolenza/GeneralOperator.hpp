@@ -47,6 +47,10 @@
 ///    tests); with it every control volume is a closed polygon, the metric identities
 ///    d_zeta (J zeta_x) + d_eta (J eta_x) = 0 (likewise for y) hold to round-off at every PDE class, and
 ///    a uniform flow (psi linear in x, y, kappa constant) is an exact discrete solution of every PDE row;
+///    the flux surface of the closure face is the centroid chord on the mid-cell line x_(f-1/2), which lies in
+///    the fluid when the leading (trailing) edge is downstream (upstream) of that line; otherwise it cuts a
+///    sliver of the nose, at most dx / 2 long (the mean wall node is only the far end of the difference,
+///    not a flux surface; order and error unchanged for edge offsets of +-0.45 dx, review of 407b811);
 ///  * every face is computed once per class from the same nodes from both sides, so the fluxes telescope:
 ///    conservation across interfaces and the periodic cut;
 ///  * nodal differences (flow-angle rows, velocity recovery, sources): central (Q+ - Q-) / 2 when both

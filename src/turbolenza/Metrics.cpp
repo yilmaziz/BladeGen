@@ -3,6 +3,7 @@
 #include "turbolenza/Metrics.hpp"
 
 #include "turbolenza/Detail.hpp"
+#include "turbolenza/StreamSheet.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -275,17 +276,55 @@ GridMetrics build_metrics(std::shared_ptr<const Grid> grid_ptr)
                                            S[sz(at)], r.name, at, pitch));
     }
 
+    // not in v1: the stream sheet at the stations (planar: the neutral factors, never applied)
+    const StreamSheet* sheet = g.boundaries.sheet.get();
+    std::vector<double> sigma(sz(n_m), 1.0), radius(sz(n_m), 1.0), thickness(sz(n_m), 1.0), sin_phi(sz(n_m), 0.0);
+    if (sheet) {
+        try {
+            const double b_in = sheet->thickness(m[0]);
+            for (int i = 0; i < n_m; ++i) {
+                radius[sz(i)] = sheet->radius(m[sz(i)]);
+                sigma[sz(i)] = radius[sz(i)] / sheet->r_ref();
+                thickness[sz(i)] = sheet->thickness(m[sz(i)]) / b_in;  // Aungier's b, 1 at the far inlet
+                sin_phi[sz(i)] = sheet->sin_phi(m[sz(i)]);             // Eq. 5-15
+            }
+        } catch (const std::out_of_range& error) {
+            throw MetricsError(std::string("the grid leaves its stream sheet: ") + error.what());
+        }
+    }
+
     std::vector<double> tan0 = d_dm_runs(y0, 1, dm, runs), tan1 = d_dm_runs(y1, 1, dm, runs);
+    if (sheet)  // Eq. 5-3: tan(beta) = r d theta / dm = sigma dy/dm
+        for (int i = 0; i < n_m; ++i) {
+            tan0[sz(i)] = sigma[sz(i)] * tan0[sz(i)];
+            tan1[sz(i)] = sigma[sz(i)] * tan1[sz(i)];
+        }
     const CurveSlopes exact = curve_slopes(walls, m, f, l);
     for (int i = f; i <= l; ++i) {
         tan0[sz(i)] = exact.tan0[sz(i - f)];
         tan1[sz(i)] = exact.tan1[sz(i - f)];
+        if (sheet) {
+            tan0[sz(i)] = sigma[sz(i)] * exact.tan0[sz(i - f)];
+            tan1[sz(i)] = sigma[sz(i)] * exact.tan1[sz(i - f)];
+        }
     }
     std::vector<double> dtan0 = d_dm_runs(tan0, 1, dm, runs), dtan1 = d_dm_runs(tan1, 1, dm, runs);
     for (int i = f; i <= l; ++i) {
         dtan0[sz(i)] = exact.dtan0[sz(i - f)];
         dtan1[sz(i)] = exact.dtan1[sz(i - f)];
+        if (sheet) {  // d(sigma y')/dm = sigma' y' + sigma y'', sigma' = sin(phi) / r_ref
+            const double dsigma = sin_phi[sz(i)] / sheet->r_ref();
+            dtan0[sz(i)] = dsigma * exact.tan0[sz(i - f)] + sigma[sz(i)] * exact.dtan0[sz(i - f)];
+            dtan1[sz(i)] = dsigma * exact.tan1[sz(i - f)] + sigma[sz(i)] * exact.dtan1[sz(i - f)];
+        }
     }
+    std::vector<double> dS_dm(sz(n_m));
+    for (int i = 0; i < n_m; ++i) dS_dm[sz(i)] = tan1[sz(i)] - tan0[sz(i)];
+    if (sheet)  // S = r (theta1 - theta0) [Eq. 5-9]: dS/dm = sin(phi) Theta + r (theta1' - theta0')
+        for (int i = 0; i < n_m; ++i) {
+            dS_dm[sz(i)] = sin_phi[sz(i)] * (S[sz(i)] / sheet->r_ref()) + (tan1[sz(i)] - tan0[sz(i)]);
+            S[sz(i)] = sigma[sz(i)] * S[sz(i)];
+        }
 
     GridMetrics out;
     out.grid = grid_ptr;
@@ -320,8 +359,12 @@ GridMetrics build_metrics(std::shared_ptr<const Grid> grid_ptr)
             out.beta(i, j) = std::atan(t);
             out.sin_beta(i, j) = t * out.cos_beta(i, j);
         }
-    out.dS_dm.resize(sz(n_m));
-    for (int i = 0; i < n_m; ++i) out.dS_dm[sz(i)] = tan1[sz(i)] - tan0[sz(i)];
+    out.dS_dm = std::move(dS_dm);
+    out.radius_ratio = std::move(sigma);
+    out.radius = std::move(radius);
+    out.thickness = std::move(thickness);
+    out.sin_phi = std::move(sin_phi);
+    out.on_sheet = sheet != nullptr;
     out.S = std::move(S);
     out.tan_beta0 = std::move(tan0);
     out.tan_beta1 = std::move(tan1);

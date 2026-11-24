@@ -105,7 +105,7 @@ double d_deta_at(const Field& f, int i, int j, double deta, bool blade)
 }  // namespace
 
 CoefficientFields build_coefficients(const GridMetrics& metrics, const Field& rho, double mass_flow_per_depth,
-                                     std::optional<double> c_ref)
+                                     std::optional<double> c_ref, double omega)
 {
     if (!metrics.grid) throw CoefficientError("build_coefficients takes a GridMetrics with its grid");
     const double mdot = mass_flow(mass_flow_per_depth);
@@ -145,16 +145,30 @@ CoefficientFields build_coefficients(const GridMetrics& metrics, const Field& rh
     for (int i = 0; i < n_m; ++i) S[sz(i)] = length * metrics.S[sz(i)];
 
     CoefficientFields out{Field(n_m, n_eta), Field(n_m, n_eta), Field(n_m, n_eta), Field(n_m, n_eta),
-                          Field(n_m, n_eta), mdot, c_ref};
+                          Field(n_m, n_eta), mdot, c_ref, Field(), 0.0};
     const int n = n_m * n_eta;
+    const bool sheet = metrics.on_sheet;
+    if (!std::isfinite(omega))
+        throw CoefficientError(std::format("omega = {}: the rotation speed must be finite", py_repr(omega)));
+    if (omega != 0.0 && !sheet)
+        throw CoefficientError("a rotating row (omega != 0) needs a grid on a stream sheet: its radius r(m) and "
+                               "sin(phi) = dr/dm carry the rotation (Eqs. 5-21, 5-51)");
     TURBOLENZA_PARALLEL_FOR
     for (int k = 0; k < n; ++k) {
         const std::size_t q = static_cast<std::size_t>(k);
         const double s = S[sz(k / n_eta)];
-        const double r = rho.v[q], c = metrics.cos_beta.v[q], t = metrics.tan_beta.v[q];
+        // rho b on a stream sheet (b / b_in, Eqs. 5-22 .. 5-24); v1's rho otherwise
+        const double r = sheet ? rho.v[q] * metrics.thickness_at(k / n_eta) : rho.v[q];
+        const double c = metrics.cos_beta.v[q], t = metrics.tan_beta.v[q];
         out.A.v[q] = mdot / (s * r * (c * c));  // Eq. 5-22
         out.B.v[q] = mdot * t / r;              // Eq. 5-23
         out.C.v[q] = mdot * s / r;              // Eq. 5-24
+    }
+    out.omega = omega;
+    if (omega != 0.0) {  // not in v1: the rotation source of Eq. 5-21, 2 S omega sin(phi) [Eqs. 5-13 .. 5-15]
+        out.Q = Field(n_m, n_eta);
+        for (int i = 0; i < n_m; ++i)
+            for (int j = 0; j < n_eta; ++j) out.Q(i, j) = 2.0 * S[sz(i)] * omega * metrics.sin_phi_at(i);
     }
     finite("A", out.A, metrics, rho);
     finite("B", out.B, metrics, rho);

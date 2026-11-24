@@ -180,5 +180,11 @@ void check_passage(const Cascade& cascade, const PassageBoundaries& b, const Cur
 /// v1 _side_line for one m: (beta, y).
 [[nodiscard]] std::array<double, 2> side_line(double m, double fraction, const Point& junction,
                                               double junction_angle, double far_angle);
+/// Not in v1: the side line on a stream sheet (null: v1's side_line), the far station at m_far:
+/// beta as v1, y = y_j + int tan(beta) / sigma dm (StreamSheet::side_line_rise).  A cylinder whose
+/// radius is r_ref (sigma = 1 exactly) takes v1's closed form.
+[[nodiscard]] std::array<double, 2> side_line(double m, double fraction, const Point& junction,
+                                              double junction_angle, double far_angle, const StreamSheet* sheet,
+                                              double m_far);
 
 }  // namespace BladeGen::Turbolenza::detail

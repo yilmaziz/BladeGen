@@ -47,9 +47,6 @@ double speed_at_mach(double mach, const PerfectGas& gas, const BladeRowReference
 
 InletState inlet_state(const FlowConditions& conditions, const PerfectGas& gas, double inlet_pitch)
 {
-    if (conditions.angular_speed != 0.0)
-        throw InletStateError("a rotating row needs the inlet velocity triangle (absolute totals, relative Mach number "
-                              "and angle); only a stationary cascade (angular_speed = 0) is closed here");
     if (!conditions.inlet_mach || !(std::isfinite(*conditions.inlet_mach) && *conditions.inlet_mach >= 0.0))
         throw InletStateError(std::format("the inlet Mach number is {}: a finite number >= 0 is needed to derive the "
                                           "inlet state",
@@ -62,10 +59,29 @@ InletState inlet_state(const FlowConditions& conditions, const PerfectGas& gas, 
     if (!(std::isfinite(inlet_pitch) && inlet_pitch > 0.0))
         throw InletStateError(std::format("the inlet pitch {} must be a positive length", py_repr(inlet_pitch)));
     const TotalState total(conditions.inlet_absolute_total_pressure, conditions.inlet_absolute_total_temperature);
-    const BladeRowReference reference = blade_row_reference(total, gas);
+    const bool rotating = conditions.angular_speed != 0.0;
+    BladeRowReference reference;
+    if (!rotating) {
+        reference = blade_row_reference(total, gas);
+    } else {  // not in v1: the rothalpy of the rotating row at the inlet radius (Eq. 5-51)
+        try {
+            reference = blade_row_reference(total, gas, conditions.angular_speed, conditions.stream_surface_radius,
+                                            conditions.inlet_absolute_tangential_velocity);
+        } catch (const ThermodynamicStateError& error) {
+            throw InletStateError(std::string("the rotating row's rothalpy: ") + error.what());
+        }
+    }
     const double W = speed_at_mach(mach, gas, reference);
     const ScalarState state = static_state_at(W, gas, reference);
     InletState s;
+    if (rotating) {
+        s.rotating = true;
+        s.blade_speed = reference.blade_speed();
+        s.absolute_tangential_velocity = *conditions.inlet_absolute_tangential_velocity;
+        // the relative total state at the inlet: T0' = T + W^2 / (2 cp), isentropic
+        const double T0r = state.temperature + 0.5 * (W * W) / gas.cp();
+        s.relative_total_pressure = state.pressure * std::pow(T0r / state.temperature, gas.gamma / (gas.gamma - 1.0));
+    }
     s.mach = mach;
     s.flow_angle = beta;
     s.total_pressure = total.pressure;
@@ -83,6 +99,44 @@ InletState inlet_state(const FlowConditions& conditions, const PerfectGas& gas, 
     return s;
 }
 
+VelocityTriangle velocity_triangle(double rpm, double alpha1_deg, double mach_absolute, double P0, double T0,
+                                   const PerfectGas& gas, double radius)
+{
+    // not in v1 (see Flow.hpp for the sign convention, ours)
+    if (!std::isfinite(rpm)) throw InletStateError("the rotation speed rpm must be finite");
+    if (!(std::isfinite(alpha1_deg) && std::abs(alpha1_deg) < 90.0))
+        throw InletStateError(std::format("the absolute inlet angle {} deg is not within (-90, 90)", py_repr(alpha1_deg)));
+    if (!(std::isfinite(mach_absolute) && mach_absolute > 0.0))
+        throw InletStateError(std::format("the absolute inlet Mach number {} must be positive", py_repr(mach_absolute)));
+    if (!(std::isfinite(P0) && P0 > 0.0 && std::isfinite(T0) && T0 > 0.0))
+        throw InletStateError("the absolute inlet totals P0, T0 must be positive");
+    if (!(std::isfinite(radius) && radius > 0.0))
+        throw InletStateError(std::format("the inlet radius {} must be a positive length", py_repr(radius)));
+    VelocityTriangle t;
+    t.rpm = rpm;
+    t.omega = -2.0 * std::numbers::pi * rpm / 60.0;
+    t.radius = radius;
+    t.alpha = detail::radians(alpha1_deg);
+    t.mach_absolute = mach_absolute;
+    t.total_pressure = P0;
+    t.total_temperature = T0;
+    const double g = gas.gamma, R = gas.gas_constant;
+    t.static_temperature = T0 / (1.0 + 0.5 * (g - 1.0) * mach_absolute * mach_absolute);
+    t.static_pressure = P0 * std::pow(t.static_temperature / T0, g / (g - 1.0));
+    t.static_density = t.static_pressure / (R * t.static_temperature);
+    t.sound_speed = std::sqrt(g * R * t.static_temperature);
+    t.C = mach_absolute * t.sound_speed;
+    t.C_m = t.C * std::cos(t.alpha);
+    t.C_theta = t.C * std::sin(t.alpha);
+    t.U = t.omega * radius;
+    t.W_theta = t.C_theta - t.U;
+    t.beta = std::atan(t.W_theta / t.C_m);
+    t.W = std::hypot(t.C_m, t.W_theta);
+    t.mach_relative = t.W / t.sound_speed;
+    t.rothalpy = gas.cp() * T0 - t.U * t.C_theta;
+    return t;
+}
+
 namespace {
 
 void check_field(const Field& f, int n_m, int n_eta, const char* name)
@@ -95,16 +149,18 @@ void check_field(const Field& f, int n_m, int n_eta, const char* name)
             if (!std::isfinite(f(i, j))) throw FlowRecoveryError(std::format("{} is not finite at node ({}, {})", name, i, j));
 }
 
-// v1 _check_density_of: C = mdot' S / rho and B = mdot' tan(beta) / rho to round-off.
+// v1 _check_density_of: C = mdot' S / rho and B = mdot' tan(beta) / rho to round-off (rho b on a
+// stream sheet, not in v1).
 void check_density_of(const CoefficientFields& co, const Field& rho, const std::vector<double>& S, const Field& tan_beta,
-                      double mdot)
+                      double mdot, const GridMetrics& metrics)
 {
     for (int pass = 0; pass < 2; ++pass)
         for (int i = 0; i < rho.n_m; ++i)
             for (int j = 0; j < rho.n_eta; ++j) {
+                const double rb = metrics.on_sheet ? rho(i, j) * metrics.thickness_at(i) : rho(i, j);
                 const double off =
-                    pass == 0 ? std::abs(co.C(i, j) * rho(i, j) - mdot * S[sz(i)]) / (mdot * S[sz(i)])
-                              : std::abs(co.B(i, j) * rho(i, j) - mdot * tan_beta(i, j)) /
+                    pass == 0 ? std::abs(co.C(i, j) * rb - mdot * S[sz(i)]) / (mdot * S[sz(i)])
+                              : std::abs(co.B(i, j) * rb - mdot * tan_beta(i, j)) /
                                     (mdot * std::max(1.0, std::abs(tan_beta(i, j))));
                 if (!(off <= kRoundOff))
                     throw FlowRecoveryError(std::format(
@@ -151,7 +207,7 @@ FlowField velocity_components(const Field& psi, const Field& density, const Coef
         throw FlowRecoveryError(std::format("dm = {}: a grid spacing must be finite and positive", py_repr(dm)));
     if (!(std::isfinite(deta) && deta > 0.0))
         throw FlowRecoveryError(std::format("deta = {}: a grid spacing must be finite and positive", py_repr(deta)));
-    check_density_of(co, density, S, metrics.tan_beta, mdot);
+    check_density_of(co, density, S, metrics.tan_beta, mdot, metrics);
 
     // v1 _derivatives
     if (bcs.n_m != n_m || bcs.n_eta != n_eta)
@@ -221,7 +277,8 @@ FlowField velocity_components(const Field& psi, const Field& density, const Coef
     for (int k = 0; k < n; ++k) {
         const std::size_t q = static_cast<std::size_t>(k);
         const double s = S[sz(k / n_eta)];
-        const double mu = mdot / density.v[q];
+        // mu = mdot' / (rho b) on a stream sheet (Eqs. 5-18, 5-19), v1's mdot' / rho otherwise
+        const double mu = metrics.on_sheet ? mdot / (density.v[q] * metrics.thickness_at(k / n_eta)) : mdot / density.v[q];
         const double wm = mu * out.psi_eta.v[q] / s;
         const double wt = mu * (metrics.tan_beta.v[q] / s * out.psi_eta.v[q] - out.psi_m.v[q]);
         const double w2 = wm * wm + wt * wt;
@@ -253,7 +310,9 @@ std::vector<double> station_mass_flow(const FlowField& flow, const Field& densit
     std::vector<double> row(sz(n_eta));
     for (int i = 0; i < n_m; ++i) {
         const double S = co.length_scale() * metrics.S[sz(i)];
-        for (int j = 0; j < n_eta; ++j) row[sz(j)] = density(i, j) * flow.W_m(i, j) * S;
+        for (int j = 0; j < n_eta; ++j)  // rho W_m S b on a stream sheet (Eq. 5-17), v1's rho W_m S otherwise
+            row[sz(j)] = metrics.on_sheet ? density(i, j) * flow.W_m(i, j) * S * metrics.thickness_at(i)
+                                          : density(i, j) * flow.W_m(i, j) * S;
         out[sz(i)] = deta * (detail::pairwise_sum(row) - 0.5 * (row.front() + row.back()));
     }
     return out;

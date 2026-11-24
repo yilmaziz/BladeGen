@@ -104,6 +104,7 @@ struct Context
     int threads = 1;
     std::shared_ptr<const Transpiration> transpiration;  // the equivalent inviscid flow (null: v1)
     std::optional<int> bl_iteration;
+    double omega = 0.0;  // not in v1: Aungier's omega of a rotating row (the source of Eq. 5-21)
 };
 
 struct Pass
@@ -142,7 +143,7 @@ void mass_flow(Context& c, const Grid& grid, const SolverConfig& config, std::op
 {
     if (config.flow.inlet_mach) {
         try {
-            c.inlet = inlet_state(config.flow, config.gas, c.c_ref * grid.pitch());
+            c.inlet = inlet_state(config.flow, config.gas, c.c_ref * inlet_passage_width(grid));
         } catch (const InletStateError& error) {
             throw SolverInputError(std::string("the inlet state cannot be derived: ") + error.what());
         }
@@ -187,9 +188,22 @@ Context make_context(std::shared_ptr<const Grid> grid, const SolverConfig& confi
                                            "(metres in SI); the normalized mode of the lower modules is no physical "
                                            "solution",
                                            detail::py_repr(c_ref)));
-    if (config.flow.angular_speed != 0.0)
-        throw SolverInputError("a rotating row (angular_speed != 0) is not validated in the density-coupled solver yet: "
-                               "the first scope is a stationary cascade");
+    const double omega = config.flow.angular_speed;
+    if (omega != 0.0) {
+        // not in v1: a rotating row lies on a stream sheet with its radius, and its rothalpy is taken
+        // at the far-inlet radius (Eqs. 5-51, 13-56)
+        if (!grid->boundaries.sheet)
+            throw SolverInputError("a rotating row (angular_speed != 0) needs the grid of a stream surface: its radius "
+                                   "r(m) carries the rotation (Aungier 2003 Eqs. 5-21, 5-51); a planar cascade has none");
+        if (!config.flow.stream_surface_radius || !config.flow.inlet_absolute_tangential_velocity)
+            throw SolverInputError("a rotating row needs stream_surface_radius (the far-inlet radius) and "
+                                   "inlet_absolute_tangential_velocity for its rothalpy");
+        const double r_in = c_ref * grid->boundaries.sheet->radius(grid->m.front());
+        if (!(std::abs(*config.flow.stream_surface_radius - r_in) <= 1e-12 * r_in))
+            throw SolverInputError(std::format("stream_surface_radius = {} m is not the far-inlet radius of the grid's "
+                                               "stream sheet, {} m: the rothalpy must be taken where the inlet state is",
+                                               detail::py_repr(*config.flow.stream_surface_radius), detail::py_repr(r_in)));
+    }
     if (options.threads < 1 || options.threads > kMaxThreads || options.threads > max_threads())
         throw SolverInputError(std::format("threads = {}: 1 .. {} on this machine (at most {})", options.threads,
                                            max_threads(), kMaxThreads));
@@ -213,6 +227,12 @@ Context make_context(std::shared_ptr<const Grid> grid, const SolverConfig& confi
     c.bl_iteration = options.bl_iteration;
     c.metrics = std::make_shared<const GridMetrics>(build_metrics(grid));
     c.bcs = std::make_shared<const BoundaryConditions>(build_boundary_conditions(grid, c.transpiration.get()));
+    c.omega = omega;
+    if (omega != 0.0) {  // not in v1: U_i = omega r_i at every station (Eq. 5-51)
+        c.reference.station_blade_speed.resize(sz(grid->n_m()));
+        for (int i = 0; i < grid->n_m(); ++i)
+            c.reference.station_blade_speed[sz(i)] = omega * (c_ref * c.metrics->radius_at(i));
+    }
     return c;
 }
 
@@ -271,7 +291,7 @@ Pass density_pass(const Field& rho, const Context& c)
 {
     Pass p;
     p.density_resident = rho;
-    p.coefficients = build_coefficients(*c.metrics, rho, c.mass_flow_per_depth, c.c_ref);
+    p.coefficients = build_coefficients(*c.metrics, rho, c.mass_flow_per_depth, c.c_ref, c.omega);
     const AssemblyResult assembly = assemble_from_coefficients(p.coefficients, *c.metrics, *c.bcs);
     p.linear = solve_linear_system(assembly, c.linear_solver, c.threads);
     p.flow = velocity_components(p.linear.psi, rho, p.coefficients, *c.metrics, *c.bcs);

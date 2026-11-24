@@ -44,6 +44,8 @@ int max_threads()
 
 const char* bl_coupling_name(BlCoupling c) noexcept { return c == BlCoupling::OneWay ? "one_way" : "two_way"; }
 const char* wake_model_name(WakeModel w) noexcept { return w == WakeModel::Constant ? "constant" : "marched"; }
+const char* stream_surface_name(StreamSurfaceKind k) noexcept { return k == StreamSurfaceKind::Planar ? "planar" : "layer"; }
+const char* row_motion_name(RowMotion r) noexcept { return r == RowMotion::Stationary ? "stationary" : "rotating"; }
 
 double chord_reynolds_number(double mach, double P0, double T0, double chord, double gamma, double R, const SutherlandLaw& law)
 {
@@ -123,7 +125,8 @@ GridSettings grid_settings(const CaseSettings& s)
     return g;
 }
 
-FlowConditions flow_conditions(const CaseSettings& s, double exit_angle_deg)
+FlowConditions flow_conditions(const CaseSettings& s, double exit_angle_deg,
+                               const std::optional<VelocityTriangle>& triangle = std::nullopt)
 {
     FlowConditions f;
     f.inlet_mach = s.inlet_mach;
@@ -132,6 +135,10 @@ FlowConditions flow_conditions(const CaseSettings& s, double exit_angle_deg)
     f.inlet_absolute_total_pressure = s.inlet_total_pressure;
     f.inlet_absolute_total_temperature = s.inlet_total_temperature;
     f.angular_speed = s.omega;
+    if (triangle) {  // not in v1: the rotating row's rothalpy at the far-inlet radius
+        f.stream_surface_radius = triangle->radius;
+        f.inlet_absolute_tangential_velocity = triangle->C_theta;
+    }
     return f;
 }
 
@@ -334,11 +341,68 @@ ViscousData viscous_data(const ViscousSolve& v, const CaseSettings& s)
     return d;
 }
 
+// Not in v1: the absolute frame of a rotating row, C = W + U with U = omega r_i at station i.
+AbsoluteFrameData absolute_frame(const SolutionData& d, const PerfectGas& gas)
+{
+    const int n_m = d.grid.n_m(), n_eta = d.grid.n_eta();
+    AbsoluteFrameData a{Field(n_m, n_eta), Field(n_m, n_eta), Field(n_m, n_eta), Field(n_m, n_eta), Field(n_m, n_eta),
+                        Field(n_m, n_eta)};
+    const double cp = gas.cp(), exponent = gas.gamma / (gas.gamma - 1.0);
+    for (int i = 0; i < n_m; ++i) {
+        const double U = d.omega * d.station_radius[sz(i)];
+        for (int j = 0; j < n_eta; ++j) {
+            const double ct = d.W_theta(i, j) + U, cm = d.W_m(i, j), T = d.temperature(i, j);
+            const double C = std::hypot(cm, ct);
+            const double T0 = T + 0.5 * C * C / cp;
+            a.C_theta(i, j) = ct;
+            a.C(i, j) = C;
+            a.alpha(i, j) = std::atan2(ct, cm);
+            a.mach(i, j) = C / std::sqrt(gas.gamma * gas.gas_constant * T);
+            a.total_temperature(i, j) = T0;
+            a.total_pressure(i, j) = d.pressure(i, j) * std::pow(T0 / T, exponent);
+        }
+    }
+    return a;
+}
+
+// Not in v1: the far exit of a rotating row, mass averages over eta (weights rho W_m; ours).
+RotorSummary rotor_summary(const SolutionData& d, const VelocityTriangle& in, const PerfectGas& gas)
+{
+    const AbsoluteFrameData& a = *d.absolute;
+    const int i = d.grid.n_m() - 1, n_eta = d.grid.n_eta();
+    std::vector<double> w(sz(n_eta)), x(sz(n_eta));
+    for (int j = 0; j < n_eta; ++j) w[sz(j)] = d.density(i, j) * d.W_m(i, j);
+    const double total = detail::trapezoid(w.data(), d.grid.eta);
+    auto mean = [&](const Field& f) {
+        for (int j = 0; j < n_eta; ++j) x[sz(j)] = w[sz(j)] * f(i, j);
+        return detail::trapezoid(x.data(), d.grid.eta) / total;
+    };
+    RotorSummary r;
+    r.rpm = in.rpm;
+    r.omega = in.omega;
+    r.U_in = in.U;
+    r.U_out = d.omega * d.station_radius[sz(i)];
+    r.C_m_out = mean(d.W_m);
+    r.C_theta_out = mean(a.C_theta);
+    r.alpha_out_deg = degrees(std::atan2(r.C_theta_out, r.C_m_out));
+    r.mach_out = mean(a.mach);
+    r.total_pressure_out = mean(a.total_pressure);
+    r.total_temperature_out = mean(a.total_temperature);
+    r.total_pressure_ratio = r.total_pressure_out / in.total_pressure;
+    r.total_temperature_ratio = r.total_temperature_out / in.total_temperature;
+    r.euler_work = r.U_out * r.C_theta_out - r.U_in * in.C_theta;
+    r.total_enthalpy_rise = gas.cp() * (r.total_temperature_out - in.total_temperature);
+    return r;
+}
+
 }  // namespace
 
 // --- case construction -----------------------------------------------------------------------
 
-Case build_case(const CaseSettings& settings, const BladeSection& section)
+namespace {
+
+// v1 build_case, for a planar cascade (stream == nullptr) or a blade on its stream surface (not in v1).
+Case build_case_on(const CaseSettings& settings, const BladeSection& section, const StreamSurfaceBlade* stream)
 {
     const CaseSettings& s = settings;
     if (s.threads < 1 || s.threads > max_threads())
@@ -346,8 +410,30 @@ Case build_case(const CaseSettings& settings, const BladeSection& section)
                                     max_threads(), std::thread::hardware_concurrency(), kMaxThreads));
     if (s.linear_solver == LinearSolverKind::Pardiso && !pardiso_available())
         throw CaseError("linear solver PARDISO: this build has no Intel MKL (pardiso_available() is false)");
-    if (!(std::isfinite(s.chord) && s.chord > 0.0))
-        throw CaseError(std::format("chord {}: a positive length in metres", py_repr(s.chord)));
+    // not in v1: the stream surface and the row
+    if ((s.stream_surface == StreamSurfaceKind::Layer) != (stream != nullptr))
+        throw CaseError(s.stream_surface == StreamSurfaceKind::Layer
+                            ? "stream surface 'layer' needs the blade on its stream surface (a StreamSurfaceBlade)"
+                            : "a StreamSurfaceBlade was given with stream surface 'planar'");
+    const bool rotating = s.row == RowMotion::Rotating;
+    if (rotating && !stream)
+        throw CaseError("a rotating row needs the BladeGen layer's stream surface (stream surface 'layer'): its radius "
+                        "r(m) carries the rotation (Aungier 2003 Eqs. 5-21, 5-51); a planar cascade has none");
+    if (!rotating && s.omega != 0.0)
+        throw CaseError(std::format("omega = {} rad/s with a stationary row: set the row to 'rotating' (rpm and the "
+                                    "absolute inlet state)",
+                                    py_repr(s.omega)));
+    if (rotating) {
+        if (!std::isfinite(s.rpm)) throw CaseError("rpm must be finite");
+        if (!(std::isfinite(s.inlet_absolute_mach) && s.inlet_absolute_mach > 0.0))
+            throw CaseError(std::format("the absolute inlet Mach number {} must be positive", py_repr(s.inlet_absolute_mach)));
+        if (!(std::isfinite(s.inlet_absolute_flow_angle_deg) && std::abs(s.inlet_absolute_flow_angle_deg) < 90.0))
+            throw CaseError(std::format("the absolute inlet angle {} deg must lie in (-90, 90)",
+                                        py_repr(s.inlet_absolute_flow_angle_deg)));
+    }
+    const double chord = stream ? stream->chord : s.chord;
+    if (!(std::isfinite(chord) && chord > 0.0))
+        throw CaseError(std::format("chord {}: a positive length in metres", py_repr(chord)));
     if (s.viscous) {
         if (!(s.bl_relaxation > 0.0 && s.bl_relaxation <= 1.0))
             throw CaseError(std::format("bl_relaxation {}: 0 < omega_BL <= 1", py_repr(s.bl_relaxation)));
@@ -367,61 +453,108 @@ Case build_case(const CaseSettings& settings, const BladeSection& section)
         if (s.edge_nodes == EdgeNodes::Touching)
             throw CaseError("the boundary layer needs the first and last blade nodes inside the passage (edge nodes "
                             "'inside'): the touching experiment puts them on the nose tip and the tail end");
-        if (s.omega != 0.0) throw CaseError("the boundary layer is set up for a stationary cascade (omega = 0) only");
+        if (s.omega != 0.0 || rotating)
+            throw CaseError("the boundary layer is set up for a stationary cascade (omega = 0) only");
+        // not in v1 (ours): the march of BoundaryLayer.cpp has b = 1 and no r; Aungier's Eq. 5-106,
+        // (1/b) d(b rho_e W_e^2 theta)/dx + ..., carries b(x).  On a cylinder (r and b constant) the
+        // sheet is the planar cascade and the layer applies unchanged; otherwise it is refused
+        if (stream && !stream->sheet->cylinder())
+            throw CaseError("the boundary layer (Aungier 2003 Sec. 5.6) is implemented with b = 1 and no radius: its "
+                            "momentum integral Eq. 5-106 carries b(x), which this march does not have. On a stream "
+                            "sheet with r(m) or b(m) it is refused; it runs on the planar cascade and on a cylinder");
     }
     Case c;
     c.settings = s;
+    if (stream) {  // the chord, solidity and stagger of the blade in the (m, r_LE theta) plane
+        c.settings.chord = stream->chord;
+        c.settings.solidity = stream->solidity;
+        c.settings.stagger_deg = stream->stagger_deg;
+        c.stream = *stream;
+    }
     c.section = section;
     try {
-        c.cascade = make_cascade(section, s.solidity, s.stagger_deg);
+        c.cascade = stream ? make_cascade(*stream) : make_cascade(section, s.solidity, s.stagger_deg);
     } catch (const std::invalid_argument& error) {
         throw CaseError(std::string("the cascade cannot be built: ") + error.what());
     }
-    const double kappa_te = degrees(c.cascade.kappa_te);
-    const auto [angle, source] = exit_angle_of(s, kappa_te);
-    (void)source;
-    const FlowConditions conditions = flow_conditions(s, angle);
-    if (s.grid_level && (s.n_passage || s.n_eta))
-        throw CaseError(std::format("grid_level '{}' sets the resolution: give n_passage = n_eta = None with it (got {}, "
-                                    "{}), or grid_level None for the explicit n_passage x n_eta grid",
-                                    *s.grid_level, opt_repr(s.n_passage), opt_repr(s.n_eta)));
-    const GridSettings gs = grid_settings(s);
     PerfectGas gas;
     try {
         gas = PerfectGas(s.gamma, s.gas_constant);
     } catch (const ThermodynamicStateError& error) {
         throw CaseError(std::string("the gas cannot be formed: ") + error.what());
     }
-    c.inlet_angle = radians(s.inlet_flow_angle_deg);
-    c.exit_angle_start = radians(angle);
-    try {
-        if (!s.grid_level) {
-            c.grid = make_grid(c.cascade, gs, c.inlet_angle, c.exit_angle_start, true);
-        } else {  // the same grid make_grid(level) gives the solver, with its metadata
-            StandardGrid standard = build_grid(c.cascade, *s.grid_level, c.inlet_angle, c.exit_angle_start,
-                                               {s.upstream_extension_chords, s.downstream_extension_chords}, s.edge_nodes);
-            // v1 _standard_checks' last check, "metrics with positive S", needs the metrics, which come
-            // after the grid layer in v2: run here, with v1's message
-            try {
-                const GridMetrics metrics = build_metrics(std::make_shared<const Grid>(standard.grid));
-                for (double S : metrics.S)
-                    if (!(S > 0.0)) throw GridError("metrics with positive S: S is not positive");
-            } catch (const MetricsError& error) {
-                throw GridError(std::string("metrics: MetricsError: ") + error.what());
-            }
-            standard.info.checks.emplace_back("metrics with positive S");
-            c.grid = std::move(standard.grid);
-            c.standard_info = std::move(standard.info);
+    // a rotating row: the relative inlet from the absolute one at the far-inlet radius (velocity_triangle).
+    // The far inlet lies upstream_extension_chords ahead of the LE (a standard level rounds it to whole
+    // cells): the triangle is taken there first and again at the grid's own m_in (below)
+    auto triangle_at = [&](double m_in) {
+        try {
+            const double r_in = chord * c.cascade.sheet->radius(m_in);
+            VelocityTriangle t = velocity_triangle(s.rpm, s.inlet_absolute_flow_angle_deg, s.inlet_absolute_mach,
+                                                   s.inlet_total_pressure, s.inlet_total_temperature, gas, r_in);
+            if (!(std::abs(t.beta) < radians(89.0)))
+                throw CaseError(std::format("the relative inlet angle beta1 = {:.4f} deg: the side lines cannot lie along "
+                                            "it",
+                                            degrees(t.beta)));
+            c.triangle = t;
+            c.settings.omega = t.omega;
+            c.settings.inlet_mach = t.mach_relative;
+            c.settings.inlet_flow_angle_deg = degrees(t.beta);
+        } catch (const std::invalid_argument& error) {
+            throw CaseError(std::string("the inlet velocity triangle: ") + error.what());
         }
-    } catch (const GridError& error) {
-        const std::string which = s.grid_level ? "grid_level " + *s.grid_level
-                                               : std::format("n_passage {}, n_eta {}", opt_repr(s.n_passage),
-                                                             opt_repr(s.n_eta));
-        throw CaseError(std::format("the grid cannot be used ({}): {}", which, error.what()));
+    };
+    if (rotating) triangle_at(c.cascade.active.leading_edge_point.m - s.upstream_extension_chords * c.cascade.active.chord);
+    const double kappa_te = degrees(c.cascade.kappa_te);
+    const auto [angle, source] = exit_angle_of(s, kappa_te);
+    (void)source;
+    if (s.grid_level && (s.n_passage || s.n_eta))
+        throw CaseError(std::format("grid_level '{}' sets the resolution: give n_passage = n_eta = None with it (got {}, "
+                                    "{}), or grid_level None for the explicit n_passage x n_eta grid",
+                                    *s.grid_level, opt_repr(s.n_passage), opt_repr(s.n_eta)));
+    const GridSettings gs = grid_settings(s);
+    c.exit_angle_start = radians(angle);
+    auto build_grid_now = [&]() {
+        c.inlet_angle = radians(c.settings.inlet_flow_angle_deg);
+        try {
+            if (!s.grid_level) {
+                c.grid = make_grid(c.cascade, gs, c.inlet_angle, c.exit_angle_start, true);
+            } else {  // the same grid make_grid(level) gives the solver, with its metadata
+                StandardGrid standard = build_grid(c.cascade, *s.grid_level, c.inlet_angle, c.exit_angle_start,
+                                                   {s.upstream_extension_chords, s.downstream_extension_chords}, s.edge_nodes);
+                // v1 _standard_checks' last check, "metrics with positive S", needs the metrics, which come
+                // after the grid layer in v2: run here, with v1's message
+                try {
+                    const GridMetrics metrics = build_metrics(std::make_shared<const Grid>(standard.grid));
+                    for (double S : metrics.S)
+                        if (!(S > 0.0)) throw GridError("metrics with positive S: S is not positive");
+                } catch (const MetricsError& error) {
+                    throw GridError(std::string("metrics: MetricsError: ") + error.what());
+                }
+                standard.info.checks.emplace_back("metrics with positive S");
+                c.grid = std::move(standard.grid);
+                c.standard_info = std::move(standard.info);
+            }
+        } catch (const std::invalid_argument& error) {
+            const std::string which = s.grid_level ? "grid_level " + *s.grid_level
+                                                   : std::format("n_passage {}, n_eta {}", opt_repr(s.n_passage),
+                                                                 opt_repr(s.n_eta));
+            throw CaseError(std::format("the grid cannot be used ({}): {}", which, error.what()));
+        }
+    };
+    build_grid_now();
+    if (rotating && c.grid.m.front() != c.cascade.active.leading_edge_point.m - s.upstream_extension_chords) {
+        // the grid's own far inlet (a standard level's whole cells): the triangle there, the grid again at its
+        // beta1 (only the side lines' angles change, not the stations)
+        const double m_in = c.grid.m.front();
+        triangle_at(m_in);
+        build_grid_now();
+        if (c.grid.m.front() != m_in)
+            throw CaseError("the grid's far inlet moved with the relative inlet angle: the triangle cannot be closed");
     }
-    const double pitch = s.chord * c.grid.pitch();
+    const FlowConditions conditions = flow_conditions(c.settings, angle, c.triangle);
+    const double pitch = chord * inlet_passage_width(c.grid);
     std::optional<InletState> inlet;
-    if (s.inlet_mach) {
+    if (c.settings.inlet_mach) {
         try {
             inlet = inlet_state(conditions, gas, pitch);
         } catch (const std::invalid_argument& error) {
@@ -441,12 +574,24 @@ Case build_case(const CaseSettings& settings, const BladeSection& section)
         if (!(std::abs(*override_ - inlet->mass_flow_per_depth) <= kMassFlowConsistency * std::abs(inlet->mass_flow_per_depth)))
             throw CaseError(std::format("mass_flow_per_depth_override {} contradicts the inlet Mach number {} (mdot' {}); "
                                         "set inlet_mach None for a pure override (solver.MASS_FLOW_CONSISTENCY = {:g})",
-                                        py_repr(*override_), opt_repr(s.inlet_mach), py_repr(inlet->mass_flow_per_depth),
-                                        kMassFlowConsistency));
+                                        py_repr(*override_), opt_repr(c.settings.inlet_mach),
+                                        py_repr(inlet->mass_flow_per_depth), kMassFlowConsistency));
         c.mass_flow_per_depth = *override_;
         c.mass_flow_source = kMassFlowChecked;
     }
     return c;
+}
+
+}  // namespace
+
+Case build_case(const CaseSettings& settings, const BladeSection& section)
+{
+    return build_case_on(settings, section, nullptr);
+}
+
+Case build_case(const CaseSettings& settings, const StreamSurfaceBlade& blade)
+{
+    return build_case_on(settings, blade.section, &blade);
 }
 
 // --- the timed solve -------------------------------------------------------------------------
@@ -456,7 +601,7 @@ RunResult run_case(const Case& c, RunObserver* observer, const std::atomic<bool>
     const CaseSettings& s = c.settings;
     SolverConfig config;
     config.grid = grid_settings(s);
-    config.flow = flow_conditions(s, degrees(c.exit_angle_start));
+    config.flow = flow_conditions(s, degrees(c.exit_angle_start), c.triangle);
     config.iteration = iteration_settings(s);
     RunResult r;
     r.case_name = s.case_name;
@@ -532,6 +677,13 @@ RunResult run_case(const Case& c, RunObserver* observer, const std::atomic<bool>
         d.normalized_kutta_residual = sol.normalized_kutta_residual;
         d.mass_flow_per_depth = sol.mass_flow_per_depth;
         d.limitation = sol.limitation;
+        if (sol.metrics.on_sheet)  // not in v1: the stream sheet at the stations
+            for (int i = 0; i < sol.grid->n_m(); ++i) {
+                d.station_radius.push_back(sol.c_ref * sol.metrics.radius_at(i));
+                d.station_thickness.push_back(sol.metrics.thickness_at(i));
+            }
+        d.omega = sol.coefficients.omega;
+        if (d.omega != 0.0 && !d.station_radius.empty()) d.absolute = absolute_frame(d, config.gas);
         try {
             const BladeSurfaces b = blade_surfaces(sol);
             d.suction = surface_data(b.x_c_ss, b.m_c, b.mach_ss, b.pressure_ss, sol.inlet);
@@ -566,6 +718,7 @@ RunResult run_case(const Case& c, RunObserver* observer, const std::atomic<bool>
             sum.temperature_max = p.temperature_max;
             sum.mass_flow_per_depth = p.mass_flow_per_depth;
             sum.mass_flow_source = p.mass_flow_source;
+            if (d.absolute && c.triangle) sum.rotor = rotor_summary(d, *c.triangle, config.gas);
             r.summary = sum;
         } catch (const std::exception& error) {
             r.postprocess_error = error_type_name(error) + ": " + error.what();
@@ -611,15 +764,19 @@ std::string format_case_summary(const Case& c)
     row("gas constant R [J/(kg K)]", py_repr(s.gas_constant));
     row("Pt,in absolute [Pa]", py_repr(s.inlet_total_pressure));
     row("Tt,in absolute [K]", py_repr(s.inlet_total_temperature));
-    row("omega [rad/s]", py_repr(s.omega), "[user]", "0: stationary cascade (radius and swirl unused)");
+    const bool rotating = s.row == RowMotion::Rotating;
+    row("omega [rad/s]", py_repr(s.omega), rotating ? "[derived]" : "[user]",
+        rotating ? "-2 pi rpm / 60 (positive toward +theta)" : "0: stationary row");
     head("2. blade / cascade geometry");
     row("blade", c.section.designation, "[BladeGen]");
     row("chi_le, chi_te [deg]", std::format("{:.4f}, {:.4f}", degrees(c.section.chi_le), degrees(c.section.chi_te)),
-        "[BladeGen]");
-    row("chord c [m]", py_repr(s.chord));
-    row("solidity sigma", py_repr(s.solidity));
-    row("stagger [deg]", py_repr(s.stagger_deg));
-    row("pitch [m]", std::format("{:.9g}", s.chord * c.grid.pitch()), "[derived]", "chord / solidity");
+        "[BladeGen]", c.stream ? "from the (m, r_LE theta) chord line" : "");
+    const char* geo = c.stream ? "[BladeGen]" : "[user]";
+    row("chord c [m]", py_repr(s.chord), geo, c.stream ? "LE-TE in the (m, r_LE theta) plane" : "");
+    row("solidity sigma", py_repr(s.solidity), geo, c.stream ? "chord / (r_LE 2 pi / N)" : "");
+    row("stagger [deg]", py_repr(s.stagger_deg), geo, c.stream ? "chord line in the (m, r_LE theta) plane" : "");
+    row("pitch [m]", std::format("{:.9g}", s.chord * c.grid.pitch()), "[derived]",
+        c.stream ? "r_LE 2 pi / N (the y-pitch; S = r Theta varies with r)" : "chord / solidity");
     row("angle of attack [deg]", std::format("{:.6g}", s.inlet_flow_angle_deg - s.stagger_deg), "[derived]",
         "beta1 - stagger");
     row("kappa_le, kappa_te [deg]", std::format("{:.4f}, {:.4f}", degrees(c.cascade.kappa_le), degrees(c.cascade.kappa_te)),
@@ -677,6 +834,40 @@ std::string format_case_summary(const Case& c)
         row("separation H_k", py_repr(s.separation_hk), tag(s.separation_hk == 2.4), "2003 p. 111");
         row("Sutherland mu_ref [Pa s]", py_repr(s.sutherland.mu_ref));
         row("Sutherland T_ref, S [K]", std::format("{}, {}", py_repr(s.sutherland.t_ref), py_repr(s.sutherland.s)));
+    }
+    head("9. stream surface and row (not in v1)");
+    row("stream surface", stream_surface_name(s.stream_surface), "[user]",
+        c.stream ? "r(m), b(m) of the BladeGen layer (Aungier Eqs. 5-9 .. 5-26)" : "planar cascade: r = b = 1");
+    if (c.stream) {
+        const StreamSurfaceBlade& b = *c.stream;
+        const StreamSheet& sh = *b.sheet;
+        row("source", b.source, "[BladeGen]");
+        row("number of blades N", std::to_string(b.n_blades), "[BladeGen]");
+        row("BladeGen stagger [deg]", std::format("{:.6f}", b.layer_stagger_deg), "[BladeGen]", "in (m', theta)");
+        row("conformal chord c' [rad]", std::format("{:.9g}", b.conformal_chord), "[BladeGen]");
+        row("theta_LE [deg]", std::format("{:.6f}", b.theta_le_deg), "[BladeGen]");
+        row("r_LE, r_TE [m]", std::format("{:.6g}, {:.6g}", b.r_le, b.r_te), "[BladeGen]");
+        const double m0 = c.grid.m.front(), m1 = c.grid.m.back();
+        row("r far inlet, far exit [m]", std::format("{:.6g}, {:.6g}", s.chord * sh.radius(m0), s.chord * sh.radius(m1)),
+            "[derived]");
+        row("b far exit / b far inlet", std::format("{:.6f}", sh.thickness(m1) / sh.thickness(m0)), "[derived]",
+            "our model: the channel's streamline spacing");
+        row("sin(phi) far inlet, far exit", std::format("{:.6f}, {:.6f}", sh.sin_phi(m0), sh.sin_phi(m1)), "[derived]");
+        row("fit residual [chords]", std::format("{:.3g}", b.max_fit_residual), "[derived]");
+    }
+    row("row", row_motion_name(s.row), "[user]", rotating ? "" : "stationary: beta1 and M1 relative (= absolute)");
+    if (rotating && c.triangle) {
+        const VelocityTriangle& t = *c.triangle;
+        row("rpm", py_repr(s.rpm), "[user]", "> 0: the blades move toward -theta");
+        row("alpha1 absolute [deg]", py_repr(s.inlet_absolute_flow_angle_deg), "[user]", "0: axial, no swirl");
+        row("M1 absolute", py_repr(s.inlet_absolute_mach), "[user]");
+        row("r_in [m]", std::format("{:.9g}", t.radius), "[derived]", "the far inlet");
+        row("U = omega r_in [m/s]", std::format("{:.6f}", t.U), "[derived]");
+        row("C, C_m, C_theta [m/s]", std::format("{:.6f}, {:.6f}, {:.6f}", t.C, t.C_m, t.C_theta), "[derived]");
+        row("W_theta = C_theta - U [m/s]", std::format("{:.6f}", t.W_theta), "[derived]");
+        row("beta1 relative [deg]", std::format("{:.6f}", degrees(t.beta)), "[derived]");
+        row("M1 relative", std::format("{:.6f}", t.mach_relative), "[derived]");
+        row("rothalpy I [J/kg]", std::format("{:.6f}", t.rothalpy), "[derived]", "cp T0 - U C_theta");
     }
     if (c.inlet) {
         try {
@@ -799,6 +990,19 @@ std::string format_run_report(const RunResult& r)
                             {"source", s.mass_flow_source},
                             {"max station error", std::format("{:.3e}", last->mass_flow_error_max)},
                             {"blade median error", std::format("{:.3e}", last->mass_flow_error_blade_median)}});
+        if (s.rotor) {
+            const RotorSummary& o = *s.rotor;
+            block("Rotor, absolute frame (far exit, mass averages)",
+                  {{"rpm, omega", std::format("{:g}, {:.6f} rad/s", o.rpm, o.omega)},
+                   {"U in, out", std::format("{:.4f}, {:.4f} m/s", o.U_in, o.U_out)},
+                   {"C_m, C_theta out", std::format("{:.4f}, {:.4f} m/s", o.C_m_out, o.C_theta_out)},
+                   {"alpha out", std::format("{:.4f} deg", o.alpha_out_deg)},
+                   {"M out (absolute)", std::format("{:.4f}", o.mach_out)},
+                   {"P0 out, P0 out / P0 in", std::format("{:.6g} Pa, {:.6f}", o.total_pressure_out, o.total_pressure_ratio)},
+                   {"T0 out, T0 out / T0 in", std::format("{:.6g} K, {:.6f}", o.total_temperature_out, o.total_temperature_ratio)},
+                   {"Euler work U2 Ct2 - U1 Ct1", std::format("{:.4f} J/kg", o.euler_work)},
+                   {"cp (T0 out - T0 in)", std::format("{:.4f} J/kg", o.total_enthalpy_rise)}});
+        }
     } else if (r.solution && !r.postprocess_error.empty()) {
         block("Postprocess", {{"not available", r.postprocess_error}});
     }
@@ -912,7 +1116,12 @@ json settings_json(const CaseSettings& s)
             {"initial_exit_angle_deg", num(s.initial_exit_angle_deg)},
             {"threads", s.threads},
             {"linear_solver", s.linear_solver == LinearSolverKind::Pardiso ? "pardiso" : "sparselu"},
-            {"measure_runtime", s.measure_runtime}};
+            {"measure_runtime", s.measure_runtime},
+            {"stream_surface", stream_surface_name(s.stream_surface)},
+            {"row", row_motion_name(s.row)},
+            {"rpm", num(s.rpm)},
+            {"inlet_absolute_mach", num(s.inlet_absolute_mach)},
+            {"inlet_absolute_flow_angle_deg", num(s.inlet_absolute_flow_angle_deg)}};
 }
 
 std::string csv_line(const std::vector<std::string>& cells)
@@ -993,13 +1202,32 @@ std::vector<std::string> export_run(const RunResult& r, const Case& c, const std
         // every node of the reported evaluation; m and y in metres (c_ref times the chord-normalized grid)
         const SolutionData& d = *r.solution;
         std::ofstream f = open("fields.csv");
-        f << csv_line({"i", "j", "m", "y", "psi", "rho", "p", "T", "M", "W", "W_m", "W_theta"});
+        std::vector<std::string> head_f{"i", "j", "m", "y", "psi", "rho", "p", "T", "M", "W", "W_m", "W_theta"};
+        const bool sheet = !d.station_radius.empty();  // not in v1: y = r_LE theta, and r, theta, b of the sheet
+        if (sheet) head_f.insert(head_f.end(), {"r", "theta", "b"});
+        if (d.absolute) head_f.insert(head_f.end(), {"C_theta", "C", "alpha_deg", "M_abs", "P0_abs", "T0_abs"});
+        f << csv_line(head_f);
+        const double r_ref = sheet && c.stream ? c.stream->sheet->r_ref() : 1.0;
         for (int i = 0; i < d.grid.n_m(); ++i)
-            for (int j = 0; j < d.grid.n_eta(); ++j)
-                f << csv_line({std::to_string(i), std::to_string(j), py_repr(d.c_ref * d.grid.node_m(i, j)),
-                               py_repr(d.c_ref * d.grid.node_y(i, j)), py_repr(d.psi(i, j)), py_repr(d.density(i, j)),
-                               py_repr(d.pressure(i, j)), py_repr(d.temperature(i, j)), py_repr(d.mach(i, j)),
-                               py_repr(d.W(i, j)), py_repr(d.W_m(i, j)), py_repr(d.W_theta(i, j))});
+            for (int j = 0; j < d.grid.n_eta(); ++j) {
+                std::vector<std::string> cells{std::to_string(i), std::to_string(j), py_repr(d.c_ref * d.grid.node_m(i, j)),
+                                               py_repr(d.c_ref * d.grid.node_y(i, j)), py_repr(d.psi(i, j)),
+                                               py_repr(d.density(i, j)), py_repr(d.pressure(i, j)),
+                                               py_repr(d.temperature(i, j)), py_repr(d.mach(i, j)), py_repr(d.W(i, j)),
+                                               py_repr(d.W_m(i, j)), py_repr(d.W_theta(i, j))};
+                if (sheet) {
+                    cells.push_back(py_repr(d.station_radius[sz(i)]));
+                    cells.push_back(py_repr(d.grid.node_y(i, j) / r_ref));
+                    cells.push_back(py_repr(d.station_thickness[sz(i)]));
+                }
+                if (d.absolute) {
+                    const AbsoluteFrameData& a = *d.absolute;
+                    for (double v : {a.C_theta(i, j), a.C(i, j), degrees(a.alpha(i, j)), a.mach(i, j),
+                                     a.total_pressure(i, j), a.total_temperature(i, j)})
+                        cells.push_back(py_repr(v));
+                }
+                f << csv_line(cells);
+            }
     }
     if (layers) {
         const ViscousData& v = *r.viscous;
@@ -1218,6 +1446,60 @@ std::vector<std::string> export_run(const RunResult& r, const Case& c, const std
                                             {"pressure", num(h.laminar_separation_x_c_ps)}};
         }
         data["boundary_layer"] = bl;
+    }
+    // not in v1: the stream surface and the rotating row
+    if (c.stream) {
+        const StreamSurfaceBlade& b = *c.stream;
+        const StreamSheet& sh = *b.sheet;
+        data["derived"]["stream_surface"] = {
+            {"source", b.source},
+            {"n_blades", b.n_blades},
+            {"chord_m", num(b.chord)},
+            {"solidity", num(b.solidity)},
+            {"stagger_deg", num(b.stagger_deg)},
+            {"bladegen_stagger_deg", num(b.layer_stagger_deg)},
+            {"conformal_chord_rad", num(b.conformal_chord)},
+            {"theta_le_deg", num(b.theta_le_deg)},
+            {"r_le_m", num(b.r_le)},
+            {"r_te_m", num(b.r_te)},
+            {"r_ref_chords", num(sh.r_ref())},
+            {"r_far_inlet_m", num(s.chord * sh.radius(g.m.front()))},
+            {"r_far_exit_m", num(s.chord * sh.radius(g.m.back()))},
+            {"b_far_exit_over_far_inlet", num(sh.thickness(g.m.back()) / sh.thickness(g.m.front()))},
+            {"cylinder", sh.cylinder()},
+            {"max_fit_residual_chords", num(b.max_fit_residual)}};
+    }
+    if (c.triangle) {
+        const VelocityTriangle& t = *c.triangle;
+        data["derived"]["inlet_triangle"] = {{"rpm", num(t.rpm)},
+                                             {"omega_rad_s", num(t.omega)},
+                                             {"r_in_m", num(t.radius)},
+                                             {"U_m_s", num(t.U)},
+                                             {"alpha1_deg", num(degrees(t.alpha))},
+                                             {"M1_absolute", num(t.mach_absolute)},
+                                             {"C_m_s", num(t.C)},
+                                             {"C_m_m_s", num(t.C_m)},
+                                             {"C_theta_m_s", num(t.C_theta)},
+                                             {"W_theta_m_s", num(t.W_theta)},
+                                             {"W_m_s", num(t.W)},
+                                             {"beta1_deg", num(degrees(t.beta))},
+                                             {"M1_relative", num(t.mach_relative)},
+                                             {"rothalpy_J_kg", num(t.rothalpy)}};
+    }
+    if (r.summary && r.summary->rotor && results.is_object()) {
+        const RotorSummary& o = *r.summary->rotor;
+        data["results"]["rotor_absolute"] = {{"U_in_m_s", num(o.U_in)},
+                                             {"U_out_m_s", num(o.U_out)},
+                                             {"C_m_out_m_s", num(o.C_m_out)},
+                                             {"C_theta_out_m_s", num(o.C_theta_out)},
+                                             {"alpha_out_deg", num(o.alpha_out_deg)},
+                                             {"mach_out", num(o.mach_out)},
+                                             {"total_pressure_out_pa", num(o.total_pressure_out)},
+                                             {"total_temperature_out_k", num(o.total_temperature_out)},
+                                             {"total_pressure_ratio", num(o.total_pressure_ratio)},
+                                             {"total_temperature_ratio", num(o.total_temperature_ratio)},
+                                             {"euler_work_j_kg", num(o.euler_work)},
+                                             {"total_enthalpy_rise_j_kg", num(o.total_enthalpy_rise)}};
     }
     json listed = json::array();
     for (const std::string& f : files) listed.push_back(f);

@@ -106,4 +106,58 @@ struct SectionFitReport
 [[nodiscard]] BladeSection section_from_layer(const Design::Layer& layer, Design::Evaluator& ev,
                                               SectionFitReport* report = nullptr, const SideFitOptions& opt = {});
 
+// ── the blade on its stream surface (not in v1) ──────────────────────────────
+//
+// stream_surface_blade: the layer's section as BladeGen places it on its stream surface (the user's
+// decisions 1 and 2), in the solver's frame (StreamSheet.hpp, Cascade.hpp StreamSurfaceBlade):
+//  * the placement: BladeGen's own (Design::Evaluator::evaluate of the design with the window's copy of
+//    the layer at its index): m' = m0 + c' (x cos g - y sin g), theta = t0 + c' (x sin g + y cos g)
+//    (Design::Placement; stagger g, conformal chord c', the placed LE point (m0, t0), re-stagger and
+//    stacking included); a mirrored design is refused (its suction side faces -theta);
+//  * m(m'): the layer streamline X(u) = (x, r)(u) of BladeGen's FlowPath (the exact degree-5 B-spline,
+//    hub and casing blended at equal u), m = int |X_u| du and m' = int |X_u| / r du (Gauss-Legendre,
+//    8 points on 3 x 512 table intervals of u, then on the remainder), u(m') by Newton; m from the
+//    placed LE point.  BladeGen's own StreamSurface tables the same integrals (5 points, 3 x 128
+//    intervals, Hermite interpolation): the two maps agree to its interpolation error (reported);
+//  * the solver frame: M = m - m_LE, Y = r_LE (theta - t0), r_ref = r_LE; L = |(M, Y)(TE)| the
+//    normalizing length (the chord in the (m, r_LE theta) plane); the chord line's angle
+//    gamma_my = atan2(Y_TE, M_TE) is the cascade's stagger, and the section the placed blade turned
+//    back by it and divided by L (LE (0, 0), TE (1, 0)), fitted per side by fit_side (the dense
+//    BladeGen sample mapped point by point, its curvature by the chain rule of the map: dM/ds = r dm'/ds,
+//    d2M/ds2 = r d2m'/ds2 + r sin(phi) (dm'/ds)^2, Y'' = r_LE theta'');
+//  * the blade angles: the conformal map keeps angles, so the TRUE angles on the stream surface are
+//    BladeGen's kappa_LE = g + chi_LE, kappa_TE = g - chi_TE (chi as section_from_layer); the section
+//    carries chi_LE - (gamma_my - g), chi_TE + (gamma_my - g), so the cascade's kappa are the true ones;
+//  * the pitch: r_LE 2 pi / N (N = design.n_blades), solidity = L / pitch;
+//  * the sheet (decision 1, our model): r(m) from the streamline; b(m) = |dX/ds . n|, X(u, s) = (1 - s)
+//    hub(u) + s casing(u) (BladeGen's streamline family), n the unit normal of the layer's streamline, at
+//    the layer's span s: the normal spacing of the neighbouring stream surfaces, so the sheet carries a
+//    fixed fraction of the channel's flow (Aungier takes b from a hub-to-shroud analysis; we take the
+//    channel's own family).  Exact for a cylinder (b = casing - hub radius, constant).  Beyond the
+//    channel's ends every streamline continues straight along its end tangent (BladeGen's convention),
+//    the family with it (X = X_end + (u - u_end) X_u,end): the table reaches coverage_chords beyond the
+//    LE and TE, step table_step_chords, stations uniform in m.
+struct StreamSurfaceOptions
+{
+    double length_unit = 1e-3;        ///< BladeGen's length unit in metres (the designer works in mm)
+    double coverage_chords = 6.0;     ///< the sheet's table reaches this far beyond the LE and the TE
+    double table_step_chords = 0.0025; ///< its station spacing (the spline meets the streamline r to 2e-10: test)
+    SideFitOptions fit;
+};
+
+struct StreamSurfaceReport
+{
+    SectionFitReport fit;
+    double map_max_difference = 0.0;  ///< max |m(m') - BladeGen's StreamSurface::m_of_mprime| over the blade [chords]
+    double b_le = 0.0, b_te = 0.0;    ///< b / b(LE point) at the TE (b_le = 1)
+};
+
+/// The (window's copy of) layer k of `design` on its stream surface (see above).  Throws
+/// std::invalid_argument for a mirrored design, a layer BladeGen cannot place, or a section that
+/// leaves the channel; what fit_side throws.
+[[nodiscard]] StreamSurfaceBlade stream_surface_blade(const Design::BladeDesign& design, int k,
+                                                      const Design::Layer& layer, Design::Evaluator& ev,
+                                                      const StreamSurfaceOptions& opt = {},
+                                                      StreamSurfaceReport* report = nullptr);
+
 }  // namespace BladeGen::Turbolenza

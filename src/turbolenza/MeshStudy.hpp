@@ -52,9 +52,11 @@ struct MeshStudyCallbacks
 /// For each level in order: a copy of `base` with grid_level = level (n_passage, n_eta cleared;
 /// every other setting unchanged), build_case + run_case.  A level that fails (CaseError at build,
 /// a solver error, not converged) is recorded with its error and the study goes on.  `cancel`
-/// (may be null) stops the current solve after its pass and skips the remaining levels.
+/// (may be null) stops the current solve after its pass and skips the remaining levels.  Not in v1:
+/// `stream` (may be null) is the blade on its stream surface; each level is then build_case(st, *stream).
 [[nodiscard]] MeshStudyResult run_mesh_study(const CaseSettings& base, const BladeSection& section, const std::vector<std::string>& levels,
-                                             const MeshStudyCallbacks& callbacks = {}, const std::atomic<bool>* cancel = nullptr);
+                                             const MeshStudyCallbacks& callbacks = {}, const std::atomic<bool>* cancel = nullptr,
+                                             const StreamSurfaceBlade* stream = nullptr);
 
 /// mesh_study.csv (level, n_m, n_eta, nodes, dm_over_chord, converged, passes, beta_out_deg,
 /// mach_max, wall_s, error) in `directory` and export_run's files of every built level in

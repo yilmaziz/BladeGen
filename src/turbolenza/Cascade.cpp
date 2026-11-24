@@ -464,4 +464,29 @@ Cascade make_cascade(const BladeSection& section, double solidity, double stagge
     return c;
 }
 
+Cascade make_cascade(const StreamSurfaceBlade& blade)
+{
+    // not in v1: the planar cascade of the turned-back section, on its stream sheet
+    if (!blade.sheet) throw std::invalid_argument("make_cascade: the stream-surface blade has no stream sheet");
+    if (blade.n_blades < 1) throw std::invalid_argument("make_cascade: the stream-surface blade needs its number of blades");
+    if (!(std::isfinite(blade.chord) && blade.chord > 0.0))
+        throw std::invalid_argument("make_cascade: the stream-surface blade's chord must be a positive length");
+    Cascade c = make_cascade(blade.section, blade.solidity, blade.stagger_deg);
+    const double pitch = blade.sheet->r_ref() * (2.0 * kPi / static_cast<double>(blade.n_blades));
+    if (!(std::abs(c.active.pitch - pitch) <= 1e-12 * pitch))
+        throw GeometryError("invalid cascade geometry:\n- the pitch 1 / solidity = " + repr(c.active.pitch) +
+                            " is not r_ref 2 pi / N = " + repr(pitch) + " of the stream sheet");
+    double lo = 0.0, hi = 0.0;
+    for (const auto* pts : {&c.active.suction_surface, &c.active.pressure_surface})
+        for (const Point& p : *pts) {
+            lo = std::min(lo, p.m);
+            hi = std::max(hi, p.m);
+        }
+    if (!(blade.sheet->m_front() < lo && hi < blade.sheet->m_back()))
+        throw GeometryError("invalid cascade geometry:\n- the stream sheet (m " + g(blade.sheet->m_front()) + " .. " +
+                            g(blade.sheet->m_back()) + ") does not cover the blade (m " + g(lo) + " .. " + g(hi) + ")");
+    c.sheet = blade.sheet;
+    return c;
+}
+
 }  // namespace BladeGen::Turbolenza

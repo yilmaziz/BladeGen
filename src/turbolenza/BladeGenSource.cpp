@@ -4,6 +4,7 @@
 #include "math/Vec.hpp"
 #include "naca/Naca65.hpp"
 #include "profile/Profile2D.hpp"
+#include "blade/FlowPath.hpp"
 
 #include <Eigen/Sparse>
 #include <Eigen/SparseCholesky>
@@ -315,23 +316,11 @@ SideSample sample_layer_side(const Design::Layer& layer, Design::Evaluator& ev, 
     return to_side_sample(naca->sample_side(side, n_edge, n_body), side);
 }
 
-BladeSection section_from_layer(const Design::Layer& layer, Design::Evaluator& ev, SectionFitReport* report, const SideFitOptions& opt)
+namespace {
+
+/// The section's designation, blade angles chi_le / chi_te and edge metadata (see the file comment).
+void section_metadata(const Design::Layer& layer, Design::Evaluator& ev, BladeSection& b, SectionFitReport& rep)
 {
-    BladeSection b;
-    SectionFitReport rep;
-    // a side whose features are too fine for the default sample (e.g. the Kovach blend of a thin
-    // NACA 65 at station 0.60) is sampled again, three times denser, once
-    auto fit = [&](Profile::Side side, SideFitReport& r) {
-        try {
-            return fit_side(sample_layer_side(layer, ev, side, opt.n_edge, opt.n_body), opt, &r);
-        } catch (const std::runtime_error&) {
-            return fit_side(sample_layer_side(layer, ev, side, 3 * opt.n_edge, 3 * opt.n_body), opt, &r);
-        }
-    };
-    b.suction = fit(Profile::Side::Suction, rep.suction);
-    b.pressure = fit(Profile::Side::Pressure, rep.pressure);
-    b.suction_parameters = surface_parameters(opt.n_parameters);
-    b.pressure_parameters = b.suction_parameters;
     if (layer.uses_custom()) {
         const Profile::Profile2D prof(layer.custom);
         b.designation = layer.method == Design::Method::Custom ? "Custom" : "NACA 65 + Custom (fitted)";
@@ -359,8 +348,277 @@ BladeSection section_from_layer(const Design::Layer& layer, Design::Evaluator& e
         b.te_center = {m.te_center.x(), m.te_center.y()};
         rep.chi_source = "NACA 65: equivalent circular arc, tan(camber / 4) = 0.1103 cl0 (Aungier Eq. 4-6)";
     }
+}
+
+}  // namespace
+
+BladeSection section_from_layer(const Design::Layer& layer, Design::Evaluator& ev, SectionFitReport* report, const SideFitOptions& opt)
+{
+    BladeSection b;
+    SectionFitReport rep;
+    // a side whose features are too fine for the default sample (e.g. the Kovach blend of a thin
+    // NACA 65 at station 0.60) is sampled again, three times denser, once
+    auto fit = [&](Profile::Side side, SideFitReport& r) {
+        try {
+            return fit_side(sample_layer_side(layer, ev, side, opt.n_edge, opt.n_body), opt, &r);
+        } catch (const std::runtime_error&) {
+            return fit_side(sample_layer_side(layer, ev, side, 3 * opt.n_edge, 3 * opt.n_body), opt, &r);
+        }
+    };
+    b.suction = fit(Profile::Side::Suction, rep.suction);
+    b.pressure = fit(Profile::Side::Pressure, rep.pressure);
+    b.suction_parameters = surface_parameters(opt.n_parameters);
+    b.pressure_parameters = b.suction_parameters;
+    section_metadata(layer, ev, b, rep);
     if (report) *report = rep;
     return b;
+}
+
+// ── the blade on its stream surface (not in v1; see BladeGenSource.hpp) ───────
+
+namespace {
+
+// 8-point Gauss-Legendre on [-1, 1] (Abramowitz & Stegun, Table 25.4).
+constexpr double kGx[4] = {0.1834346424956498, 0.5255324099163290, 0.7966664774136267, 0.9602898564975363};
+constexpr double kGw[4] = {0.3626837833783620, 0.3137066458778873, 0.2223810344533745, 0.1012285362903763};
+constexpr int kTable = 3 * 512;  // table intervals of u in [0, 3]
+
+/// One layer streamline of BladeGen's FlowPath with its exact arc lengths m(u), m'(u) (from u = 0)
+/// and the stream-sheet thickness b of the streamline family (see BladeGenSource.hpp).
+class Streamline
+{
+public:
+    Streamline(const Blade::FlowPath& fp, double span) : X_(fp.streamline(span)), hub_(fp.hub()), cas_(fp.casing())
+    {
+        h_ = 3.0 / kTable;
+        m_.assign(sz(kTable + 1), 0.0);
+        mp_.assign(sz(kTable + 1), 0.0);
+        for (int k = 0; k < kTable; ++k) {
+            const auto [dm, dmp] = arcs(h_ * k, h_ * (k + 1));
+            m_[sz(k + 1)] = m_[sz(k)] + dm;
+            mp_[sz(k + 1)] = mp_[sz(k)] + dmp;
+        }
+    }
+    [[nodiscard]] double m_of_u(double u) const { return at(u, true); }
+    [[nodiscard]] double mp_of_u(double u) const { return at(u, false); }
+    /// u(m') and u(m) inside the channel, by Newton from the table (std::invalid_argument outside it).
+    [[nodiscard]] double u_of_mp(double mp) const { return invert(mp, false); }
+    [[nodiscard]] double u_of_m(double m) const { return invert(m, true); }
+    [[nodiscard]] Math::Vec2 xr(double u) const { return X_.eval(u); }
+    /// sin(phi) = dr/dm at u.
+    [[nodiscard]] double sin_phi(double u) const
+    {
+        const auto d = X_.derivs(u, 1);
+        return d[1].y() / d[1].norm();
+    }
+
+    struct Local
+    {
+        double r = 0.0, sin_phi = 0.0, b = 0.0;
+    };
+    /// r, sin(phi) = dr/dm and b at the arc length m from u = 0; beyond the channel's ends the
+    /// streamline and its family continue straight along their end tangents.
+    [[nodiscard]] Local at_m(double m) const
+    {
+        if (m >= 0.0 && m <= m_.back()) return local(u_of_m(m), 0.0);
+        const bool before = m < 0.0;
+        return local(before ? 0.0 : 3.0, before ? m : m - m_.back());
+    }
+
+private:
+    [[nodiscard]] std::pair<double, double> arcs(double a, double b) const
+    {
+        const double c = 0.5 * (a + b), w = 0.5 * (b - a);
+        double dm = 0.0, dmp = 0.0;
+        for (int g = 0; g < 4; ++g)
+            for (double sgn : {-1.0, 1.0}) {
+                const auto d = X_.derivs(c + sgn * w * kGx[g], 1);
+                const double v = d[1].norm();
+                dm += kGw[g] * w * v;
+                dmp += kGw[g] * w * v / d[0].y();
+            }
+        return {dm, dmp};
+    }
+    [[nodiscard]] double at(double u, bool arc) const
+    {
+        const int k = std::clamp(static_cast<int>(std::floor(u / h_)), 0, kTable - 1);
+        const auto [dm, dmp] = arcs(h_ * k, u);
+        return arc ? m_[sz(k)] + dm : mp_[sz(k)] + dmp;
+    }
+    [[nodiscard]] double invert(double target, bool arc) const
+    {
+        const std::vector<double>& t = arc ? m_ : mp_;
+        if (!(target >= t.front() && target <= t.back()))
+            throw std::invalid_argument("the blade leaves the BladeGen channel (its m' lies outside the layer streamline)");
+        const auto it = std::upper_bound(t.begin(), t.end(), target);
+        const int k = std::clamp(static_cast<int>(it - t.begin()) - 1, 0, kTable - 1);
+        double u = h_ * (k + (target - t[sz(k)]) / (t[sz(k + 1)] - t[sz(k)]));
+        for (int n = 0; n < 20; ++n) {
+            const auto d = X_.derivs(u, 1);
+            const double slope = arc ? d[1].norm() : d[1].norm() / d[0].y();
+            const double step = (at(u, arc) - target) / slope;
+            u -= step;
+            if (std::abs(step) <= 1e-15 * std::max(1.0, std::abs(u))) break;
+        }
+        return u;
+    }
+    [[nodiscard]] Local local(double u, double beyond) const
+    {
+        const auto d = X_.derivs(u, 1);
+        const Math::Vec2 t = d[1] / d[1].norm();
+        const Math::Vec2 n(-t.y(), t.x());
+        const auto dh = hub_.derivs(u, 1), dc = cas_.derivs(u, 1);
+        Math::Vec2 ds = dc[0] - dh[0];  // dX/ds of X(u, s) = (1 - s) hub(u) + s casing(u)
+        if (beyond != 0.0) ds += (beyond / d[1].norm()) * (dc[1] - dh[1]);
+        Local l;
+        l.r = d[0].y() + beyond * t.y();
+        l.sin_phi = t.y();
+        l.b = std::abs(ds.dot(n));
+        return l;
+    }
+
+    Math::BSpline2 X_, hub_, cas_;
+    double h_ = 0.0;
+    std::vector<double> m_, mp_;
+};
+
+}  // namespace
+
+StreamSurfaceBlade stream_surface_blade(const Design::BladeDesign& design, int k, const Design::Layer& layer,
+                                        Design::Evaluator& ev, const StreamSurfaceOptions& opt, StreamSurfaceReport* report)
+{
+    if (k < 0 || sz(k) >= design.layers.size())
+        throw std::invalid_argument("stream_surface_blade: no layer " + std::to_string(k) + " in the design");
+    if (design.mirror)
+        throw std::invalid_argument("stream_surface_blade: a mirrored design (suction side toward -theta) is not "
+                                    "supported: TURBOlenza's passage lies on the +theta side of the suction surface");
+    if (!(opt.length_unit > 0.0 && opt.coverage_chords > 0.0 && opt.table_step_chords > 0.0))
+        throw std::invalid_argument("stream_surface_blade: length_unit, coverage_chords and table_step_chords must be > 0");
+    Design::BladeDesign d = design;
+    d.layers[sz(k)] = layer;
+    const Design::DesignResult res = ev.evaluate(d);
+    if (!res.errors.empty()) throw std::invalid_argument("BladeGen cannot place the design: " + res.errors.front());
+    const Design::LayerResult& placed = res.layers[sz(k)];
+    if (!placed.error.empty()) throw std::invalid_argument("BladeGen cannot place the layer: " + placed.error);
+    Design::Placement conf;
+    conf.gamma = placed.gamma;
+    conf.c = placed.chord_mprime;
+    conf.m0 = placed.mprime_le;
+    conf.t0 = placed.theta_le;
+    conf.sign = 1.0;
+
+    const Blade::FlowPath fp(d.meridional);
+    const Streamline line(fp, layer.span);
+    const double mp_origin = line.mp_of_u(1.0);  // BladeGen measures m' from the layer's LE point (u = 1)
+    const double u_le = line.u_of_mp(mp_origin + conf.m0);
+    const double m_le = line.m_of_u(u_le);
+    const double r_le = line.xr(u_le).y();
+    // (x, y) of the chord frame -> (M, Y) of the (m, r_LE theta) plane [BladeGen length unit], and its u
+    auto map = [&](double x, double y, double& u) {
+        const Math::Vec2 q = conf(Math::Vec2(x, y));
+        u = line.u_of_mp(mp_origin + q.x());
+        return Math::Vec2(line.m_of_u(u) - m_le, r_le * (q.y() - conf.t0));
+    };
+    double u_te = 0.0;
+    const Math::Vec2 te = map(1.0, 0.0, u_te);
+    const double L = te.norm();
+    const double g_my = std::atan2(te.y(), te.x());
+    const double cg = std::cos(g_my), sg = std::sin(g_my);
+    auto turn_back = [&](const Math::Vec2& p) {
+        return Point{(p.x() * cg + p.y() * sg) / L, (-p.x() * sg + p.y() * cg) / L};
+    };
+    const double cgb = std::cos(conf.gamma), sgb = std::sin(conf.gamma);
+    const double m_le_bg = placed.surface.m_of_mprime(conf.m0);
+
+    StreamSurfaceReport rep;
+    double M_lo = 0.0, M_hi = te.x();
+    // one side: BladeGen's dense sample mapped point by point, its curvature by the chain rule
+    auto mapped_side = [&](Profile::Side side, int n_edge, int n_body) {
+        const SideSample s = sample_layer_side(layer, ev, side, n_edge, n_body);
+        SideSample out;
+        const std::size_t n = s.xy.size();
+        out.xy.resize(n);
+        out.kappa.resize(n);
+        for (std::size_t q = 0; q < n; ++q) {
+            // the unit tangent of the chord-frame sample (central differences of the dense exact points)
+            const std::size_t a = q == 0 ? 0 : q - 1, b = q + 1 == n ? q : q + 1;
+            Math::Vec2 t(s.xy[b].m - s.xy[a].m, s.xy[b].y - s.xy[a].y);
+            t /= t.norm();
+            const Math::Vec2 nrm(-t.y(), t.x());
+            double u = 0.0;
+            const Math::Vec2 P = map(s.xy[q].m, s.xy[q].y, u);
+            M_lo = std::min(M_lo, P.x());
+            M_hi = std::max(M_hi, P.x());
+            out.xy[q] = turn_back(P);
+            // d(m', theta)/ds and d2(m', theta)/ds2 of the similarity (s the chord-frame arc length)
+            const double a1 = conf.c * (t.x() * cgb - t.y() * sgb), a2 = conf.c * (t.x() * sgb + t.y() * cgb);
+            const double kc = s.kappa[q] * conf.c;
+            const double b1 = kc * (nrm.x() * cgb - nrm.y() * sgb), b2 = kc * (nrm.x() * sgb + nrm.y() * cgb);
+            const double r = line.xr(u).y();
+            const double dr = r * line.sin_phi(u);  // dr/dm' = r dr/dm
+            const double M1 = r * a1, M2 = r * b1 + dr * a1 * a1;
+            const double Y1 = r_le * a2, Y2 = r_le * b2;
+            out.kappa[q] = L * (M1 * Y2 - Y1 * M2) / std::pow(M1 * M1 + Y1 * Y1, 1.5);
+            // the same point by BladeGen's own conformal map (its StreamSurface table)
+            const double bg = placed.surface.m_of_mprime(conf(Math::Vec2(s.xy[q].m, s.xy[q].y)).x()) - m_le_bg;
+            rep.map_max_difference = std::max(rep.map_max_difference, std::abs(bg - P.x()) / L);
+        }
+        return out;
+    };
+    StreamSurfaceBlade blade;
+    BladeSection& b = blade.section;
+    auto fit = [&](Profile::Side side, SideFitReport& r) {
+        try {
+            return fit_side(mapped_side(side, opt.fit.n_edge, opt.fit.n_body), opt.fit, &r);
+        } catch (const std::runtime_error&) {
+            return fit_side(mapped_side(side, 3 * opt.fit.n_edge, 3 * opt.fit.n_body), opt.fit, &r);
+        }
+    };
+    b.suction = fit(Profile::Side::Suction, rep.fit.suction);
+    b.pressure = fit(Profile::Side::Pressure, rep.fit.pressure);
+    b.suction_parameters = surface_parameters(opt.fit.n_parameters);
+    b.pressure_parameters = b.suction_parameters;
+    section_metadata(layer, ev, b, rep.fit);
+    // the true blade angles kappa = g + chi_le, g - chi_te (the conformal map keeps angles), measured
+    // from the (m, y) chord line, whose angle is g_my
+    const double turn = g_my - conf.gamma;
+    b.chi_le = b.chi_le - turn;
+    b.chi_te = b.chi_te + turn;
+    double u_edge = 0.0;
+    b.le_center = turn_back(map(b.le_center.m, b.le_center.y, u_edge));
+    b.te_center = turn_back(map(b.te_center.m, b.te_center.y, u_edge));
+    const double scale = conf.c * r_le / L;  // the edge radii to first order (metadata for reports)
+    b.le_radius = b.le_radius * scale;
+    b.te_radius = b.te_radius * scale;
+    b.designation = b.designation + " on the " + layer.name + " stream surface";
+
+    // the sheet: stations uniform in m, coverage_chords beyond the blade's ends
+    const double lo = M_lo - opt.coverage_chords * L, hi = M_hi + opt.coverage_chords * L;
+    const int n = static_cast<int>(std::ceil((hi - lo) / (opt.table_step_chords * L))) + 1;
+    std::vector<double> ms(sz(n)), rs(sz(n)), bs(sz(n));
+    for (int q = 0; q < n; ++q) {
+        const double M = lo + (hi - lo) * static_cast<double>(q) / static_cast<double>(n - 1);
+        const Streamline::Local l = line.at_m(m_le + M);
+        ms[sz(q)] = M / L;
+        rs[sz(q)] = l.r / L;
+        bs[sz(q)] = l.b;
+    }
+    rep.b_le = 1.0;
+    rep.b_te = line.at_m(m_le + te.x()).b / line.at_m(m_le).b;
+    blade.sheet = std::make_shared<const StreamSheet>(std::move(ms), std::move(rs), std::move(bs), r_le / L);
+    blade.stagger_deg = Math::rad2deg(g_my);
+    blade.n_blades = d.n_blades;
+    blade.solidity = 1.0 / ((r_le / L) * (2.0 * Math::kPi / static_cast<double>(d.n_blades)));
+    blade.chord = L * opt.length_unit;
+    blade.source = "BladeGen layer " + layer.name;
+    blade.layer_stagger_deg = Math::rad2deg(conf.gamma);
+    blade.conformal_chord = conf.c;
+    blade.theta_le_deg = Math::rad2deg(conf.t0);
+    blade.r_le = r_le * opt.length_unit;
+    blade.r_te = line.xr(u_te).y() * opt.length_unit;
+    blade.max_fit_residual = std::max(rep.fit.suction.max_residual, rep.fit.pressure.max_residual);
+    if (report) *report = rep;
+    return blade;
 }
 
 }  // namespace BladeGen::Turbolenza

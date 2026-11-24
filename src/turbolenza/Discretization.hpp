@@ -7,7 +7,8 @@
 /// divided by -H, H = 2 A / deta^2 + 2 C / dm^2 (Eq. 5-44):
 ///     west  = -(C/dm^2 - E/(2 dm)) / H    [5-45]     east  = -(C/dm^2 + E/(2 dm)) / H    [5-46]
 ///     south = -(A/deta^2 - D/(2 deta)) / H [5-47]    north = -(A/deta^2 + D/(2 deta)) / H [5-48]
-///     mixed = B / (2 dm deta H)            [5-49]    rhs = -Q / H = 0                     [5-50]
+///     mixed = B / (2 dm deta H)            [5-49]    rhs = -Q / H                         [5-50]
+/// Q = 0 (v1); not in v1: Q = 2 S omega sin(phi) of a rotating row on a stream sheet (the Q argument).
 /// center 1, NE = SW = +mixed, SE = NW = -mixed; NaN off the interior (i = 1 .. n_m - 2,
 /// j = 1 .. n_eta - 2).  dm = length_scale grid.dm, deta = grid.deta.
 /// The periodic PDE line (v1 build_periodic_pde_rows): Eq. 5-44 at (i, J), J = n_eta - 1, on the
@@ -78,14 +79,17 @@ struct PeriodicPDERow
                                                                   const GridMetrics& metrics,
                                                                   const BoundaryConditions& boundary_conditions);
 
-/// v1 _interior_stencil on raw fields (manufactured-field tests).
+/// v1 _interior_stencil on raw fields (manufactured-field tests).  Not in v1: Q (null: 0, v1) is
+/// the right-hand side of Eq. 5-21, 2 S omega sin(phi), and rhs = -Q / H [Eq. 5-50].
 [[nodiscard]] InteriorStencil interior_stencil(const Field& A, const Field& B, const Field& C, const Field& D,
-                                               const Field& E, double dm, double deta);
+                                               const Field& E, double dm, double deta, const Field* Q = nullptr);
 
-/// v1 _periodic_pde_rows on raw fields; ghost(k) is the Elimination of psi[k, n_eta].
+/// v1 _periodic_pde_rows on raw fields; ghost(k) is the Elimination of psi[k, n_eta].  Q as in
+/// interior_stencil: each row's rhs starts from -Q(i, J) / H (every row is Eq. 5-21 over -H).
 [[nodiscard]] std::vector<PeriodicPDERow> periodic_pde_rows(const Field& A, const Field& B, const Field& C,
                                                             const Field& D, const Field& E, double dm, double deta,
                                                             int first_blade_i, int last_blade_i,
-                                                            const std::function<Elimination(int)>& ghost);
+                                                            const std::function<Elimination(int)>& ghost,
+                                                            const Field* Q = nullptr);
 
 }  // namespace BladeGen::Turbolenza

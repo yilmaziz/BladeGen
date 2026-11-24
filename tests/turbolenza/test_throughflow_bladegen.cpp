@@ -81,7 +81,7 @@ TEST_CASE("throughflow bladegen: the automatic quasi-normals of the default desi
     for (const auto& q : g.quasi_normals) CHECK(q.z_hub == q.z_shroud);  // radial
     CHECK(g.quasi_normals[4].z_hub < -0.015);  // upstream of both LE points (hub LE at -15 mm)
     CHECK(g.quasi_normals[5].z_hub > 0.015);   // downstream of both TE points
-    CHECK(g.row.omega == -2.0 * std::numbers::pi * 15000.0 / 60.0);  // the contract's sign
+    CHECK(g.row.omega == -2.0 * std::numbers::pi * 15000.0 / 60.0);  // the sign of the header: omega = -2 pi rpm / 60
     CHECK(g.row.s_row == 1);
     CHECK(g.row.sections.size() == d.layers.size());
     for (const auto& s : g.row.sections) {
@@ -203,7 +203,7 @@ TEST_CASE("throughflow bladegen: a rotating SpecifiedBladeRow on the default des
                     "W_m1 %.2f W_m2 %.2f m/s, max dH %.1f J/kg, max Pt2/Pt1 %.4f\n", TF::to_string(m).c_str(),
                     r.history.size(), inlet_beta * 180 / std::numbers::pi, g.row.sections[2].kappa1 * 180 / std::numbers::pi,
                     mid_out.beta * 180 / std::numbers::pi, mid_in.Wm, mid_out.Wm, dH, prs);
-        CHECK(inlet_beta > 0.0);  // the contract's sign: rpm > 0 gives beta'_1 > 0
+        CHECK(inlet_beta > 0.0);  // the header's sign: rpm > 0 gives beta'_1 > 0
         if (m == TF::ThroughflowModel::FullNormalEquilibrium) {
             std::printf("[throughflow-bg] rotor full model, position error by pass:");
             for (const auto& h : r.history) std::printf(" %.1e", h.position_error);

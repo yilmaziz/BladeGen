@@ -181,6 +181,26 @@ struct Case
     std::string mass_flow_source;
 };
 
+/// The numbers of v1 postprocess.SolutionSummary for the report and the run summary (v2
+/// addition: RunResult carries them, so the report needs no Solution).
+struct RunSummary
+{
+    std::string limitation;
+    std::optional<double> inlet_mach;
+    double inlet_angle_deg = 0.0, discharge_angle_deg = 0.0, exit_velocity_angle_deg = 0.0;
+    double exit_angle_mismatch_deg = 0.0, turning_deg = 0.0;
+    double surface_mach_max = 0.0, surface_mach_min = 0.0;
+    double ss_peak_mach = 0.0, ss_peak_x_c = 0.0, ps_peak_mach = 0.0, ps_peak_x_c = 0.0;
+    double te_ss_mach = 0.0, te_ps_mach = 0.0;
+    double kutta_residual = 0.0, normalized_kutta_residual = 0.0;
+    double mach_max = 0.0;
+    int mach_max_i = 0, mach_max_j = 0;
+    double density_min = 0.0, density_max = 0.0, pressure_min = 0.0, pressure_max = 0.0;
+    double temperature_min = 0.0, temperature_max = 0.0;
+    double mass_flow_per_depth = 0.0;
+    std::string mass_flow_source;
+};
+
 /// v1 controller.RunResult.
 struct RunResult
 {
@@ -192,6 +212,14 @@ struct RunResult
     std::optional<SolutionData> solution;  ///< the reported evaluation, or the last completed pass
     RuntimeStats runtime;
     std::string started;                ///< ISO time of the solve start
+    // v2 additions
+    std::string status;                 ///< v1 RunResult.status: "converged" or "failed: <ErrorType>"
+    std::string mode;                   ///< v1 solver_mode string: "coupled_kutta" or "fixed_exit"
+    bool stop_at_sonic = true;          ///< the case's sonic stop (for the report)
+    std::optional<int> failed_pass;     ///< a called module failed in this pass (v1 error.failed_pass)
+    std::optional<RunSummary> summary;  ///< the reported evaluation's numbers (empty without a solution
+                                        ///< or when its walls cannot be labeled)
+    std::string postprocess_error;      ///< why summary / surfaces are empty, if they are
 };
 
 /// v1 build_case: cascade, grid (admissibility checked before any solve), inlet state and the

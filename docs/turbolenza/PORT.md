@@ -2,7 +2,7 @@
 
 TURBOlenza v2 is the blade-to-blade compressible potential-flow solver of Aungier (2003), Ch. 5,
 running inside BladeGen as its own window. It is a C++ port of the verified Python package
-`turbolenza.b2b` (TURBOlenza v1, `C:\Users\ASUS\Documents\turbolenza`, commit 67599a6).
+`turbolenza.b2b` (TURBOlenza v1, github.com/yilmaziz/TURBOlenza, commit 67599a6).
 BladeGen stays the main program: TURBOlenza takes its blade section from a BladeGen design layer.
 
 ## What is ported, and what is not
@@ -68,7 +68,7 @@ The designer target is `bladegen_designer`.
 Generate the reference data again with:
 
 ```
-C:\Users\ASUS\miniconda3\envs\newblade\python.exe tools\turbolenza_reference\dump_v1.py C:\Users\ASUS\Documents\turbolenza
+python tools\turbolenza_reference\dump_v1.py <path-to-turbolenza-v1>
 ```
 
 ## Aungier's grid rules (looked up 2026-11-24, `aungier-reference`)

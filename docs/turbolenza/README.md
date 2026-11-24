@@ -65,8 +65,8 @@ MKL runs on its TBB threading layer. The per-node loops use the compiler's OpenM
 ## Reference data for the tests
 
 ```
-C:\Users\ASUS\miniconda3\envs\newblade\python.exe tools\turbolenza_reference\dump_v1.py C:\Users\ASUS\Documents\turbolenza
-C:\Users\ASUS\miniconda3\envs\newblade\python.exe tools\turbolenza_reference\dump_v1.py C:\Users\ASUS\Documents\turbolenza --medium
+python tools\turbolenza_reference\dump_v1.py <path-to-turbolenza-v1>
+python tools\turbolenza_reference\dump_v1.py <path-to-turbolenza-v1> --medium
 ```
 
 These commands write `tests/turbolenza/data/` (git-ignored). Without that folder, the

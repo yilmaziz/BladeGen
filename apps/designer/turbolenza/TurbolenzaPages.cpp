@@ -33,6 +33,7 @@
 #include <QVBoxLayout>
 
 #include <cmath>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <numbers>
@@ -353,6 +354,24 @@ QWidget* TurbolenzaWindow::cascadePage()
     ff->addRow("gas constant R", gas_r_);
     ff->addRow("rotation ω", omega_);
     v->addWidget(fl);
+    auto* rg = new QGroupBox("Reynolds number (sets Pt; the tunnel holds Pt and Tt)", left);
+    auto* rf = new QFormLayout(rg);
+    re_ref_ = dspin(rg, 1e3, 1e10, 0, 10000.0);
+    re_ref_->setValue(550000.0);
+    m_ref_ = dspin(rg, 0.01, 0.99, 4, 0.01);
+    m_ref_->setValue(0.30);
+    auto* re_button = new QPushButton("Set P0 from a reference Reynolds number", rg);
+    re_button->setToolTip("Re = rho1 W1 c / mu(T1) at the reference Mach number (chord-based, the inlet state, Sutherland at "
+                          "the inlet static temperature, Tt as given): solved for Pt");
+    re_info_ = new QLabel(rg);
+    re_info_->setWordWrap(true);
+    re_info_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    rf->addRow("reference Re (chord)", re_ref_);
+    rf->addRow("at the Mach number", m_ref_);
+    rf->addRow(re_button);
+    rf->addRow(re_info_);
+    v->addWidget(rg);
+    connect(re_button, &QPushButton::clicked, this, [this] { setP0FromReynolds(); });
     derived_ = new QLabel(left);
     derived_->setWordWrap(true);
     derived_->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -401,6 +420,26 @@ QWidget* TurbolenzaWindow::cascadePage()
         stale();
     });
     return page;
+}
+
+void TurbolenzaWindow::setP0FromReynolds()
+{
+    try {
+        const T::SutherlandLaw air;
+        const double P0 = T::total_pressure_for_reynolds(re_ref_->value(), m_ref_->value(), tt_->value(), chord_->value(),
+                                                         gamma_->value(), gas_r_->value(), air);
+        pt_->setValue(P0);
+        QString t = QString("Pt = %1 Pa gives Re = %2 at M = %3").arg(P0, 0, 'f', 2).arg(re_ref_->value(), 0, 'g', 7).arg(m_ref_->value());
+        if (mach_given_->isChecked())
+            t += QString("; at the case's M1 = %1: Re = %2")
+                     .arg(mach1_->value())
+                     .arg(T::chord_reynolds_number(mach1_->value(), pt_->value(), tt_->value(), chord_->value(), gamma_->value(),
+                                                   gas_r_->value(), air),
+                          0, 'g', 7);
+        re_info_->setText(t);
+    } catch (const std::exception& e) {
+        re_info_->setText(QString("<span style='color:#b00'>%1</span>").arg(e.what()));
+    }
 }
 
 void TurbolenzaWindow::setCascadeDefaults(double stagger_deg, double solidity)
@@ -737,6 +776,41 @@ QWidget* TurbolenzaWindow::solverPage()
     cf->addRow("linear solver", linear_);
     cf->addRow(measure_);
     v->addWidget(cg);
+    bl_box_ = new QGroupBox("Boundary layer (Aungier Sec. 5.6)", inner);
+    auto* bf = new QFormLayout(bl_box_);
+    viscous_ = new QCheckBox("compute the blade-surface boundary layer (not in v1)", bl_box_);
+    viscous_->setChecked(d.viscous);
+    bl_coupling_ = new QComboBox(bl_box_);
+    bl_coupling_->addItems({"one_way (Aungier's analysis: the layer from the inviscid flow)",
+                            "two_way (transpiration: the equivalent inviscid flow)"});
+    bl_coupling_->setCurrentIndex(d.bl_coupling == T::BlCoupling::TwoWay ? 1 : 0);
+    bl_cf_ = new QComboBox(bl_box_);
+    bl_cf_->addItems({"centrifugal_2000: ½ c_f = μ/(ρWδ') (2 + Λ/6), Eq. 15-20",
+                      "axial_2003_as_printed: ½ c_f = μ/(ρWδ') (1 + Λ/6), Eq. 5-123"});
+    bl_cf_->setCurrentIndex(d.laminar_cf_form == T::LaminarCfForm::Axial2003AsPrinted ? 1 : 0);
+    bl_wake_ = new QComboBox(bl_box_);
+    bl_wake_->addItems({"constant (m_wake = m_SS + m_PS at the TE)", "marched (Head / Green with τ_w = 0)"});
+    bl_wake_->setCurrentIndex(d.wake_model == T::WakeModel::Marched ? 1 : 0);
+    bl_omega_ = dspin(bl_box_, 0.001, 1.0, 4, 0.05);
+    bl_omega_->setValue(d.bl_relaxation);
+    bl_tol_ = sci(bl_box_, d.bl_tolerance);
+    bl_max_ = new QSpinBox(bl_box_);
+    bl_max_->setRange(0, 100000);
+    bl_max_->setValue(d.max_bl_iterations);
+    bl_re_tr_ = dspin(bl_box_, 1.0, 1e6, 2, 10.0);
+    bl_re_tr_->setValue(d.transition_re_theta);
+    bl_hk_ = dspin(bl_box_, 1.01, 10.0, 3, 0.05);
+    bl_hk_->setValue(d.separation_hk);
+    bf->addRow(viscous_);
+    bf->addRow("coupling", bl_coupling_);
+    bf->addRow("laminar c_f form", bl_cf_);
+    bf->addRow("wake model", bl_wake_);
+    bf->addRow("relaxation ω_BL", bl_omega_);
+    bf->addRow("tolerance (max change of m)", bl_tol_);
+    bf->addRow("max BL iterations", bl_max_);
+    bf->addRow("transition Re_θ (Eq. 5-126)", bl_re_tr_);
+    bf->addRow("separation H_k (p. 111)", bl_hk_);
+    v->addWidget(bl_box_);
     auto* br = new QHBoxLayout;
     run_ = new QPushButton("Run", inner);
     stop_ = new QPushButton("Stop", inner);
@@ -752,6 +826,8 @@ QWidget* TurbolenzaWindow::solverPage()
     connect(fixed_is_kappa_, &QCheckBox::toggled, this, [this] { updateSolverEnabled(); });
     connect(vel_is_rho_, &QCheckBox::toggled, this, [this] { updateSolverEnabled(); });
     connect(exit_start_, &QComboBox::currentIndexChanged, this, [this] { updateSolverEnabled(); });
+    connect(viscous_, &QCheckBox::toggled, this, [this] { updateSolverEnabled(); });
+    connect(bl_coupling_, &QComboBox::currentIndexChanged, this, [this] { updateSolverEnabled(); });
     updateSolverEnabled();
     return scrolled(inner);
 }
@@ -763,6 +839,9 @@ void TurbolenzaWindow::updateSolverEnabled()
     fixed_angle_->setEnabled(fixed && !fixed_is_kappa_->isChecked());
     tol_w_->setEnabled(!vel_is_rho_->isChecked());
     exit_start_deg_->setEnabled(exit_start_->currentIndex() == 1);
+    const bool bl = viscous_->isChecked(), two = bl && bl_coupling_->currentIndex() == 1;
+    for (QWidget* w : std::initializer_list<QWidget*>{bl_coupling_, bl_cf_, bl_re_tr_, bl_hk_}) w->setEnabled(bl);
+    for (QWidget* w : std::initializer_list<QWidget*>{bl_wake_, bl_omega_, bl_tol_, bl_max_}) w->setEnabled(two);
 }
 
 T::CaseSettings TurbolenzaWindow::settings() const
@@ -805,6 +884,15 @@ T::CaseSettings TurbolenzaWindow::settings() const
     s.threads = threads_->value();
     s.linear_solver = linear_->currentIndex() == 1 ? T::LinearSolverKind::Pardiso : T::LinearSolverKind::SparseLU;
     s.measure_runtime = measure_->isChecked();
+    s.viscous = viscous_->isChecked();
+    s.bl_coupling = bl_coupling_->currentIndex() == 1 ? T::BlCoupling::TwoWay : T::BlCoupling::OneWay;
+    s.laminar_cf_form = bl_cf_->currentIndex() == 1 ? T::LaminarCfForm::Axial2003AsPrinted : T::LaminarCfForm::Centrifugal2000;
+    s.wake_model = bl_wake_->currentIndex() == 1 ? T::WakeModel::Marched : T::WakeModel::Constant;
+    s.bl_relaxation = bl_omega_->value();
+    s.bl_tolerance = sciValue(bl_tol_);
+    s.max_bl_iterations = bl_max_->value();
+    s.transition_re_theta = bl_re_tr_->value();
+    s.separation_hk = bl_hk_->value();
     return s;
 }
 
@@ -858,13 +946,15 @@ QWidget* TurbolenzaWindow::postPage()
     auto* bres = new QPushButton("Residuals", w);
     auto* bcon = new QPushButton("Contours", w);
     auto* bload = new QPushButton("Blade loading", w);
+    auto* bbl = new QPushButton("Boundary layer", w);
     auto* bsave = new QPushButton("Save results...", w);
-    for (auto* b : {bres, bcon, bload, bsave}) row->addWidget(b);
+    for (auto* b : {bres, bcon, bload, bbl, bsave}) row->addWidget(b);
     row->addStretch(1);
     v->addLayout(row);
     connect(bres, &QPushButton::clicked, this, [this] { showResiduals(); });
     connect(bcon, &QPushButton::clicked, this, [this] { showContours(); });
     connect(bload, &QPushButton::clicked, this, [this] { showLoading(); });
+    connect(bbl, &QPushButton::clicked, this, [this] { showBoundaryLayer(); });
     connect(bsave, &QPushButton::clicked, this, [this] { saveDialog(); });
     report_ = new QLabel("no run yet", w);
     QFont mono("Consolas");

@@ -189,6 +189,69 @@ QWidget* ParameterPanel::meridionalPage()
     connect(ext_in_, &QDoubleSpinBox::valueChanged, this, [this](double x) { s_.design.meridional.inlet_extension = x; changed(); });
     connect(ext_out_, &QDoubleSpinBox::valueChanged, this, [this](double x) { s_.design.meridional.outlet_extension = x; changed(); });
     v->addWidget(g);
+    // stacking of the sections (Vos et al. 2025, Sec. 4)
+    auto* sg = new QGroupBox("Stacking of the sections", w);
+    auto* sl = new QVBoxLayout(sg);
+    auto* sh = new QLabel("Prescribed LE / TE lines: each section's LE and TE sit on the meridional LE / TE lines, so "
+                          "the chord follows.  Reference point: each section's centre of gravity (or LE, TE) sits on "
+                          "the stacking line, and the chord is free (chord scale on the layer page).  Variant 1: every "
+                          "reference point at the same Z and θ, a radial line.  Variant 2: each one at the point of its "
+                          "stream surface closest to the previous layer's, along the stream-surface normals.", sg);
+    sh->setWordWrap(true);
+    sl->addWidget(sh);
+    stacking_mode_ = new QComboBox(sg);
+    stacking_mode_->addItems({"prescribed LE / TE lines", "reference point · variant 1: same Z and θ (radial line)",
+                              "reference point · variant 2: closest point to the previous layer"});
+    sl->addWidget(stacking_mode_);
+    auto* srow = new QHBoxLayout;
+    srow->addWidget(new QLabel("reference point", sg));
+    stacking_ref_ = new QComboBox(sg);
+    stacking_ref_->addItems({"centre of gravity", "leading edge", "trailing edge"});
+    srow->addWidget(stacking_ref_, 1);
+    sl->addLayout(srow);
+    auto* zrow = new QHBoxLayout;
+    stacking_z_ = coord(sg);
+    stacking_theta_ = coord(sg);
+    stacking_theta_->setRange(-180.0, 180.0);
+    stacking_z_->setToolTip("axial position of the first (hub) layer's reference point");
+    stacking_theta_->setToolTip("angle of every reference point");
+    zrow->addWidget(new QLabel("hub Z_ref [mm]", sg));
+    zrow->addWidget(stacking_z_);
+    zrow->addWidget(new QLabel("θ_ref [deg]", sg));
+    zrow->addWidget(stacking_theta_);
+    sl->addLayout(zrow);
+    stacking_take_ = new QPushButton("Take Z_ref, θ_ref from the current hub section", sg);
+    stacking_take_->setToolTip("the hub section's reference point stays where it is now");
+    sl->addWidget(stacking_take_);
+    v->addWidget(sg);
+    connect(stacking_mode_, &QComboBox::currentIndexChanged, this, [this](int i) {
+        if (syncing_ || i < 0) return;
+        auto& st = s_.design.stacking;
+        // from the LE / TE lines: the hub section stays where it was (read before the mode changes)
+        if (st.mode == Design::Stacking::Mode::Edges && i > 0) takeStackingPoint();
+        st.mode = i == 0 ? Design::Stacking::Mode::Edges : Design::Stacking::Mode::ReferencePoint;
+        if (i > 0) st.variant = i == 1 ? Design::Stacking::Variant::SameZTheta : Design::Stacking::Variant::ClosestPoint;
+        changed();
+    });
+    connect(stacking_ref_, &QComboBox::currentIndexChanged, this, [this](int i) {
+        if (syncing_ || i < 0) return;
+        s_.design.stacking.reference = static_cast<Design::Stacking::Reference>(i);
+        changed();
+    });
+    connect(stacking_z_, &QDoubleSpinBox::valueChanged, this, [this](double x) {
+        if (syncing_) return;
+        s_.design.stacking.z_ref = x;
+        changed();
+    });
+    connect(stacking_theta_, &QDoubleSpinBox::valueChanged, this, [this](double x) {
+        if (syncing_) return;
+        s_.design.stacking.theta_ref_deg = x;
+        changed();
+    });
+    connect(stacking_take_, &QPushButton::clicked, this, [this] {
+        takeStackingPoint();
+        changed();
+    });
     // re-stagger of the whole blade
     auto* rg = new QGroupBox("Re-stagger the whole blade", w);
     auto* rl = new QVBoxLayout(rg);
@@ -279,7 +342,10 @@ QWidget* ParameterPanel::layerPage()
     stagger_ = new Knob("stagger γ [deg]", -70, 70, 3, pg, "chord angle from the m' axis toward +θ");
     theta_le_ = new Knob("θ LE [deg] (lean)", -30, 30, 3, pg);
     solidity_ = new Knob("solidity (2-D)", 0.3, 3.0, 3, pg, "2-D cascade solidity for exports; the 3-D solidity follows from the blade count");
-    for (auto* k : {stagger_, theta_le_, solidity_}) pl->addWidget(k);
+    chord_scale_ = new Knob("chord scale (reference-point stacking)", 0.5, 2.0, 3, pg,
+                            "c' = scale × the chord of the prescribed LE / TE lines; used when the sections are stacked on a reference point");
+    for (auto* k : {stagger_, theta_le_, chord_scale_, solidity_}) pl->addWidget(k);
+    connect(chord_scale_, &Knob::changed, this, [this](double x) { layer().chord_scale = x; changed(); });
     connect(stagger_, &Knob::changed, this, [this](double x) { layer().stagger_deg = x; changed(); });
     connect(theta_le_, &Knob::changed, this, [this](double x) { layer().theta_le_deg = x; changed(); });
     connect(solidity_, &Knob::changed, this, [this](double x) { layer().solidity = x; changed(); });
@@ -431,6 +497,10 @@ void ParameterPanel::updateEnabled()
     restagger_chord_->setEnabled(!point);
     restagger_z_->setEnabled(point);
     restagger_theta_->setEnabled(point);
+    const bool ref = s_.design.stacking.mode == Design::Stacking::Mode::ReferencePoint;
+    for (QWidget* x : std::initializer_list<QWidget*>{stacking_ref_, stacking_z_, stacking_theta_, stacking_take_, chord_scale_}) x->setEnabled(ref);
+    theta_le_->setEnabled(!ref);
+    theta_le_->setToolTip(ref ? "not used: the sections are stacked on the reference point (θ_ref on the meridional page)" : QString());
     const auto& l = layer();
     naca_box_->setEnabled(l.method != Design::Method::Custom);
     fit_->setEnabled(l.method == Design::Method::Naca65Custom);
@@ -466,12 +536,18 @@ void ParameterPanel::sync()
     restagger_chord_->setValue(rs.chord_fraction);
     restagger_z_->setValue(rs.z);
     restagger_theta_->setValue(rs.theta_deg);
+    const auto& st = s_.design.stacking;
+    stacking_mode_->setCurrentIndex(st.mode == Design::Stacking::Mode::Edges ? 0 : st.variant == Design::Stacking::Variant::SameZTheta ? 1 : 2);
+    stacking_ref_->setCurrentIndex(static_cast<int>(st.reference));
+    stacking_z_->setValue(st.z_ref);
+    stacking_theta_->setValue(st.theta_ref_deg);
     if (auto* b = layers_->button(s_.active_layer)) b->setChecked(true);
     const auto& l = layer();
     method_->setCurrentIndex(static_cast<int>(l.method));
     stagger_->setValue(l.stagger_deg);
     theta_le_->setValue(l.theta_le_deg);
     solidity_->setValue(l.solidity);
+    chord_scale_->setValue(l.chord_scale);
     cl0_->setValue(l.naca.cl0);
     tc_->setValue(l.naca.t_max_over_c);
     variant_->setCurrentText(QString::fromStdString(Naca::to_string(l.naca.variant)));
@@ -490,6 +566,27 @@ void ParameterPanel::sync()
     clustering_->setValue(s_.design.mesh.row_clustering);
     updateEnabled();
     syncing_ = false;
+}
+
+void ParameterPanel::takeStackingPoint()
+{
+    // the hub's reference point before the re-stagger (the re-staggered one would turn again on every press)
+    const auto R = s_.result;
+    if (!R || R->layers.empty() || !R->layers.front().section) return;
+    auto& st = s_.design.stacking;
+    try {
+        const Blade::FlowPath fp(s_.design.meridional);
+        const Math::Vec2 p = Design::hub_reference_point(s_.design, fp, *R->layers.front().section, st.reference);
+        st.z_ref = p.x();
+        st.theta_ref_deg = Math::rad2deg(p.y());
+    } catch (const std::exception&) {
+        return;  // the current design cannot be placed: keep Z_ref, theta_ref
+    }
+    const bool was = syncing_;
+    syncing_ = true;
+    stacking_z_->setValue(st.z_ref);
+    stacking_theta_->setValue(st.theta_ref_deg);
+    syncing_ = was;
 }
 
 void ParameterPanel::setFitStatus(const QString& t, bool running)

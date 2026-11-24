@@ -117,3 +117,43 @@ def test_restagger_whole_blade_about_the_hub_le():
     d["restagger"]["axis"] = "shaft"
     with pytest.raises(ValueError):
         ev.evaluate(json.dumps(d))
+
+
+def test_stacking_on_the_centre_of_gravity_variants_1_and_2():
+    ev = bg.DesignEvaluator()
+    d = json.loads(bg.design_defaults())
+    assert d["stacking"]["mode"] == "edges"
+    assert all(lay["chord_scale"] == 1.0 for lay in d["layers"])
+    d["stacking"] = {"mode": "reference_point", "variant": "same_z_theta", "reference": "cg", "z_ref": 0.5,
+                     "theta_ref_deg": 3.0}
+    r1 = ev.evaluate(json.dumps(d))
+    assert r1["ok"], r1["errors"]
+    for lay in r1["layers"]:  # variant 1: every centre of gravity on the radial line (Z_ref, theta_ref)
+        assert lay["cg_z"] == pytest.approx(0.5, abs=1e-10)
+        assert lay["cg_theta_deg"] == pytest.approx(3.0, abs=1e-10)
+        assert lay["stack_z"] == pytest.approx(lay["cg_z"], abs=1e-12)
+    np.testing.assert_allclose(r1["stacking_xr"][:, 0], 0.5, atol=1e-10)
+    d["stacking"]["variant"] = "closest_point"
+    r2 = ev.evaluate(json.dumps(d))
+    assert r2["ok"], r2["errors"]
+    # variant 2: the first layer is the same, the others follow the stream-surface normals
+    assert r2["layers"][0]["cg_z"] == pytest.approx(0.5, abs=1e-10)
+    assert abs(r2["layers"][-1]["cg_z"] - 0.5) > 0.1
+    d["stacking"]["variant"] = "radial"
+    with pytest.raises(ValueError):
+        ev.evaluate(json.dumps(d))
+
+
+def test_hub_reference_point_is_idempotent_with_a_restagger():
+    # pressing "Take Z_ref, theta_ref from the current hub section" again must not move the blade
+    ev = bg.DesignEvaluator()
+    d = json.loads(bg.design_defaults())
+    d["restagger"]["angle_deg"] = 4.0
+    z, th = ev.hub_reference_point(json.dumps(d), "cg")
+    for variant in ("same_z_theta", "closest_point"):
+        d["stacking"] = {"mode": "reference_point", "variant": variant, "reference": "cg", "z_ref": z,
+                         "theta_ref_deg": th}
+        for _ in range(5):
+            z2, th2 = ev.hub_reference_point(json.dumps(d), "cg")
+            assert z2 == pytest.approx(z, abs=1e-10) and th2 == pytest.approx(th, abs=1e-10)
+            d["stacking"]["z_ref"], d["stacking"]["theta_ref_deg"] = z2, th2

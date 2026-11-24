@@ -22,6 +22,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -559,6 +560,19 @@ std::optional<TurbolenzaWindow::CaseInput> TurbolenzaWindow::caseInput(QString& 
     return in;
 }
 
+// omega is derived on the cascade page (from rpm, or 0): set it without the "stale" slot, which would destroy
+// the cascade this refresh is drawing (a heap use-after-free found by ASan); the cascade does not depend on
+// omega, the mesh case does
+void TurbolenzaWindow::setDerivedOmega(double omega)
+{
+    if (omega_->value() == omega) return;
+    {
+        const QSignalBlocker block(omega_);
+        omega_->setValue(omega);
+    }
+    mesh_case_.reset();
+}
+
 void TurbolenzaWindow::refreshCascade()
 {
     if (layerMode()) {  // not in v1: the blade on the layer's stream surface
@@ -582,7 +596,7 @@ void TurbolenzaWindow::refreshCascade()
                 const T::VelocityTriangle v = T::velocity_triangle(rpm_->value(), alpha1_->value(), mach_abs_->value(),
                                                                    pt_->value(), tt_->value(), gas, b->chord * sh.radius(m_lo));
                 beta1 = v.beta * kDeg;
-                omega_->setValue(v.omega);
+                setDerivedOmega(v.omega);
                 tri = QString("U = ω r_in = %1 m/s, C = %2, C_m = %3, C_θ = %4 m/s<br>W_θ = C_θ - U = %5 m/s, β1 = %6°, "
                               "M1_rel = %7<br>rothalpy I = cp T0 - U C_θ = %8 J/kg (r_in at the nominal far inlet)")
                           .arg(v.U, 0, 'f', 3)
@@ -595,7 +609,7 @@ void TurbolenzaWindow::refreshCascade()
                           .arg(v.rothalpy, 0, 'f', 2);
                 Tl::drawVelocityTriangle(triangle_plot_, v);
             } else {
-                omega_->setValue(0.0);
+                setDerivedOmega(0.0);
                 tri = "stationary row: β1 and M1 as entered (relative = absolute)";
             }
             triangle_info_->setText(tri);
@@ -630,7 +644,7 @@ void TurbolenzaWindow::refreshCascade()
     triangle_info_->setText(rotatingRow() ? "<span style='color:#b00'>a rotating row needs the BladeGen layer's stream "
                                             "surface (its radius)</span>"
                                           : "");
-    omega_->setValue(0.0);
+    setDerivedOmega(0.0);
     const auto* sec = section();
     const double chord = chord_->value(), sol = solidity_->value(), b1 = beta1_->value(), gam = stagger_->value();
     QString t = QString("<b>derived</b><br>pitch s = c / σ = %1 m<br>angle of attack β1 - γ = %2°").arg(chord / sol, 0, 'g', 7).arg(b1 - gam, 0, 'f', 4);

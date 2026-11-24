@@ -121,6 +121,7 @@ private:
     void bladeChanged();       ///< layer_ edited: the section, cascade and mesh are stale
     void refreshProfile();
     void refreshCascade();
+    void setDerivedOmega(double omega);  ///< the derived omega field, without invalidating the cascade
     void meshFinished();
     void updateSolverEnabled();
     [[nodiscard]] BladeGen::Turbolenza::CaseSettings settings() const;

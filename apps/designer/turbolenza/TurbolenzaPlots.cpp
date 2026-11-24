@@ -426,7 +426,16 @@ void drawBoundaryLayer(PlotWidget* w, const T::ViscousData& v, double chord, BlQ
     w->setFills({});
     w->setMarkers(markers);
     w->setSeries(series);
-    w->setBadge(v.suction.x_c.empty() ? Badge{"no boundary layer in this run (it failed before one was computed)", 1} : Badge{});
+    if (v.suction.x_c.empty())
+        w->setBadge(Badge{"no boundary layer in this run (it failed before one was computed)", 1});
+    else if (!v.layers_of_last_solve)
+        w->setBadge(Badge{QString("the run stopped in BL iteration %1: this is the boundary layer of iteration %2, the last one "
+                                  "computed")
+                              .arg(v.layers_iteration + 1)
+                              .arg(v.layers_iteration),
+                          1});
+    else
+        w->setBadge(Badge{});
     w->commit(true);
 }
 

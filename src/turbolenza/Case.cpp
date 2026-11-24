@@ -296,9 +296,12 @@ ViscousData viscous_data(const ViscousSolve& v, const CaseSettings& s)
     d.converged = v.converged;
     d.history = v.history;
     d.loss_omega = d.loss_Theta = d.loss_Delta_star = d.te_jump_mismatch = d.inviscid_exit_angle = detail::nan();
-    if (v.analysis && v.solution) {
+    const std::shared_ptr<const Solution> owner = v.analysis_solution ? v.analysis_solution : v.solution;
+    if (v.analysis && owner) {
         const ViscousAnalysis& a = *v.analysis;
-        const Grid& g = *v.solution->grid;
+        const Grid& g = *owner->grid;
+        d.layers_iteration = v.analysis_iteration;
+        d.layers_of_last_solve = owner == v.solution;
         d.suction = layer_data(a.suction());
         d.pressure_side = layer_data(a.pressure());
         const int l = g.last_blade_i;
@@ -317,7 +320,7 @@ ViscousData viscous_data(const ViscousSolve& v, const CaseSettings& s)
         d.loss_Delta_star = a.loss.Delta_star;
         if (!v.used.wake.empty() && l + 1 < g.n_m())
             d.te_jump_mismatch = std::abs(v.used.wake[sz(l + 1)] - (v.used.lower[sz(l)] + v.used.upper[sz(l)])) /
-                                 v.solution->mass_flow_per_depth;
+                                 owner->mass_flow_per_depth;
     }
     if (v.inviscid) {
         d.inviscid_exit_angle = v.inviscid->exit_angle;
@@ -806,7 +809,12 @@ std::string format_run_report(const RunResult& r)
             {"coupling", v.coupling},
             {"laminar c_f form", v.laminar_cf_form},
             {"wake model", v.wake_model},
-            {"BL iterations", std::format("{} ({})", v.history.size(), v.converged ? "converged" : "NOT converged")}};
+            {"BL iterations", std::format("{} ({})", v.history.size(), v.converged ? "converged" : "NOT converged")},
+            {"layers reported", v.layers_iteration < 0      ? std::string("none (no layer was computed)")
+                                : v.layers_of_last_solve ? std::format("BL iteration {}", v.layers_iteration)
+                                                         : std::format("BL iteration {}, the last one computed (a later "
+                                                                       "inviscid solve failed)",
+                                                                       v.layers_iteration)}};
         if (!v.history.empty()) {
             const BlIteration& h = v.history.back();
             rows.emplace_back("last max change of m", std::format("{:.3e}", h.max_change_m));

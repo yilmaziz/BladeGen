@@ -122,7 +122,11 @@ struct ViscousSolve
 {
     std::shared_ptr<const Solution> solution;   ///< the reported solve (the last one), or the last completed pass
     std::shared_ptr<const Solution> inviscid;   ///< k = 0
-    std::optional<ViscousAnalysis> analysis;    ///< the layers of `solution`
+    std::optional<ViscousAnalysis> analysis;    ///< the last layers computed (of `analysis_solution`)
+    /// The solution `analysis` was computed from: `solution` itself, or, when a later solve failed, the
+    /// previous iteration's solution (the last one whose layers exist).
+    std::shared_ptr<const Solution> analysis_solution;
+    int analysis_iteration = -1;                ///< the BL iteration k of `analysis` (-1: none)
     std::vector<BlIteration> history;
     MassDeficit used;                           ///< the deficit `solution` was solved with
     bool converged = false;

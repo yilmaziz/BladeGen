@@ -217,6 +217,11 @@ struct ViscousData
     std::string coupling, laminar_cf_form, wake_model;
     bool converged = false;
     std::vector<BlIteration> history;
+    /// The reported layers: those of BL iteration layers_iteration (-1: none were computed).  When a later
+    /// inviscid solve failed they are the last layers computed, of the previous iteration's solution
+    /// (layers_of_last_solve false), not of the solution the run reports.
+    int layers_iteration = -1;
+    bool layers_of_last_solve = true;
     BoundaryLayerSurfaceData suction, pressure_side;
     std::vector<double> wake_m_c, wake_mass_deficit;   ///< the exit stations' m_wake asked by the reported layers
     std::vector<double> wake_theta, wake_delta_star, wake_H;  ///< marched model only

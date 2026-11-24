@@ -928,7 +928,9 @@ void TurbolenzaWindow::redrawBoundaryLayer()
     const int q = bl_q_->currentIndex();
     const T::BlIteration* last = v.history.empty() ? nullptr : &v.history.back();
     auto xc = [](double x) { return std::isfinite(x) ? QString::number(x, 'f', 3) : QString("none"); };
-    QString title = QString("Boundary layer, %1 (%2, %3): transition SS %4 / PS %5, separation SS %6 / PS %7, loss ω %8%9")
+    // history.back() is the iteration whose layers are shown (layers_iteration): the values match the curves
+    QString title = QString("Boundary layer, %1 (%2, %3), BL iteration %10: transition SS %4 / PS %5, separation SS %6 / PS %7, "
+                            "loss ω %8%9")
                         .arg(QString::fromStdString(v.coupling))
                         .arg(QString::fromStdString(v.laminar_cf_form))
                         .arg(QString::fromStdString(v.wake_model))
@@ -937,7 +939,8 @@ void TurbolenzaWindow::redrawBoundaryLayer()
                         .arg(xc(last ? last->separation_x_c_ss : std::nan("")))
                         .arg(xc(last ? last->separation_x_c_ps : std::nan("")))
                         .arg(v.loss_omega, 0, 'f', 4)
-                        .arg(r.converged ? "" : "  [NOT CONVERGED]");
+                        .arg(r.converged ? "" : "  [NOT CONVERGED]")
+                        .arg(v.layers_iteration);
     const Tl::BlQuantity which = q == 0   ? Tl::BlQuantity::H
                                  : q == 1 ? Tl::BlQuantity::ThetaOverC
                                  : q == 2 ? Tl::BlQuantity::DeltaStarOverC

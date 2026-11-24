@@ -291,7 +291,8 @@ ViscousSolve solve_viscous(std::shared_ptr<const Grid> grid, const SolverConfig&
         const std::shared_ptr<const Grid> start = previous ? previous->grid : grid;
         std::shared_ptr<const Solution> sol;
         // a failed inviscid solve: its last completed pass is reported (else the previous iteration's
-        // solution with its layers); in an iteration k >= 1 the coupling failed
+        // solution); in an iteration k >= 1 the coupling failed.  The last layers computed (iteration
+        // k - 1) are kept with the solution they belong to (analysis_solution), so they can still be shown.
         auto fail = [&](const std::exception& e, std::shared_ptr<const Solution> partial, int failed_pass) {
             const std::string type = error_type_name(e);
             out.error = (k == 0 || type == "Cancelled")
@@ -299,10 +300,7 @@ ViscousSolve solve_viscous(std::shared_ptr<const Grid> grid, const SolverConfig&
                             : std::format("BoundaryLayerCouplingError: the coupled iteration failed in BL iteration {} "
                                           "({}: {})",
                                           k, type, e.what());
-            if (partial) {
-                out.solution = std::move(partial);
-                out.analysis.reset();  // the layers belong to the previous solution
-            }
+            if (partial) out.solution = std::move(partial);
             if (failed_pass >= 0) out.failed_pass = failed_pass;
         };
         try {
@@ -320,9 +318,8 @@ ViscousSolve solve_viscous(std::shared_ptr<const Grid> grid, const SolverConfig&
         try {
             a = analyze_boundary_layers(*sol, config.gas, Tt, settings);
         } catch (const std::exception& e) {
-            out.solution = sol;
+            out.solution = sol;   // the layers of this solution failed; analysis keeps iteration k - 1's, if any
             out.used = used;
-            out.analysis.reset();
             const std::string what = error_type_name(e) + ": " + e.what();
             out.error = k == 0 ? what
                                : std::format("BoundaryLayerCouplingError: the coupled iteration failed in BL iteration {} "
@@ -335,6 +332,8 @@ ViscousSolve solve_viscous(std::shared_ptr<const Grid> grid, const SolverConfig&
         out.solution = sol;
         out.used = used;
         out.analysis = a;
+        out.analysis_solution = sol;
+        out.analysis_iteration = k;
         if (limit == 0 || change <= settings.tolerance) {
             out.converged = true;
             return out;

@@ -255,6 +255,46 @@ TEST_CASE("viscous: one way is the inviscid solve bit for bit; two way converges
     CHECK(format_run_report(rm).find("Boundary layer") != std::string::npos);
 }
 
+TEST_CASE("viscous: a run that stops in BL iteration k >= 1 still reports the last layers computed", "[turbolenza][viscous][slow]")
+{
+    // The two-way run is cancelled at the third pass of BL iteration 1 (the run then ends like a failed
+    // solve, with that solve's last completed pass reported).  The layers of iteration 0 must stay in
+    // the result, labeled as such: they are the one-way layers of the inviscid solution, bit for bit.
+    CaseSettings one = synthetic_settings();
+    one.viscous = true;
+    one.bl_coupling = BlCoupling::OneWay;
+    const RunResult r1 = run_case(build_case(one, fixture::synthetic_section()));
+    REQUIRE(r1.converged);
+    REQUIRE(r1.viscous);
+
+    CaseSettings two = one;
+    two.bl_coupling = BlCoupling::TwoWay;
+    std::atomic<bool> flag{false};
+    struct Stop final : RunObserver
+    {
+        std::atomic<bool>* f = nullptr;
+        int seen = 0;
+        void update(const PassRecord& p) override
+        {
+            if (p.bl_iteration == 1 && ++seen == 3) f->store(true);
+        }
+    } stop;
+    stop.f = &flag;
+    const RunResult r = run_case(build_case(two, fixture::synthetic_section()), &stop, &flag);
+    INFO(r.error);
+    CHECK(!r.converged);
+    CHECK(r.error.starts_with("Cancelled"));
+    REQUIRE(r.viscous);
+    const ViscousData& v = *r.viscous;
+    CHECK(v.layers_iteration == 0);
+    CHECK(!v.layers_of_last_solve);       // the reported solution is iteration 1's last pass, not the layers' owner
+    REQUIRE(!v.suction.x_c.empty());      // before the fix: empty ("no boundary layer in this run")
+    CHECK(v.suction.H == r1.viscous->suction.H);
+    CHECK(v.pressure_side.theta == r1.viscous->pressure_side.theta);
+    CHECK(v.loss_omega == r1.viscous->loss_omega);  // before the fix: NaN
+    CHECK(format_run_report(r).find("the last one computed") != std::string::npos);
+}
+
 TEST_CASE("viscous: the total pressure of a reference Reynolds number", "[turbolenza][viscous]")
 {
     const double P0 = total_pressure_for_reynolds(550000.0, 0.30, 335.0, 0.127, 1.4, 287.05);

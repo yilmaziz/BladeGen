@@ -38,12 +38,13 @@ if(TURBOLENZA_TESTS)
     target_include_directories(test_turbolenza PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/turbolenza)
     target_compile_definitions(test_turbolenza PRIVATE BLADEGEN_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
                                                        BLADEGEN_TEST_OUTPUT="${CMAKE_BINARY_DIR}/test_output")
-    set(_env "")
+    # A v1-comparison test without its reference data SKIPs (Catch2 exit code 4), which ctest must report
+    # as skipped.  The properties are a flat name/value list, so no value may contain a ';' or be empty:
+    # a PATH with its separators (or an empty ENVIRONMENT on Linux / macOS) shifts every later pair and
+    # loses SKIP_RETURN_CODE.  On Windows the OCCT / MKL DLL folder is prepended to PATH as one value.
+    set(_props SKIP_RETURN_CODE 4)
     if(WIN32 AND BLADEGEN_OCCT_BIN_DIR)
-        set(_env "PATH=${BLADEGEN_OCCT_BIN_DIR}\;$ENV{PATH}")
-        string(REPLACE ";" "\;" _env "${_env}")
+        list(APPEND _props ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${BLADEGEN_OCCT_BIN_DIR}")
     endif()
-    # a v1-comparison test without its reference data SKIPs (Catch2 exit code 4): ctest reports it as skipped
-    catch_discover_tests(test_turbolenza DISCOVERY_MODE PRE_TEST TEST_SPEC "${BLADEGEN_TEST_SPEC}"
-                         PROPERTIES ENVIRONMENT "${_env}" SKIP_RETURN_CODE 4)
+    catch_discover_tests(test_turbolenza DISCOVERY_MODE PRE_TEST TEST_SPEC "${BLADEGEN_TEST_SPEC}" PROPERTIES ${_props})
 endif()

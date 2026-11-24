@@ -91,3 +91,16 @@ python tools\turbolenza_reference\dump_v1.py <path-to-turbolenza-v1>
   node on each surface (2003 pp. 89-90, Fig. 5-5; 2000 pp. 247-249, Figs. 13-3 and 13-4). No
   distance is prescribed. v2 enforces this on every grid the solver gets (`require_ss_ps`).
 - Constant dm and deta (2003 p. 87). Neither book gives an extension length.
+
+## Not a port: the general curvilinear operator
+
+v1 and Aungier solve the expanded equation (Eq. 5-21) on Aungier's sheared H-grid only.
+`GeneralMesh`, `GeneralOperator`, `GeneralSolver`, `GeneralAdapter` and `MeshFormat` are new: the same
+physics, in conservative (flux) form, on any structured multi-block mesh of one stream sheet in the
+conformal plane (m' = ∫dm/r, θ), with blade walls, periodic and interface connections, inlet and outlet
+flow-angle conditions and the Kutta condition by trailing-edge tags. The derivation and the scheme are in
+`GeneralOperator.hpp`, the solve and the rotation sign in `GeneralSolver.hpp`, the file format in
+`docs/turbolenza/mesh_format.md`. Rules 2 to 6 apply unchanged; the density loop reuses Eos, Convergence,
+Kutta (`next_exit_angle`) and LinearSolver. `solve_general` is a separate entry point: nothing of the
+Aungier solve changes. Choices that are ours are marked in the headers (the run rule of the differences
+along a boundary, the face averaging, the general form of the exit-angle correction).

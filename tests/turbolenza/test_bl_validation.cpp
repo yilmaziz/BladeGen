@@ -4,6 +4,9 @@
 //   (a) one way, both laminar c_f forms;  (b) two way, both wake models.
 // Each run prints "VALIDATION" lines (H against the digitized Fig. 5-15, transition and separation,
 // beta_out, loss, the coupling history) and writes its files to BLADEGEN_TEST_OUTPUT/bl_validation/<run>.
+// Two abscissae (validation/aungier2003_fig5_15/README.md, "Which abscissa"): the figure's own, read as the
+// blade-station fraction f = (m - m_first) / (m_last - m_first) (our reading, the comparison that counts), and
+// the blade-frame chordwise x/c of each wall node (Postprocess.hpp), which is not the figure's axis.
 //   build\<dir>\bin\test_turbolenza.exe "[.validation]"
 #include "CascadeFixture.hpp"
 #include "SolverRef.hpp"
@@ -51,15 +54,35 @@ std::vector<FigPoint> figure(const std::string& name)
     return out;
 }
 
-// our H at x/c by linear interpolation between stations (NaN outside our stations)
-double h_at(const BoundaryLayerSurfaceData& d, double x)
+// our H at abscissa value a by linear interpolation between stations (NaN outside our stations)
+double h_at(const std::vector<double>& abscissa, const std::vector<double>& H, double a)
 {
-    for (std::size_t k = 1; k < d.x_c.size(); ++k)
-        if (d.x_c[k - 1] <= x && x <= d.x_c[k]) {
-            const double t = (x - d.x_c[k - 1]) / (d.x_c[k] - d.x_c[k - 1]);
-            return (1.0 - t) * d.H[k - 1] + t * d.H[k];
+    for (std::size_t k = 1; k < abscissa.size(); ++k)
+        if (abscissa[k - 1] <= a && a <= abscissa[k]) {
+            const double t = (a - abscissa[k - 1]) / (abscissa[k] - abscissa[k - 1]);
+            return (1.0 - t) * H[k - 1] + t * H[k];
         }
     return std::nan("");
+}
+
+// the abscissa value of station `index` (NaN for -1: none)
+double at(const std::vector<double>& abscissa, int index) { return index < 0 ? std::nan("") : abscissa[static_cast<std::size_t>(index)]; }
+
+// the first station whose regime is `name`, -1 none
+int first_of(const BoundaryLayerSurfaceData& d, const char* name)
+{
+    for (std::size_t k = 0; k < d.regime.size(); ++k)
+        if (d.regime[k] == name) return static_cast<int>(k);
+    return -1;
+}
+
+// the blade-station fraction f = (m - m_first) / (m_last - m_first) of the wall stations of a solution
+std::vector<double> station_fraction(const Grid& g)
+{
+    std::vector<double> f;
+    const double m0 = g.m[static_cast<std::size_t>(g.first_blade_i)], m1 = g.m[static_cast<std::size_t>(g.last_blade_i)];
+    for (int i = g.first_blade_i; i <= g.last_blade_i; ++i) f.push_back((g.m[static_cast<std::size_t>(i)] - m0) / (m1 - m0));
+    return f;
 }
 
 struct Compare
@@ -68,22 +91,24 @@ struct Compare
     int n_turbulent = 0, n_laminar = 0;
 };
 
-// against the figure's vertices: turbulent (and separated) ones downstream of both transitions, and the laminar ones
-Compare compare(const BoundaryLayerSurfaceData& d, const std::vector<FigPoint>& fig)
+// against the figure's vertices on our `abscissa`: turbulent (and separated) ones downstream of both transitions,
+// and the laminar ones upstream of ours
+Compare compare(const std::vector<double>& abscissa, const BoundaryLayerSurfaceData& d, const std::vector<FigPoint>& fig)
 {
     Compare c;
     double fig_transition = 0.0;
     for (const FigPoint& p : fig)
         if (p.regime == "transition") fig_transition = p.x_c;
+    const double ours = at(abscissa, first_of(d, "transition"));
     double sum = 0.0;
     for (const FigPoint& p : fig) {
-        const double h = h_at(d, p.x_c);
+        const double h = h_at(abscissa, d.H, p.x_c);
         if (!std::isfinite(h)) continue;
-        if ((p.regime == "turbulent" || p.regime == "separated") && p.x_c > std::max(fig_transition, d.transition_x_c)) {
+        if ((p.regime == "turbulent" || p.regime == "separated") && p.x_c > std::max(fig_transition, ours)) {
             c.max_turbulent = std::max(c.max_turbulent, std::abs(h - p.H));
             sum += std::abs(h - p.H);
             ++c.n_turbulent;
-        } else if (p.regime == "laminar" && (!std::isfinite(d.transition_x_c) || p.x_c < d.transition_x_c)) {
+        } else if (p.regime == "laminar" && (!std::isfinite(ours) || p.x_c < ours)) {
             c.max_laminar = std::max(c.max_laminar, std::abs(h - p.H));
             ++c.n_laminar;
         }
@@ -110,18 +135,26 @@ void report(const std::string& name, const RunResult& r, const Case& c)
                 r.solution ? r.solution->exit_angle * 180.0 / 3.141592653589793 : std::nan(""), v.loss_omega, v.loss_Theta,
                 v.loss_Delta_star, v.te_jump_mismatch);
     if (v.suction.x_c.empty()) return;
+    const std::vector<double> f = station_fraction(c.grid);  // the blade stations are those of every grid of the case
     for (const auto& [label, d, fig] : {std::tuple{"SS", &v.suction, figure("H_suction.csv")},
                                         std::tuple{"PS", &v.pressure_side, figure("H_pressure.csv")}}) {
-        const Compare cmp = compare(*d, fig);
-        std::printf("VALIDATION %s %s transition x/c %.4f (fig %s), separation x/c %.4f, laminar separation x/c %.4f; "
+        const bool ss = label == std::string("SS");
+        const int tr = first_of(*d, "transition"), sep = first_of(*d, "separated");
+        const Compare cf = compare(f, *d, fig), cx = compare(d->x_c, *d, fig);
+        std::printf("VALIDATION %s %s station fraction f: transition %.4f (fig %s), separation %.4f (fig %s); "
                     "H vs Fig. 5-15: turbulent max |dH| %.3f mean %.3f (%d pts), laminar max |dH| %.3f (%d pts); "
-                    "H at x/c 0.5 %.3f, TE %.3f\n",
-                    name.c_str(), label, d->transition_x_c, label == std::string("SS") ? "0.130" : "0.173", d->separation_x_c,
-                    d->laminar_separation_x_c, cmp.max_turbulent, cmp.mean_turbulent, cmp.n_turbulent, cmp.max_laminar,
-                    cmp.n_laminar, h_at(*d, 0.5), d->H.back());
+                    "H at f 0.5 %.3f, TE %.3f\n",
+                    name.c_str(), label, at(f, tr), ss ? "0.130" : "0.173", at(f, sep), ss ? "0.739-0.746" : "none",
+                    cf.max_turbulent, cf.mean_turbulent, cf.n_turbulent, cf.max_laminar, cf.n_laminar, h_at(f, d->H, 0.5),
+                    d->H.back());
+        std::printf("VALIDATION %s %s chordwise x/c (not the figure's axis): transition %.4f, separation %.4f, laminar "
+                    "separation %.4f; H vs Fig. 5-15 on x/c: turbulent max |dH| %.3f mean %.3f (%d pts), laminar max |dH| "
+                    "%.3f (%d pts)\n",
+                    name.c_str(), label, d->transition_x_c, d->separation_x_c, d->laminar_separation_x_c, cx.max_turbulent,
+                    cx.mean_turbulent, cx.n_turbulent, cx.max_laminar, cx.n_laminar);
         for (std::size_t k = 0; k < d->x_c.size(); ++k)
-            std::printf("VALIDATION-H %s %s %.5f %.5f %s Re_theta %.1f Lambda %.3f Hk %.3f M %.4f\n", name.c_str(), label,
-                        d->x_c[k], d->H[k], d->regime[k].c_str(), d->Re_theta[k], d->Lambda[k], d->H_k[k],
+            std::printf("VALIDATION-H %s %s f %.5f x/c %.5f H %.5f %s Re_theta %.1f Lambda %.3f Hk %.3f M %.4f\n", name.c_str(),
+                        label, f[k], d->x_c[k], d->H[k], d->regime[k].c_str(), d->Re_theta[k], d->Lambda[k], d->H_k[k],
                         d->W_e[k] / std::sqrt(1.4 * 287.05 * d->T_e[k]));
     }
     const auto dir = std::filesystem::path(BLADEGEN_TEST_OUTPUT) / "bl_validation" / name;

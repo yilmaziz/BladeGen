@@ -54,8 +54,11 @@
 ///  * the laminar station equation theta = F(theta) (p. 276 steps 2-7) is solved by bracketing and
 ///    bisection instead of plain substitution, which does not converge at the first station
 ///    (|F'| -> 1 there, since the upstream momentum flux is 0); the bracket starts from the "safe"
-///    guess of Exercise 5.6: at the station after the first, the flat-plate value of the method
-///    theta = sqrt(2 g(0) C1(0) mu dx / (rho_e W_e)); further on, the upstream momentum flux held
+///    guess of Exercise 5.6: at the station after the first, the root of the station equation itself
+///    for dW_e = 0, theta = sqrt(C1(0) g(0) mu dx / (rho_e W_e)), g = theta/delta' [5-115] (half the
+///    flat-plate theta^2 = 2 C1 g mu x / (rho_e W_e) of the continuous equation: the backward
+///    difference of Eq. 5-106 from theta = 0 is first order, PORT.md "The Fig. 5-15 study"); further on,
+///    the upstream momentum flux held
 ///    (theta_{k-1} rho_{k-1} W_{k-1}^2 / (rho_k W_k^2)), which accounts for the change of the edge
 ///    conditions only;
 ///  * the turbulent station (pp. 278-279 steps 1-7) by nested bisection: for a theta the entrainment

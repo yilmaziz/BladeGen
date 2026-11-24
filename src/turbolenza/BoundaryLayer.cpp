@@ -318,8 +318,9 @@ BoundaryLayerProfile march_surface(const EdgeConditions& e, const BoundaryLayerS
             return v;
         };
         auto G = [&](double theta) { return theta - eval(theta).F; };
-        // the "safe" start (Exercise 5.6): from the first station the one-step flat-plate value of the
-        // method, further on the upstream momentum flux held
+        // the "safe" start (Exercise 5.6): from the first station the root of this station equation for
+        // dW = 0 (half the continuous flat-plate theta^2, BoundaryLayer.hpp), further on the upstream
+        // momentum flux held
         const double guess = p.theta[k - 1] == 0.0
                                  ? std::sqrt(laminar_wall_factor(0.0, form) * gruschwitz_theta_ratio(0.0) * mu * dx / (rho * W))
                                  : M / (rho * W * W);

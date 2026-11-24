@@ -127,8 +127,12 @@ about 1.7 per halving.
 - **Stream surfaces.** Equal mass, ψ_j = j/(n_ss − 1).
 - **W_m(0) search.**
   - It starts where the smallest W_m is 0 and brackets upward.
-  - It is stopped by Eq. 7-39 (or by Ch. 12's Eq. 12-37, `ChokeTest`), then solved by Illinois regula
-    falsi to |Δṁ|/ṁ ≤ 1e-12.
+  - It is stopped by Eq. 7-39, then solved by Illinois regula falsi to |Δṁ|/ṁ ≤ 1e-12.
+  - Ch. 12's Eq. 12-37 (`ChokeTest::MassFlowDerivative`) is declared but **refused** in this version.
+    On the 45° cone near choke, ṁ(W_m(0)) still rose when one node reached its limiting speed (h → 0).
+    Its "maximum" over valid states was then a degenerate state: mean M_m up to 388, a node at M_m 5000,
+    "choked at 72.98" (approximate), and 400 iterations without convergence (full). It is not a choke.
+    Ch. 12 needs the test with a bounded definition of its own.
   - It tells a choke (the state just beyond the limit is valid and fails the choke test) from a stop at an
     invalid state (h ≤ 0 before the choke test fails). The latter is never a choke: a converged profile
     still stopped that way is refused.
@@ -231,12 +235,12 @@ All of them are declared in `Throughflow.hpp`, with their conventions at its top
 - **The blade-metal blockage** K_B_blade (Eq. 12-7) has its slot inside the integral (1 here).
 - **Ch. 12's in-passage damping** (Eq. 12-35) is not implemented.
 - **Already in place:** the curvature damping D of Eq. 12-38 (default 0), the Mach cap and B*, and
-  Ch. 12's choke test (Eq. 12-37).
+  the slot for Ch. 12's choke test (Eq. 12-37, refused until it has a bounded definition).
 - **Also not implemented:** annulus sizing (Sec. 7.7) and a real-gas equation of state.
 
 ## Tests and measured values
 
-`tools\turbolenza_build.cmd tl-tf test_turbolenza "[throughflow]"` runs 38 cases. Their numbers are
+`tools\turbolenza_build.cmd tl-tf test_turbolenza "[throughflow]"` runs 39 cases. Their numbers are
 printed in the test output.
 
 ### Numerics
@@ -347,17 +351,20 @@ The code's φ agrees with it to 2.2e-16. On 41 surfaces:
     at every node.
   - The full and approximate choke profiles have max M_m 1.80 and 3.66 at the hub. That lies outside the
     validity of Eq. 7-29, which the limit of Eq. 7-30 bounds but does not make valid.
+  - Such nodes are counted in `ThroughflowStation::supersonic_nodes` (M_m > 1 + 1e-6). A choke on such a
+    profile names them in the result message ("N node(s) at M_m > 1 on the choke profile"). The simple
+    models' chokes have none, since W_m is uniform at M_m = 1.
   - **The ambiguity of Eq. 7-39 for non-uniform profiles (open).** Between the 7-39 choke (75.77 full,
     74.90 approximate) and about 77.5 (full) / 76.0 (approximate), converged target profiles also exist.
     - At 77 kg/s the full model's profile has mean M_m 0.75 and max M_m 1.48. Its mass exceeds the 7-39
       choke and the normal-section bound 75.03, with supersonic hub nodes.
-    - Ch. 12's Eq. 12-37 (d ṁ/d W_m(0) ≤ 0) is no remedy here: it gives chokes between 70.3 and 78.5
-      (full) and nodes at M_m = 5000 (approximate).
+    - Ch. 12's Eq. 12-37 (d ṁ/d W_m(0) ≤ 0) is no remedy here, which is why it is refused: it gives
+      chokes between 70.3 and 78.5 (full) and nodes at M_m = 5000 (approximate).
     - A stricter test, for example "a node reaching M_m = 1", is not Aungier's and is not implemented.
   - Every mass flow is reported as converged or as a choke on a converged profile; never as not
     converged.
 - **Other chokes.**
-  - ṁ = 500 in the straight annulus chokes at 121.2603 kg/s (by Eq. 7-39 and by Eq. 12-37).
+  - ṁ = 500 in the straight annulus chokes at 121.2603 kg/s (Eq. 7-39).
   - With swirl it chokes at 107.4274 kg/s with mean M_m = 1.000000 (trapezoid 1.000045) and max M 1.064.
   - The full model ends after 1, 2, 3 passes for 0, 1, 2 required repositionings.
 - **K_W = 0.8 and K_B = 0.85** (a stator, an entropy gradient).

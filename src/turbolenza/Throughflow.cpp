@@ -382,6 +382,9 @@ void ThroughflowCase::validate() const
     if (o.max_flow_iterations < 1 || o.max_outer_iterations < 1) fail("iteration limits must be >= 1");
     if (o.choke_repositionings < 0) fail("choke_repositionings must be >= 0");
     if (!(o.curvature_damping >= 0.0) || !finite(o.curvature_damping)) fail("the curvature damping D must be >= 0");
+    if (o.choke_test != ChokeTest::MeanMeridionalMach)
+        fail("the choke test of Eq. 12-37 is refused in this version: on non-uniform profiles the maximum of "
+             "mdot(W_m(0)) lies at a node's limiting speed (h -> 0), not at a choke (Throughflow.hpp ChokeTest)");
     // inlet
     require_table(inlet.span, "inlet profile");
     const std::size_t ns = inlet.span.size();
@@ -863,15 +866,9 @@ double Solver::solve_w0(const Geo& ge, const Spec& sp, const LinearOdeSolution& 
     MassEval elo = mass_at(ge, sp, ode, lo, KB, st);
     if (!elo.valid) fail("no valid state on a quasi-normal even at the smallest meridional velocity");
     if (elo.mdot > target * (1.0 + o_.mass_tolerance)) fail("the mass flow needs reverse flow on a quasi-normal");
-    // below the choke limit: Eq. 7-39 (mean M_m < 1), or Eq. 12-37 (d mdot / d W_m(0) > 0, by a
-    // forward difference over 1e-7 max(1, |W_m(0)|), ours)
+    // below the choke limit: Eq. 7-39, mean M_m < 1 (the only choke test of this version: validate())
     std::vector<NodeState> probe(st.size());
-    auto ok = [&](double x, const MassEval& e) {
-        if (!e.valid) return false;
-        if (o_.choke_test == ChokeTest::MeanMeridionalMach) return e.mean_mm < 1.0;
-        const MassEval e2 = mass_at(ge, sp, ode, x + 1e-7 * std::max(1.0, std::abs(x)), KB, probe);
-        return e2.valid && e2.mdot > e.mdot;
-    };
+    auto ok = [&](double /*x*/, const MassEval& e) { return e.valid && e.mean_mm < 1.0; };
     double step = std::max(std::abs(guess - lo), 1.0);
     double a = lo, hi = lo;
     MassEval ea = elo, ehi = elo;
@@ -1079,6 +1076,8 @@ void Solver::fill_station(int i, const Geo& ge, const Spec& sp, const std::vecto
     s.K_B_endwall = KB;
     s.choked = choked;
     s.mach_limit_active = mach_limit;
+    for (const auto& x : st)
+        if (x.Wm / x.g.a > 1.0 + 1e-6) ++s.supersonic_nodes;
     s.converged = converged;
     s.iterations = iterations;
     // the sheets' y-widths carried to the surfaces (CONVENTIONS)
@@ -1327,6 +1326,14 @@ bool Solver::solve_qn(int i, int pass, int& iterations, bool& converged)
     return true;  // not reached: the last iteration returns
 }
 
+/// The note on a choke profile with nodes at M_m > 1 (ThroughflowStation::supersonic_nodes).
+std::string supersonic_note(const ThroughflowResult& res)
+{
+    const int k = res.stations.empty() ? 0 : res.stations.back().supersonic_nodes;
+    if (k == 0) return "";
+    return "; " + std::to_string(k) + " node(s) at M_m > 1 on the choke profile (outside the validity of Eq. 7-29)";
+}
+
 ThroughflowResult Solver::run()
 {
     ThroughflowResult res;
@@ -1384,14 +1391,14 @@ ThroughflowResult Solver::run()
         if (!full()) {  // Fig. 7-4: one marching pass
             res.history.push_back(rec);
             res.status = choked ? ThroughflowResult::Status::Choked : ThroughflowResult::Status::Converged;
-            if (choked) res.message = "choked at quasi-normal " + std::to_string(res.choked_station);
+            if (choked) res.message = "choked at quasi-normal " + std::to_string(res.choked_station) + supersonic_note(res);
             break;
         }
         if (choked && repositionings >= o_.choke_repositionings) {  // Fig. 7-3: "Have stream surfaces been repositioned?"
             res.history.push_back(rec);
             res.status = ThroughflowResult::Status::Choked;
             res.message = "choked at quasi-normal " + std::to_string(res.choked_station) + " after " +
-                          std::to_string(repositionings) + " repositionings";
+                          std::to_string(repositionings) + " repositionings" + supersonic_note(res);
             break;
         }
         // Reposition Stream Surfaces (Sec. 7.4) on the quasi-normals that have a flow solution

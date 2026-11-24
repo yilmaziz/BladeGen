@@ -75,7 +75,8 @@
 ///    solver is written for a tangential mode per quasi-normal (C_theta known: Eqs. 7-16 to 7-18;
 ///    beta' known outside a row: 7-19 to 7-21; absolute alpha known at the inlet: the same with
 ///    omega = 0, p. 162), the pointwise blockage K_B_blade inside the integral, and a choke test
-///    choice (Eq. 7-39 or 12-37, ThroughflowOptions::choke_test);
+///    choice (ThroughflowOptions::choke_test: Eq. 7-39; Ch. 12's Eq. 12-37 is declared but refused in this
+///    version, see ChokeTest);
 ///  * the damping constants are parameters (B*, the Mach cap of Eq. 7-57 / 12-34, the curvature
 ///    damping D of Eq. 12-38); the in-passage damping Eq. 12-35 is not implemented;
 ///  * annulus sizing (Sec. 7.7) and a real-gas equation of state (Ch. 2).
@@ -428,7 +429,11 @@ enum class ThroughflowModel
 enum class ChokeTest
 {
     MeanMeridionalMach,      ///< Eq. 7-39: (1 / y_s) int M_m dy >= 1 (Chapter 7)
-    MassFlowDerivative,      ///< Eq. 12-37: d mdot / d W_m(0) <= 0 (Chapter 12)
+    /// Eq. 12-37: d mdot / d W_m(0) <= 0 (Chapter 12).  REFUSED in this version (validate()): on a
+    /// strongly non-uniform profile (e.g. a 45-degree cone near choke) mdot(W_m(0)) still rises when one
+    /// node reaches the limiting speed (h -> 0, M_m -> infinity), so its maximum over valid states is a
+    /// degenerate state, not a choke.  Ch. 12 needs it with a bounded definition of its own.
+    MassFlowDerivative,
 };
 
 /// A straight quasi-normal (Eq. 7-1) and the end-wall slope and curvature at its two ends (the
@@ -562,6 +567,9 @@ struct ThroughflowStation
     double mean_mach_m = 0.0;        ///< Eq. 7-39
     bool choked = false;
     bool mach_limit_active = false;  ///< the Eq. 7-30 limit was applied on some node
+    /// Nodes with M_m > 1 (by more than 1e-6): outside the validity of Eq. 7-29 (the Eq. 7-30 limit
+    /// bounds the term only).  A choke on such a profile says so in ThroughflowResult::message.
+    int supersonic_nodes = 0;
     bool converged = false;
     int iterations = 0;
     std::vector<ThroughflowNode> nodes;

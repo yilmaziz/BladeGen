@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <memory>
 #include <numbers>
+#include <string>
 #include <vector>
 
 namespace TF = BladeGen::Turbolenza::Throughflow;
@@ -571,6 +572,13 @@ TEST_CASE("throughflow-eq: near and beyond choke on a 45-degree cone, all four m
             CHECK(st.converged);                            // a choke only on a converged profile
             CHECK(std::abs(st.mean_mach_m - 1.0) <= 1e-6);  // Eq. 7-39 holds at the choke
             for (const auto& nd : st.nodes) CHECK(nd.h > 0.0);  // never an invalid state
+            // nodes at M_m > 1 on the choke profile are counted and named in the message
+            int sup = 0;
+            for (const auto& nd : st.nodes) sup += nd.mach_m > 1.0 + 1e-6 ? 1 : 0;
+            CHECK(st.supersonic_nodes == sup);
+            CHECK((r.message.find("M_m > 1") != std::string::npos) == (sup > 0));
+            if (simple_model[k]) CHECK(sup == 0);  // uniform W_m: M_m = 1 everywhere
+            else CHECK(sup > 0);
             double mmax = 0.0;
             for (const auto& nd : st.nodes) mmax = std::max(mmax, nd.mach_m);
             mc.push_back(st.mass_flow);
@@ -583,6 +591,23 @@ TEST_CASE("throughflow-eq: near and beyond choke on a 45-degree cone, all four m
         if (simple_model[k]) CHECK(std::abs(*lo / mdot_radial - 1.0) <= 1e-4);  // measured 1e-6
         else CHECK(std::abs(*lo / mdot_normal - 1.0) <= 0.02);                  // measured +1.0 % (full), -0.2 % (approx.)
     }
+}
+
+TEST_CASE("throughflow-eq: Ch. 12's choke test, Eq. 12-37, is refused in this version", "[turbolenza][throughflow]")
+{
+    // Eq. 12-37 (d mdot / d W_m(0) <= 0) found the "maximum" of a strongly non-uniform profile at a node's
+    // limiting speed (h -> 0, M_m ~ 5000): it is refused, for every model and input, before any solve; so
+    // the invalid-state branch of the W_m(0) search cannot be reached through it either
+    for (auto model : kModels)
+        for (double mdot : {50.0, 76.5, 78.0, 82.0, 90.0}) {
+            auto c = channel(model, 7, 0.1, 0.0, cone_h, cone_s);
+            c.mass_flow = mdot;
+            c.options.choke_test = TF::ChokeTest::MassFlowDerivative;
+            CHECK_THROWS_AS(c.validate(), TF::ThroughflowError);
+            CHECK_THROWS_AS(TF::solve_throughflow(c), TF::ThroughflowError);
+        }
+    auto c = channel(TF::ThroughflowModel::FullNormalEquilibrium, 7, 0.1, 0.0, cone_h, cone_s);
+    CHECK_NOTHROW(c.validate());  // Eq. 7-39, the default
 }
 
 TEST_CASE("throughflow-eq: the limit of Eq. 7-30 near choke (45-degree cone at 74 kg/s)", "[turbolenza][throughflow]")

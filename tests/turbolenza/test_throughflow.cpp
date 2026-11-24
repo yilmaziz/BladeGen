@@ -491,11 +491,7 @@ TEST_CASE("throughflow: refusals", "[turbolenza][throughflow]")
     std::printf("[throughflow] mdot = 500 kg/s in the annulus: %s at quasi-normal %d, computed mdot %.4f, mean M_m %.4f\n",
                 TF::to_string(r.status).c_str(), r.choked_station, r.stations.back().mass_flow, r.stations.back().mean_mach_m);
     CHECK(r.stations.back().mean_mach_m >= 1.0 - 1e-9);
-    // the same with Ch. 12's test, Eq. 12-37: the maximum of mdot(W_m(0)) is the choke
+    // Ch. 12's test, Eq. 12-37, is refused in this version (Throughflow.hpp ChokeTest)
     c.options.choke_test = TF::ChokeTest::MassFlowDerivative;
-    const auto r2 = TF::solve_throughflow(c);
-    CHECK(r2.status == TF::ThroughflowResult::Status::Choked);
-    std::printf("[throughflow] the same with Eq. 12-37: choke mdot %.4f, mean M_m %.4f\n", r2.stations.back().mass_flow,
-                r2.stations.back().mean_mach_m);
-    CHECK(r2.stations.back().mass_flow >= r.stations.back().mass_flow - 1e-6);  // 7-39 stops at or before the maximum
+    CHECK_THROWS_AS(TF::solve_throughflow(c), TF::ThroughflowError);
 }

@@ -128,6 +128,19 @@ private:
 
     // section / cascade
     const BladeGen::Turbolenza::BladeSection* section();  ///< built on demand; null + section_error_
+    /// Not in v1: the layer copy on its stream surface (stream_surface_blade, the Cascade page's stagger as
+    /// BladeGen's), built on demand; null + stream_error_.
+    const BladeGen::Turbolenza::StreamSurfaceBlade* streamBlade();
+    [[nodiscard]] bool layerMode() const;     ///< the Cascade page's stream surface is the BladeGen layer's
+    [[nodiscard]] bool rotatingRow() const;   ///< the Cascade page's row rotates
+    void updateRowEnabled();
+    /// The case of settings st: build_case(st, section) or, on the layer's stream surface, build_case(st, blade).
+    struct CaseInput
+    {
+        BladeGen::Turbolenza::BladeSection section;
+        std::optional<BladeGen::Turbolenza::StreamSurfaceBlade> stream;
+    };
+    [[nodiscard]] std::optional<CaseInput> caseInput(QString& error);
     void showPage(int index);
     void buildTree();
     void buildMenus();
@@ -208,6 +221,13 @@ private:
     QLabel* derived_ = nullptr;
     PlotWidget* cascade_plot_ = nullptr;
     QTimer* cascade_timer_ = nullptr;
+    // cascade page: the stream surface and the row (not in v1)
+    QComboBox *surface_ = nullptr, *row_ = nullptr;
+    QDoubleSpinBox *rpm_ = nullptr, *alpha1_ = nullptr, *mach_abs_ = nullptr;
+    QLabel* triangle_info_ = nullptr;
+    PlotWidget *sheet_plot_ = nullptr, *triangle_plot_ = nullptr;
+    std::optional<BladeGen::Turbolenza::StreamSurfaceBlade> stream_;
+    QString stream_error_;
 
     // mesh page
     QComboBox* level_ = nullptr;

@@ -121,6 +121,65 @@ void drawCascade(PlotWidget* w, const T::Cascade& c, double inlet_angle_deg)
     w->commit(true);
 }
 
+void drawStreamSheet(PlotWidget* w, const T::StreamSheet& sheet, double m_lo, double m_hi, double m_te)
+{
+    QVector<QPointF> r, b;
+    const int n = 200;
+    const double r_le = sheet.radius(0.0), b_lo = sheet.thickness(m_lo);
+    double lo = 1.0, hi = 1.0;
+    for (int k = 0; k <= n; ++k) {
+        const double m = m_lo + (m_hi - m_lo) * k / n;
+        r << QPointF(m, sheet.radius(m) / r_le);
+        b << QPointF(m, sheet.thickness(m) / b_lo);
+        lo = std::min({lo, r.back().y(), b.back().y()});
+        hi = std::max({hi, r.back().y(), b.back().y()});
+    }
+    const double pad = 0.05 * std::max(hi - lo, 0.02);
+    QVector<Series> series{line("r / r_LE", r, kSuction, 1.6), line("b / b_in", b, kPressure, 1.6)};
+    series << line("LE, TE", {{0.0, lo - pad}, {0.0, hi + pad}}, QColor(120, 120, 120), 1.0, Qt::DashLine)
+           << line("", {{m_te, lo - pad}, {m_te, hi + pad}}, QColor(120, 120, 120), 1.0, Qt::DashLine, false);
+    w->setTitle(sheet.cylinder() ? "Stream sheet: a cylinder (r, b constant)" : "Stream sheet r(m), b(m)");
+    w->setLabels("m / c (from the LE)", "ratio");
+    w->proportional = false;
+    w->setFills({});
+    w->setMarkers({});
+    w->setSeries(series);
+    w->commit(true);
+}
+
+void drawVelocityTriangle(PlotWidget* w, const T::VelocityTriangle& t)
+{
+    // the vectors from the origin: C and W, and U from the tip of W to the tip of C (C = W + U)
+    auto arrow = [](const QString& name, QPointF a, QPointF b, const QColor& c) {
+        const QPointF d = b - a;
+        const double L = std::hypot(d.x(), d.y());
+        QVector<QPointF> pts{a, b};
+        if (L > 0.0) {
+            const QPointF u = d / L, nrm(-u.y(), u.x());
+            const double h = 0.08 * L;
+            pts << QPointF(kNaN, kNaN) << b - h * u + 0.5 * h * nrm << b << b - h * u - 0.5 * h * nrm;
+        }
+        return line(name, pts, c, 1.8);
+    };
+    const QPointF o(0.0, 0.0), C(t.C_m, t.C_theta), W(t.C_m, t.W_theta);
+    QVector<Series> series{arrow(QString("C %1 m/s (alpha %2 deg)").arg(t.C, 0, 'f', 1).arg(t.alpha * 180.0 / std::numbers::pi, 0, 'f', 2), o, C,
+                                 QColor(31, 119, 180)),
+                           arrow(QString("W %1 m/s (beta %2 deg)").arg(t.W, 0, 'f', 1).arg(t.beta * 180.0 / std::numbers::pi, 0, 'f', 2), o, W,
+                                 QColor(214, 39, 40)),
+                           arrow(QString("U = omega r %1 m/s").arg(t.U, 0, 'f', 1), W, C, QColor(0, 150, 0))};
+    w->setTitle(QString("Inlet velocity triangle: rpm %1, r_in %2 m, M1 %3 abs / %4 rel")
+                    .arg(t.rpm, 0, 'g', 7)
+                    .arg(t.radius, 0, 'g', 5)
+                    .arg(t.mach_absolute, 0, 'f', 3)
+                    .arg(t.mach_relative, 0, 'f', 3));
+    w->setLabels("meridional [m/s]", "tangential, + toward +theta [m/s]");
+    w->proportional = true;
+    w->setFills({});
+    w->setMarkers({});
+    w->setSeries(series);
+    w->commit(true);
+}
+
 void drawGrid(PlotWidget* w, const T::Grid& g)
 {
     const int nm = g.n_m(), ne = g.n_eta();

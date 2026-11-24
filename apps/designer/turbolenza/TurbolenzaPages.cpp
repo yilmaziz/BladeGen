@@ -272,6 +272,8 @@ void TurbolenzaWindow::bladeChanged()
     if (syncing_) return;
     section_.reset();
     section_error_.clear();
+    stream_.reset();
+    stream_error_.clear();
     cascade_.reset();
     mesh_case_.reset();
     updateBladeEnabled();
@@ -321,7 +323,8 @@ QWidget* TurbolenzaWindow::cascadePage()
     auto* page = new QSplitter(Qt::Horizontal);
     auto* left = new QWidget;
     auto* v = new QVBoxLayout(left);
-    v->addWidget(help("The cascade of the blade section and the far-inlet state. The pitch, the angle of attack and the "
+    v->addWidget(help("The cascade of the blade section and the far-inlet state (planar, or on the BladeGen layer's "
+                      "stream surface, stationary or rotating). The pitch, the angle of attack and the "
                       "blade angles are derived, never entered.", left));
     auto* g = new QGroupBox("Cascade", left);
     auto* f = new QFormLayout(g);
@@ -343,8 +346,10 @@ QWidget* TurbolenzaWindow::cascadePage()
     tt_ = dspin(fl, 1.0, 5000.0, 3, 1.0, "K");
     gamma_ = dspin(fl, 1.01, 2.0, 4, 0.01);
     gas_r_ = dspin(fl, 1.0, 1e5, 3, 1.0, "J/(kg K)");
-    omega_ = dspin(fl, -1e5, 1e5, 3, 1.0, "rad/s");
-    omega_->setToolTip("only 0 (a stationary cascade) is solved: a rotating row is refused");
+    omega_ = dspin(fl, -1e6, 1e6, 3, 1.0, "rad/s");
+    omega_->setToolTip("derived: 0 for a stationary row, -2 pi rpm / 60 for a rotating one (Aungier's omega, "
+                       "positive toward +theta)");
+    omega_->setEnabled(false);
     ff->addRow("inlet flow angle β1 (from axial, + toward +y)", beta1_);
     ff->addRow(mach_given_, mach1_);
     ff->addRow(mdot_given_, mdot_);
@@ -352,8 +357,40 @@ QWidget* TurbolenzaWindow::cascadePage()
     ff->addRow("inlet total temperature Tt", tt_);
     ff->addRow("ratio of specific heats γ", gamma_);
     ff->addRow("gas constant R", gas_r_);
-    ff->addRow("rotation ω", omega_);
+    ff->addRow("rotation ω (derived)", omega_);
     v->addWidget(fl);
+    // not in v1: the stream surface the blade lies on, and the row's motion
+    auto* sg = new QGroupBox("Stream surface and row", left);
+    auto* sf = new QFormLayout(sg);
+    surface_ = new QComboBox(sg);
+    surface_->addItem("planar cascade (chord, solidity, stagger; r = b = 1)");
+    surface_->addItem("the BladeGen layer's stream surface: r(m), b(m)");
+    surface_->setToolTip("Layer: the section as BladeGen places it on its stream surface (the stagger above is BladeGen's "
+                         "stagger in (m', theta), the pitch 2 pi r_LE / N); r(m) from the layer streamline, b(m) the "
+                         "normal spacing of BladeGen's streamline family (our model), 1 at the far inlet");
+    row_ = new QComboBox(sg);
+    row_->addItem("stationary (beta1, M1 relative)");
+    row_->addItem("rotating (rpm, alpha1, M1 absolute, P0, T0)");
+    rpm_ = dspin(sg, -2e5, 2e5, 1, 100.0, "rpm");
+    rpm_->setToolTip("> 0 moves the blades toward -theta (their pressure sides lead): a compressor rotor; with alpha1 = 0 "
+                     "it gives beta1 > 0");
+    alpha1_ = dspin(sg, -85.0, 85.0, 3, 0.5, "deg");
+    alpha1_->setToolTip("absolute inlet flow angle from the meridional direction, + toward +theta (0: axial, no swirl; "
+                        "pre-swirl with the rotation of rpm > 0 is negative)");
+    mach_abs_ = dspin(sg, 0.01, 0.99, 4, 0.01);
+    rpm_->setValue(d.rpm);
+    alpha1_->setValue(d.inlet_absolute_flow_angle_deg);
+    mach_abs_->setValue(d.inlet_absolute_mach);
+    triangle_info_ = new QLabel(sg);
+    triangle_info_->setWordWrap(true);
+    triangle_info_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    sf->addRow("stream surface", surface_);
+    sf->addRow("row", row_);
+    sf->addRow("rotation speed", rpm_);
+    sf->addRow("absolute inlet angle α1", alpha1_);
+    sf->addRow("absolute inlet Mach number M1", mach_abs_);
+    sf->addRow(triangle_info_);
+    v->addWidget(sg);
     auto* rg = new QGroupBox("Reynolds number (sets Pt; the tunnel holds Pt and Tt)", left);
     auto* rf = new QFormLayout(rg);
     re_ref_ = dspin(rg, 1e3, 1e10, 0, 10000.0);
@@ -394,8 +431,17 @@ QWidget* TurbolenzaWindow::cascadePage()
     mach1_->setEnabled(mach_given_->isChecked());
     mdot_->setEnabled(mdot_given_->isChecked());
     page->addWidget(scrolled(left));
-    cascade_plot_ = new PlotWidget(page);
-    page->addWidget(cascade_plot_);
+    auto* right = new QSplitter(Qt::Vertical, page);
+    cascade_plot_ = new PlotWidget(right);
+    sheet_plot_ = new PlotWidget(right);
+    triangle_plot_ = new PlotWidget(right);
+    right->addWidget(cascade_plot_);
+    right->addWidget(sheet_plot_);
+    right->addWidget(triangle_plot_);
+    right->setStretchFactor(0, 4);
+    right->setStretchFactor(1, 2);
+    right->setStretchFactor(2, 2);
+    page->addWidget(right);
     page->setStretchFactor(0, 2);
     page->setStretchFactor(1, 3);
     cascade_timer_ = new QTimer(this);
@@ -409,8 +455,21 @@ QWidget* TurbolenzaWindow::cascadePage()
         mesh_case_.reset();
         cascade_timer_->start();
     };
-    for (auto* s : {chord_, solidity_, stagger_, beta1_, mach1_, mdot_, pt_, tt_, gamma_, gas_r_, omega_})
+    for (auto* s : {chord_, solidity_, stagger_, beta1_, mach1_, mdot_, pt_, tt_, gamma_, gas_r_, omega_, rpm_, alpha1_, mach_abs_})
         connect(s, &QDoubleSpinBox::valueChanged, this, stale);
+    // the placement on the stream surface depends on the stagger (BladeGen's, in layer mode)
+    connect(stagger_, &QDoubleSpinBox::valueChanged, this, [this] {
+        stream_.reset();
+        stream_error_.clear();
+    });
+    connect(surface_, &QComboBox::currentIndexChanged, this, [this, stale] {
+        updateRowEnabled();
+        stale();
+    });
+    connect(row_, &QComboBox::currentIndexChanged, this, [this, stale] {
+        updateRowEnabled();
+        stale();
+    });
     connect(mach_given_, &QCheckBox::toggled, this, [this, stale](bool on) {
         mach1_->setEnabled(on);
         stale();
@@ -419,6 +478,7 @@ QWidget* TurbolenzaWindow::cascadePage()
         mdot_->setEnabled(on);
         stale();
     });
+    updateRowEnabled();
     return page;
 }
 
@@ -448,8 +508,129 @@ void TurbolenzaWindow::setCascadeDefaults(double stagger_deg, double solidity)
     solidity_->setValue(solidity);
 }
 
+bool TurbolenzaWindow::layerMode() const { return surface_ && surface_->currentIndex() == 1; }
+bool TurbolenzaWindow::rotatingRow() const { return row_ && row_->currentIndex() == 1; }
+
+void TurbolenzaWindow::updateRowEnabled()
+{
+    const bool layer = layerMode(), rot = rotatingRow();
+    chord_->setEnabled(!layer);  // the layer's chord and pitch are BladeGen's
+    solidity_->setEnabled(!layer);
+    beta1_->setEnabled(!rot);    // derived from the triangle
+    mach_given_->setEnabled(!rot);
+    mach1_->setEnabled(!rot && mach_given_->isChecked());
+    for (auto* w : {rpm_, alpha1_, mach_abs_}) w->setEnabled(rot);
+    sheet_plot_->setVisible(layer);
+    triangle_plot_->setVisible(rot);
+}
+
+const T::StreamSurfaceBlade* TurbolenzaWindow::streamBlade()
+{
+    if (!stream_ && stream_error_.isEmpty()) {
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        try {
+            Design::Layer l = layer_;  // the window's copy, at the Cascade page's stagger
+            l.stagger_deg = stagger_->value();
+            stream_ = T::stream_surface_blade(s_.design, source_layer_, l, ev_);
+        } catch (const std::exception& e) {
+            stream_error_ = e.what();
+        }
+        QApplication::restoreOverrideCursor();
+    }
+    return stream_ ? &*stream_ : nullptr;
+}
+
+std::optional<TurbolenzaWindow::CaseInput> TurbolenzaWindow::caseInput(QString& error)
+{
+    const auto* sec = section();
+    if (!sec) {
+        error = "the section cannot be built: " + section_error_;
+        return std::nullopt;
+    }
+    CaseInput in{*sec, std::nullopt};
+    if (layerMode()) {
+        const auto* b = streamBlade();
+        if (!b) {
+            error = "the blade cannot be placed on its stream surface: " + stream_error_;
+            return std::nullopt;
+        }
+        in.stream = *b;
+    }
+    return in;
+}
+
 void TurbolenzaWindow::refreshCascade()
 {
+    if (layerMode()) {  // not in v1: the blade on the layer's stream surface
+        const auto* b = streamBlade();
+        QString t = "<b>derived (the BladeGen layer on its stream surface)</b>";
+        if (!b) {
+            derived_->setText(t + QString("<br><span style='color:#b00'>%1</span>").arg(stream_error_));
+            return;
+        }
+        try {
+            if (!cascade_) cascade_ = T::make_cascade(*b);
+            const auto& c = *cascade_;
+            const double up = ext_up_ ? ext_up_->value() : 1.0, down = ext_down_ ? ext_down_->value() : 1.0;
+            const double m_te = c.active.trailing_edge_point.m;
+            const T::StreamSheet& sh = *b->sheet;
+            const double m_lo = std::max(sh.m_front(), -up), m_hi = std::min(sh.m_back(), m_te + down);
+            double beta1 = beta1_->value();
+            QString tri;
+            if (rotatingRow()) {
+                const T::PerfectGas gas(gamma_->value(), gas_r_->value());
+                const T::VelocityTriangle v = T::velocity_triangle(rpm_->value(), alpha1_->value(), mach_abs_->value(),
+                                                                   pt_->value(), tt_->value(), gas, b->chord * sh.radius(m_lo));
+                beta1 = v.beta * kDeg;
+                omega_->setValue(v.omega);
+                tri = QString("U = ω r_in = %1 m/s, C = %2, C_m = %3, C_θ = %4 m/s<br>W_θ = C_θ - U = %5 m/s, β1 = %6°, "
+                              "M1_rel = %7<br>rothalpy I = cp T0 - U C_θ = %8 J/kg (r_in at the nominal far inlet)")
+                          .arg(v.U, 0, 'f', 3)
+                          .arg(v.C, 0, 'f', 3)
+                          .arg(v.C_m, 0, 'f', 3)
+                          .arg(v.C_theta, 0, 'f', 3)
+                          .arg(v.W_theta, 0, 'f', 3)
+                          .arg(beta1, 0, 'f', 4)
+                          .arg(v.mach_relative, 0, 'f', 4)
+                          .arg(v.rothalpy, 0, 'f', 2);
+                Tl::drawVelocityTriangle(triangle_plot_, v);
+            } else {
+                omega_->setValue(0.0);
+                tri = "stationary row: β1 and M1 as entered (relative = absolute)";
+            }
+            triangle_info_->setText(tri);
+            t += QString("<br>%1, N = %2 blades<br>chord c = %3 m (in (m, r_LE θ)), pitch r_LE 2π/N = %4 m, σ = %5"
+                         "<br>stagger in (m, r_LE θ) %6° (BladeGen's %7° in (m', θ))<br>r_LE %8 m, r_TE %9 m, "
+                         "b far exit / far inlet %10")
+                     .arg(QString::fromStdString(b->source))
+                     .arg(b->n_blades)
+                     .arg(b->chord, 0, 'g', 7)
+                     .arg(b->chord / b->solidity, 0, 'g', 7)
+                     .arg(b->solidity, 0, 'f', 5)
+                     .arg(b->stagger_deg, 0, 'f', 4)
+                     .arg(b->layer_stagger_deg, 0, 'f', 4)
+                     .arg(b->r_le, 0, 'g', 6)
+                     .arg(b->r_te, 0, 'g', 6)
+                     .arg(sh.thickness(m_hi) / sh.thickness(m_lo), 0, 'f', 5);
+            t += QString("<br>κ_LE %1°, κ_TE %2° (the true blade angles)<br>incidence β1 - κ_LE = %3°")
+                     .arg(c.kappa_le * kDeg, 0, 'f', 4)
+                     .arg(c.kappa_te * kDeg, 0, 'f', 4)
+                     .arg(beta1 - c.kappa_le * kDeg, 0, 'f', 4);
+            derived_->setText(t);
+            Tl::drawCascade(cascade_plot_, c, beta1);
+            cascade_plot_->setBadge({});
+            Tl::drawStreamSheet(sheet_plot_, sh, m_lo, m_hi, m_te);
+        } catch (const std::exception& e) {
+            derived_->setText(t + QString("<br><span style='color:#b00'>%1</span>").arg(e.what()));
+            cascade_plot_->setBadge({QString("the cascade cannot be built: %1").arg(e.what()), 2});
+            cascade_plot_->update();
+        }
+        return;
+    }
+    triangle_info_->setText(rotatingRow() ? "<span style='color:#b00'>a rotating row needs the BladeGen layer's stream "
+                                            "surface (its radius)</span>"
+                                          : "");
+    omega_->setValue(0.0);
     const auto* sec = section();
     const double chord = chord_->value(), sol = solidity_->value(), b1 = beta1_->value(), gam = stagger_->value();
     QString t = QString("<b>derived</b><br>pitch s = c / σ = %1 m<br>angle of attack β1 - γ = %2°").arg(chord / sol, 0, 'g', 7).arg(b1 - gam, 0, 'f', 4);
@@ -563,19 +744,20 @@ bool TurbolenzaWindow::generateMesh(bool wait)
     mesh_error_->clear();
     mesh_info_->clear();
     mesh_case_.reset();
-    const auto* sec = section();
-    if (!sec) {
-        mesh_error_->setText("the section cannot be built: " + section_error_);
+    QString input_error;
+    const auto input = caseInput(input_error);
+    if (!input) {
+        mesh_error_->setText(input_error);
         return false;
     }
     // build_case (cascade + grid; a standard level searches its candidates, ~0.35 s each) runs off
     // the GUI thread
     gen_button_->setEnabled(false);
     mesh_info_->setText("generating the mesh...");
-    mesh_watch_->setFuture(QtConcurrent::run([st = settings(), b = *sec] {
+    mesh_watch_->setFuture(QtConcurrent::run([st = settings(), in = *input] {
         MeshJob j;
         try {
-            j.c = T::build_case(st, b);
+            j.c = in.stream ? T::build_case(st, *in.stream) : T::build_case(st, in.section);
         } catch (const T::GridGenerationError& e) {
             j.err = QString("GridGenerationError: %1").arg(e.what());
             for (const auto& [why, n] : e.reasons) j.err += QString("\n  %1: %2 candidate(s)").arg(QString::fromStdString(why)).arg(n);
@@ -854,7 +1036,12 @@ T::CaseSettings TurbolenzaWindow::settings() const
     s.gas_constant = gas_r_->value();
     s.inlet_total_pressure = pt_->value();
     s.inlet_total_temperature = tt_->value();
-    s.omega = omega_->value();
+    s.omega = 0.0;  // derived by build_case for a rotating row
+    s.stream_surface = layerMode() ? T::StreamSurfaceKind::Layer : T::StreamSurfaceKind::Planar;
+    s.row = rotatingRow() ? T::RowMotion::Rotating : T::RowMotion::Stationary;
+    s.rpm = rpm_->value();
+    s.inlet_absolute_flow_angle_deg = alpha1_->value();
+    s.inlet_absolute_mach = mach_abs_->value();
     s.chord = chord_->value();
     s.solidity = solidity_->value();
     s.stagger_deg = stagger_->value();

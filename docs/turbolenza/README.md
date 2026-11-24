@@ -121,6 +121,41 @@ With ω_BL = 0.2 the iteration contracts by about 0.77 per iteration and converg
 wake is continuous at the TE by construction (mismatch 0). The marched wake's first exit jump
 differs from the TE sum by 3.0e-3 mdot'.
 
+## Stream surface and rotating rows (not in v1)
+
+The Cascade page has a **Stream surface and row** group.
+
+- **Stream surface: planar cascade** is v1's planar cascade (chord, solidity, stagger; r = b = 1).
+- **Stream surface: the BladeGen layer's stream surface** uses the layer copy as BladeGen places it
+  on its stream surface:
+  - the stagger field is BladeGen's stagger in (m', theta);
+  - chord and pitch are derived: the chord in the (m, r_LE theta) plane, the pitch 2 pi r_LE / N;
+  - r(m) comes from the layer streamline;
+  - b(m) is the normal spacing of BladeGen's streamline family (our model; Aungier takes b from a
+    hub-to-shroud analysis), normalized to 1 at the far inlet;
+  - a small plot shows r / r_LE and b / b_in.
+- **Row: stationary** keeps the relative inputs beta1, M1.
+- **Row: rotating** takes rpm, the absolute alpha1 and M1, and P0, T0. It derives U, C_m, C_theta,
+  W_theta, beta1 and M1_rel at the far-inlet radius, and draws the velocity triangle.
+  - Sign convention: positive rpm moves the blades toward -theta (their pressure sides lead), so
+    alpha1 = 0 gives beta1 > 0. omega = -2 pi rpm / 60 is Aungier's omega, positive toward +theta.
+  - Pre-swirl in the direction of rotation is a negative alpha1.
+- The equations: Aungier 2003 Eqs. 5-21 to 5-26 with r(m), b(m) and the source 2 S omega sin(phi),
+  and h = I + (r omega)^2 / 2 - W^2 / 2 (Eq. 5-51). PORT.md lists every change.
+- A rotating run reports the far exit in the absolute frame: C, alpha, P0, T0 (mass averages), the
+  P0 and T0 ratios, and the Euler work against cp Delta T0. fields.csv gains r, theta, b and the
+  absolute columns. run_summary.json carries the stream surface and the inlet triangle.
+- The boundary layer runs on the planar cascade and on a cylinder only.
+
+Measured on 2026-11-24 (hidden test `[.rotor]`): the default design's Mid layer, rotating.
+- Inputs: 18279 rpm, M1 0.30 absolute, alpha1 0, P0 101325 Pa, T0 288.15 K, medium level,
+  lambda_rho = lambda_K = 0.3, tolerances 1e-5.
+- Derived inlet: beta1 54.09 deg (incidence 2 deg), M1_rel 0.512.
+- Result: converged in 164 passes (3.9 s), beta_out 41.22 deg, peak M_rel 0.568.
+- Absolute frame at the far exit: P0 ratio 1.0730, T0 ratio 1.0203, alpha_out -21.08 deg.
+- Euler work 5884.94 J/kg = cp Delta T0.
+- Inviscid, so isentropic: 1.0203^3.5 = 1.0730.
+
 ## Building with PARDISO
 
 PARDISO is used when CMake finds Intel MKL:

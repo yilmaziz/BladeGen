@@ -25,10 +25,6 @@ add_executable(bladegen_designer
 target_sources(bladegen_designer PRIVATE
     turbolenza/TurbolenzaWindow.cpp turbolenza/TurbolenzaWindow.hpp turbolenza/TurbolenzaPages.cpp
     turbolenza/TurbolenzaPlots.cpp turbolenza/TurbolenzaPlots.hpp)
-# STUB, temporary: fake core functions until the grid and solver branches land (not committed).
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/turbolenza/PendingCoreStub.cpp)
-    target_sources(bladegen_designer PRIVATE turbolenza/PendingCoreStub.cpp)
-endif()
 target_include_directories(bladegen_designer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(bladegen_designer PROPERTIES AUTOMOC ON WIN32_EXECUTABLE OFF)
 target_link_libraries(bladegen_designer PRIVATE bladegen::lib bladegen::occt_viewer bladegen::compiler_flags Qt6::Widgets Qt6::Concurrent

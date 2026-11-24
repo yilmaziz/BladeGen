@@ -123,7 +123,7 @@ The layer is reported in the frame of the segment ending at that station.
 | `Q`, `theta11`, `q12` | the marched, frame-invariant state: delta - delta1*, theta11, V_theta_e theta12 (8-68) | m, m, m^2/s |
 | `wall_omega`, `Vtheta_e`, `V_e`, `beta_e` | the frame, and the edge relative to the wall | rad/s, m/s, m/s, rad |
 | `delta`, `delta1`, `delta2` | delta, meridional delta1*, tangential delta2* | m |
-| `theta12`, `theta22` | tangential momentum thicknesses in this frame | m |
+| `theta12`, `theta22` | tangential momentum thicknesses in this frame; at V_theta_e = 0 exactly, `theta12` is NaN when q12 != 0 (callers must not require it finite) | m |
 | `n`, `m`, `H1`, `H2` | profile exponents and shape factors, after the 2.4 limits | - |
 | `delta_star`, `theta`, `H` | streamwise (8-40, 8-41), H limited | m, m, - |
 | `Re_theta`, `Re_theta11` | rho V_e theta / mu and rho V_e theta11 / mu | - |

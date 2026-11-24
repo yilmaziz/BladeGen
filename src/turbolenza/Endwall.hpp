@@ -311,7 +311,7 @@ struct EndwallLayer
     double wall_omega = 0.0;                          ///< the frame [rad/s]
     double Vtheta_e = 0.0, V_e = 0.0, beta_e = 0.0;   ///< edge relative to the wall [8-4], |V_e|, atan2(V_theta_e, V_me)
     double delta = 0.0, delta1 = 0.0, delta2 = 0.0;   ///< delta, delta1*, delta2*
-    double theta12 = 0.0, theta22 = 0.0;              ///< theta12 = q12 / V_theta_e (the profile's when V_theta_e = 0)
+    double theta12 = 0.0, theta22 = 0.0;              ///< theta12 = q12 / V_theta_e; at V_theta_e = 0: NaN if q12 != 0, else the profile's
     double n = 0.0, m = 0.0, H1 = 0.0, H2 = 0.0;      ///< profile exponents and shape factors (after the limits)
     double delta_star = 0.0, theta = 0.0, H = 0.0;    ///< streamwise [8-40, 8-41], H after its limit
     double Re_theta = 0.0, Re_theta11 = 0.0;          ///< rho_e V_e theta / mu (before its limit), rho_e V_e theta11 / mu

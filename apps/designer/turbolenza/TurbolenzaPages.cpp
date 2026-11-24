@@ -15,6 +15,7 @@
 #include <QFont>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -26,6 +27,7 @@
 #include <QStackedWidget>
 #include <QStandardItemModel>
 #include <QTabWidget>
+#include <QTableWidget>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QVBoxLayout>
@@ -871,6 +873,59 @@ QWidget* TurbolenzaWindow::postPage()
     report_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     report_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     v->addWidget(scrolled(report_), 1);
+    return w;
+}
+
+// ── Mesh independence ────────────────────────────────────────────────────────
+
+QWidget* TurbolenzaWindow::studyPage()
+{
+    auto* w = new QWidget;
+    auto* v = new QVBoxLayout(w);
+    v->addWidget(help("Mesh independence: the same case solved on each checked standard grid level, one after the other, "
+                      "the coarsest first. Every other input is taken from the Blade, Cascade, Mesh (extensions and the "
+                      "first / last blade node layout) and Solver pages; the Mesh page's grid level and explicit "
+                      "n_passage x n_eta are not used. A level that fails is recorded and the study goes on.", w));
+    auto* lg = new QGroupBox("Grid levels", w);
+    auto* lh = new QHBoxLayout(lg);
+    for (const char* name : T::kGridLevels) {
+        auto* c = new QCheckBox(name, lg);
+        c->setChecked(true);
+        lh->addWidget(c);
+        study_check_.push_back(c);
+    }
+    lh->addStretch(1);
+    v->addWidget(lg);
+    auto* br = new QHBoxLayout;
+    study_run_ = new QPushButton("Run mesh study", w);
+    study_stop_ = new QPushButton("Stop", w);
+    study_stop_->setEnabled(false);
+    study_save_ = new QPushButton("Save mesh study...", w);
+    study_save_->setEnabled(false);
+    study_status_ = new QLabel("no mesh study yet", w);
+    br->addWidget(study_run_);
+    br->addWidget(study_stop_);
+    br->addWidget(study_save_);
+    br->addWidget(study_status_, 1);
+    v->addLayout(br);
+    connect(study_run_, &QPushButton::clicked, this, [this] { startStudy(); });
+    connect(study_stop_, &QPushButton::clicked, this, [this] { stopStudy(); });
+    connect(study_save_, &QPushButton::clicked, this, [this] { saveStudyDialog(); });
+    auto* split = new QSplitter(Qt::Vertical, w);
+    study_table_ = new QTableWidget(0, 8, split);
+    study_table_->setHorizontalHeaderLabels({"level", "n_m x n_eta", "dm/c", "passes", "status", "β_out [deg]", "max Mach", "wall time [s]"});
+    study_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    study_table_->verticalHeader()->hide();
+    study_table_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    study_table_->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    split->addWidget(study_table_);
+    study_residuals_ = new PlotWidget(split);
+    split->addWidget(study_residuals_);
+    split->setStretchFactor(0, 2);
+    split->setStretchFactor(1, 3);
+    v->addWidget(split, 1);
+    Tl::drawResiduals(study_residuals_, {}, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(),
+                      std::numeric_limits<double>::quiet_NaN(), "no mesh study yet");
     return w;
 }
 

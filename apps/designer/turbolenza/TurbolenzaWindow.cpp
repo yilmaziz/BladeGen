@@ -37,6 +37,7 @@
 #include <iostream>
 #include <limits>
 #include <numbers>
+#include <vector>
 
 namespace Designer {
 
@@ -889,11 +890,17 @@ void TurbolenzaWindow::showBoundaryLayer()
         auto* row = new QHBoxLayout;
         bl_q_ = new QComboBox(bl_win_);
         bl_q_->addItems({"shape factor H", "θ / c", "δ* / c", "skin friction c_f", "Re_θ"});
+        bl_x_ = new QComboBox(bl_win_);
+        bl_x_->addItems({"x / c", "station fraction f"});
+        bl_x_->setToolTip("x / c: the chordwise position of each wall node; f = (m − m_first) / (m_last − m_first): the "
+                          "blade-station fraction, the abscissa of Aungier's Figs. 5-6 and 5-15 as we read them");
         bl_overlay_ = new QCheckBox("Aungier 2003 Fig. 5-15 (H)", bl_win_);
         bl_overlay_->setToolTip("the digitized H of Aungier's Fig. 5-15 (NACA 65(12A10)-10, β1 45°, M1 0.65), shown by "
-                                "default for that case");
+                                "default for that case; its abscissa is the station fraction f (compare on f)");
         row->addWidget(new QLabel("quantity", bl_win_));
         row->addWidget(bl_q_);
+        row->addWidget(new QLabel("abscissa", bl_win_));
+        row->addWidget(bl_x_);
         row->addWidget(bl_overlay_);
         row->addStretch(1);
         bl_win_->box->addLayout(row);
@@ -908,6 +915,7 @@ void TurbolenzaWindow::showBoundaryLayer()
         split->setStretchFactor(1, 2);
         bl_win_->box->addWidget(split, 1);
         connect(bl_q_, &QComboBox::currentIndexChanged, this, [this] { redrawBoundaryLayer(); });
+        connect(bl_x_, &QComboBox::currentIndexChanged, this, [this] { redrawBoundaryLayer(); });
         connect(bl_overlay_, &QCheckBox::toggled, this, [this] { redrawBoundaryLayer(); });
     }
     bl_overlay_->blockSignals(true);
@@ -932,26 +940,35 @@ void TurbolenzaWindow::redrawBoundaryLayer()
     const auto& v = *r.viscous;
     const int q = bl_q_->currentIndex();
     const T::BlIteration* last = v.history.empty() ? nullptr : &v.history.back();
+    const bool on_f = bl_x_->currentIndex() == 1;
     auto xc = [](double x) { return std::isfinite(x) ? QString::number(x, 'f', 3) : QString("none"); };
-    // history.back() is the iteration whose layers are shown (layers_iteration): the values match the curves
-    QString title = QString("Boundary layer, %1 (%2, %3), BL iteration %10: transition SS %4 / PS %5, separation SS %6 / PS %7, "
-                            "loss ω %8%9")
+    // history.back() is the iteration whose layers are shown (layers_iteration): the values match the curves;
+    // on f, the shown layers' own station fractions
+    const double nan = std::nan("");
+    const double tr_ss = on_f ? v.suction.transition_f : (last ? last->transition_x_c_ss : nan);
+    const double tr_ps = on_f ? v.pressure_side.transition_f : (last ? last->transition_x_c_ps : nan);
+    const double sp_ss = on_f ? v.suction.separation_f : (last ? last->separation_x_c_ss : nan);
+    const double sp_ps = on_f ? v.pressure_side.separation_f : (last ? last->separation_x_c_ps : nan);
+    QString title = QString("Boundary layer, %1 (%2, %3), BL iteration %10: transition SS %4 / PS %5, separation SS %6 / PS %7 "
+                            "(%11), loss ω %8%9")
                         .arg(QString::fromStdString(v.coupling))
                         .arg(QString::fromStdString(v.laminar_cf_form))
                         .arg(QString::fromStdString(v.wake_model))
-                        .arg(xc(last ? last->transition_x_c_ss : std::nan("")))
-                        .arg(xc(last ? last->transition_x_c_ps : std::nan("")))
-                        .arg(xc(last ? last->separation_x_c_ss : std::nan("")))
-                        .arg(xc(last ? last->separation_x_c_ps : std::nan("")))
+                        .arg(xc(tr_ss))
+                        .arg(xc(tr_ps))
+                        .arg(xc(sp_ss))
+                        .arg(xc(sp_ps))
                         .arg(v.loss_omega, 0, 'f', 4)
                         .arg(r.converged ? "" : "  [NOT CONVERGED]")
-                        .arg(v.layers_iteration);
+                        .arg(v.layers_iteration)
+                        .arg(on_f ? "f" : "x/c");
     const Tl::BlQuantity which = q == 0   ? Tl::BlQuantity::H
                                  : q == 1 ? Tl::BlQuantity::ThetaOverC
                                  : q == 2 ? Tl::BlQuantity::DeltaStarOverC
                                  : q == 3 ? Tl::BlQuantity::Cf
                                           : Tl::BlQuantity::ReTheta;
-    Tl::drawBoundaryLayer(bl_plot_, v, run_case_ ? run_case_->settings.chord : 1.0, which, bl_overlay_->isChecked(), title);
+    Tl::drawBoundaryLayer(bl_plot_, v, run_case_ ? run_case_->settings.chord : 1.0, which, bl_overlay_->isChecked(), title,
+                          on_f ? Tl::BlAbscissa::StationFraction : Tl::BlAbscissa::ChordX);
     Tl::drawBlChange(bl_change_plot_, v, run_case_ ? run_case_->settings.bl_tolerance : std::nan(""));
     Tl::drawBlBetaOut(bl_beta_plot_, v);
 }
@@ -996,6 +1013,11 @@ QStringList TurbolenzaWindow::saveResults(const QString& dir, bool overwrite)
             bl_q_->setCurrentIndex(q);
             png(bl_plot_, bl_names[q]);
         }
+        bl_q_->setCurrentIndex(0);
+        const int x0 = bl_x_->currentIndex();
+        bl_x_->setCurrentIndex(1);
+        png(bl_plot_, "bl_H_f.png");  // H against the blade-station fraction (Fig. 5-15's abscissa)
+        bl_x_->setCurrentIndex(x0);
         bl_q_->setCurrentIndex(b0);
         png(bl_change_plot_, "bl_history_change.png");
         png(bl_beta_plot_, "bl_history_beta_out.png");
@@ -1125,6 +1147,25 @@ int TurbolenzaWindow::selfTest(const QString& dir, int passes)
     std::printf("turbolenza self-test: one-way boundary layer, transition SS %.3f / PS %.3f, loss %.4f\n",
                 result_->viscous->suction.transition_x_c, result_->viscous->pressure_side.transition_x_c,
                 result_->viscous->loss_omega);
+    // the abscissa f: the plot's suction series runs from f = 0 to f = 1 at the layer's stations
+    {
+        const int x0 = bl_x_->currentIndex();
+        bl_x_->setCurrentIndex(1);
+        QApplication::processEvents();
+        const QStringList rows = bl_plot_->csv().split('\n', Qt::SkipEmptyParts);
+        std::vector<double> xs;
+        for (const QString& row : rows)
+            if (row.startsWith("suction surface,")) xs.push_back(row.section(',', 1, 1).toDouble());
+        const auto& f = result_->viscous->suction.f;
+        const bool label = rows.size() > 1 && rows[1].contains("blade-station fraction f");
+        if (!label || xs.size() < 2 || xs.size() > f.size() || f.front() != 0.0 || f.back() != 1.0 || xs.front() != f.front() ||
+            xs.back() != f.back())
+            return fail("the Boundary layer plot on the station fraction f does not run over the layer's f = 0 .. 1", 45);
+        std::printf("turbolenza self-test: boundary layer on f, %zu points, f %.3f .. %.3f, transition SS f %.3f / PS f %.3f\n",
+                    xs.size(), xs.front(), xs.back(), result_->viscous->suction.transition_f,
+                    result_->viscous->pressure_side.transition_f);
+        bl_x_->setCurrentIndex(x0);
+    }
     const QString vdir = QDir(dir).filePath("viscous");
     QDir().mkpath(vdir);
     QStringList vfiles;
@@ -1133,7 +1174,8 @@ int TurbolenzaWindow::selfTest(const QString& dir, int passes)
     } catch (const std::exception& e) {
         return fail(e.what(), 40);
     }
-    for (const char* name : {"bl_suction.csv", "bl_pressure.csv", "bl_history.csv", "bl_H.png", "bl_history_change.png"})
+    for (const char* name :
+         {"bl_suction.csv", "bl_pressure.csv", "bl_history.csv", "bl_H.png", "bl_H_f.png", "bl_history_change.png"})
         if (!QFileInfo(QDir(vdir).filePath(name)).exists()) return fail((std::string("missing: ") + name).c_str(), 41);
     viscous_->setChecked(false);
     // 6. not in v1: the Mid layer on its stream surface, a rotating row (rpm for beta1 about kappa_LE), its mesh

@@ -1,8 +1,8 @@
 // The boundary-layer coupling (Viscous.hpp, the transpiration of BoundaryConditions.hpp): zero
 // transpiration is v1's system exactly; the transpiration's relations, rows and psi_m; the wall arc
 // length against a dense polyline; one way = the inviscid solve bit for bit; the constant wake's
-// TE continuity; 1 and 4 threads bit-identical; the Reynolds-number helper.  On the synthetic blade
-// (no v1 data needed).
+// TE continuity; 1 and 4 threads bit-identical; the Reynolds-number helper; the blade-station fraction
+// f of the layers and their files; the coupling defaults.  On the synthetic blade (no v1 data needed).
 #include "CascadeFixture.hpp"
 #include "SolverRef.hpp"
 
@@ -15,7 +15,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <sstream>
+#include <string>
+#include <vector>
 
 using namespace BladeGen::Turbolenza;
 
@@ -210,8 +215,7 @@ TEST_CASE("viscous: one way is the inviscid solve bit for bit; two way converges
 
     CaseSettings two = base;
     two.viscous = true;
-    two.bl_coupling = BlCoupling::TwoWay;
-    two.max_bl_iterations = 40;
+    two.bl_coupling = BlCoupling::TwoWay;  // the default omega_BL and max_bl_iterations
     const RunResult r2 = run_case(build_case(two, fixture::synthetic_section()));
     INFO(r2.error);
     REQUIRE(r2.viscous);
@@ -324,4 +328,100 @@ TEST_CASE("viscous: build_case refuses what the coupling cannot run", "[turbolen
         set(bad);
         CHECK_THROWS_AS(build_case(bad, fixture::synthetic_section()), CaseError);
     }
+}
+
+TEST_CASE("viscous: the blade-station fraction f", "[turbolenza][viscous]")
+{
+    const Grid& g = synthetic_case().grid;
+    const std::vector<double> f = blade_station_fraction(g);
+    const int first = g.first_blade_i, last = g.last_blade_i, n = last - first;
+    REQUIRE(f.size() == static_cast<std::size_t>(n + 1));
+    // by hand: the stations are uniform in m (GridData.hpp), so f of blade station b is b / (last - first)
+    CHECK(f.front() == 0.0);
+    CHECK(f.back() == 1.0);
+    const int mid = n / 2;
+    CHECK(std::abs(f[static_cast<std::size_t>(mid)] - static_cast<double>(mid) / n) <= 1e-14);
+    double worst = 0.0;
+    for (int b = 0; b <= n; ++b) {
+        worst = std::max(worst, std::abs(f[static_cast<std::size_t>(b)] - static_cast<double>(b) / n));
+        // and its definition, (m_i - m_first) / (m_last - m_first)
+        const double m = g.m[static_cast<std::size_t>(first + b)], m0 = g.m[static_cast<std::size_t>(first)],
+                     m1 = g.m[static_cast<std::size_t>(last)];
+        if (b < n) CHECK(f[static_cast<std::size_t>(b)] == (m - m0) / (m1 - m0));
+    }
+    CHECK(sref::measure("viscous station fraction vs b / (last - first)", worst) <= 1e-14);
+    // degenerate grids are refused, not repaired
+    Grid one = g;
+    one.last_blade_i = one.first_blade_i;
+    CHECK_THROWS_AS(blade_station_fraction(one), BoundaryLayerError);
+    Grid flat = g;
+    flat.m[static_cast<std::size_t>(first + 1)] = flat.m[static_cast<std::size_t>(first)];
+    CHECK_THROWS_AS(blade_station_fraction(flat), BoundaryLayerError);
+    Grid out = g;
+    out.last_blade_i = static_cast<int>(out.m.size());
+    CHECK_THROWS_AS(blade_station_fraction(out), BoundaryLayerError);
+}
+
+TEST_CASE("viscous: the layers and bl_*.csv carry f beside x/c", "[turbolenza][viscous]")
+{
+    CaseSettings s = synthetic_settings();
+    s.viscous = true;
+    s.bl_coupling = BlCoupling::OneWay;
+    const Case c = build_case(s, fixture::synthetic_section());
+    const RunResult r = run_case(c);
+    INFO(r.error);
+    REQUIRE(r.converged);
+    REQUIRE(r.viscous);
+    const std::vector<double> f = blade_station_fraction(c.grid);
+    const ViscousData& v = *r.viscous;
+    for (const BoundaryLayerSurfaceData* d : {&v.suction, &v.pressure_side}) {
+        CHECK(d->f == f);
+        REQUIRE(d->x_c.size() == f.size());
+        // the event abscissae are the stations' own, on both axes
+        int tr = -1;
+        for (std::size_t k = 0; k < d->regime.size(); ++k)
+            if (d->regime[k] == "transition") tr = static_cast<int>(k);
+        REQUIRE(tr >= 0);
+        CHECK(d->transition_f == f[static_cast<std::size_t>(tr)]);
+        CHECK(d->transition_x_c == d->x_c[static_cast<std::size_t>(tr)]);
+        CHECK(std::isnan(d->laminar_separation_f) == std::isnan(d->laminar_separation_x_c));
+        CHECK(std::isnan(d->separation_f) == std::isnan(d->separation_x_c));
+    }
+    const auto dir = std::filesystem::path(BLADEGEN_TEST_OUTPUT) / "viscous_station_fraction";
+    std::filesystem::remove_all(dir);
+    (void)export_run(r, c, dir.string());
+    for (const auto& [name, d] : {std::pair{"bl_suction.csv", &v.suction}, std::pair{"bl_pressure.csv", &v.pressure_side}}) {
+        std::ifstream in(dir / name);
+        REQUIRE(in);
+        std::string line;
+        std::getline(in, line);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        CHECK(line == "x_c,f,x,W_e,rho_e,T_e,mu,theta,delta_star,delta,H,H_k,c_f,Lambda,Re_theta,regime,mass_deficit");
+        std::size_t k = 0;
+        while (std::getline(in, line)) {
+            std::stringstream row(line);
+            std::string x_c, fk, x;
+            std::getline(row, x_c, ',');
+            std::getline(row, fk, ',');
+            std::getline(row, x, ',');
+            REQUIRE(k < d->f.size());
+            CHECK(std::stod(x_c) == d->x_c[k]);
+            CHECK(std::stod(fk) == d->f[k]);
+            CHECK(std::stod(x) == d->x[k]);
+            ++k;
+        }
+        CHECK(k == d->f.size());
+    }
+}
+
+TEST_CASE("viscous: the coupling defaults are omega_BL 0.2 and 60 BL iterations", "[turbolenza][viscous]")
+{
+    // PORT.md "The Fig. 5-15 study": 0.5 diverges on the Dunavant case, 0.2 converges in 35 iterations
+    const CaseSettings s;
+    CHECK(s.bl_relaxation == 0.2);
+    CHECK(s.max_bl_iterations == 60);
+    const ViscousSettings v;
+    CHECK(v.relaxation == 0.2);
+    CHECK(v.max_iterations == 60);
+    CHECK(v.tolerance == s.bl_tolerance);
 }

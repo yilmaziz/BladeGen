@@ -58,11 +58,14 @@ enum class LoadingQuantity { Mach, Pressure, DunavantS };
 void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title,
                  const T::ViscousData* inviscid = nullptr);
 
-/// The boundary layer (Aungier 2003 Sec. 5.6) of both surfaces against x/c, transition (o) and
-/// separation (x) marked; overlay (H only): Aungier (2003) Fig. 5-15, digitized
-/// (tests/turbolenza/validation/aungier2003_fig5_15), as markers.
+/// The boundary layer (Aungier 2003 Sec. 5.6) of both surfaces against x/c or the blade-station fraction f,
+/// transition (o) and separation (x) marked; overlay (H only): Aungier (2003) Fig. 5-15, digitized
+/// (tests/turbolenza/validation/aungier2003_fig5_15), as markers.  The figure's abscissa is f as we read
+/// it (that folder's README, "Which abscissa"): the overlay compares like with like on f only.
 enum class BlQuantity { H, ThetaOverC, DeltaStarOverC, Cf, ReTheta };
-void drawBoundaryLayer(PlotWidget* w, const T::ViscousData& v, double chord, BlQuantity q, bool overlay, const QString& title);
+enum class BlAbscissa { ChordX, StationFraction };  ///< x/c of each wall node; f = (m - m_first)/(m_last - m_first)
+void drawBoundaryLayer(PlotWidget* w, const T::ViscousData& v, double chord, BlQuantity q, bool overlay, const QString& title,
+                       BlAbscissa abscissa = BlAbscissa::ChordX);
 /// The coupling history: max relative change of m per BL iteration (log y) with the tolerance.
 void drawBlChange(PlotWidget* w, const T::ViscousData& v, double tolerance);
 /// The coupling history: beta_out of each BL iteration's inviscid solve.

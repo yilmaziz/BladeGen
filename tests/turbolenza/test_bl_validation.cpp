@@ -1,4 +1,5 @@
-// The validation run of the boundary layer (hidden, "[.validation]": a report, not a pass/fail test):
+// The validation run of the boundary layer (hidden, "[.validation]": a report, not a pass/fail test),
+// and one pass/fail test: the Dunavant case's two-way coupling converges with the default omega_BL.
 // the Dunavant case of Aungier (2003) Fig. 5-15 on v1's frozen NACA 65-(12A10)10 blade, medium grid,
 // lambda_rho = lambda_K = 0.3, tolerances 1e-5, chord 0.127 m, T0 335 K, P0 from Re_ref 5.5e5 at M 0.30.
 //   (a) one way, both laminar c_f forms;  (b) two way, both wake models.
@@ -76,15 +77,6 @@ int first_of(const BoundaryLayerSurfaceData& d, const char* name)
     return -1;
 }
 
-// the blade-station fraction f = (m - m_first) / (m_last - m_first) of the wall stations of a solution
-std::vector<double> station_fraction(const Grid& g)
-{
-    std::vector<double> f;
-    const double m0 = g.m[static_cast<std::size_t>(g.first_blade_i)], m1 = g.m[static_cast<std::size_t>(g.last_blade_i)];
-    for (int i = g.first_blade_i; i <= g.last_blade_i; ++i) f.push_back((g.m[static_cast<std::size_t>(i)] - m0) / (m1 - m0));
-    return f;
-}
-
 struct Compare
 {
     double max_turbulent = 0.0, mean_turbulent = 0.0, max_laminar = 0.0;
@@ -135,10 +127,10 @@ void report(const std::string& name, const RunResult& r, const Case& c)
                 r.solution ? r.solution->exit_angle * 180.0 / 3.141592653589793 : std::nan(""), v.loss_omega, v.loss_Theta,
                 v.loss_Delta_star, v.te_jump_mismatch);
     if (v.suction.x_c.empty()) return;
-    const std::vector<double> f = station_fraction(c.grid);  // the blade stations are those of every grid of the case
     for (const auto& [label, d, fig] : {std::tuple{"SS", &v.suction, figure("H_suction.csv")},
                                         std::tuple{"PS", &v.pressure_side, figure("H_pressure.csv")}}) {
         const bool ss = label == std::string("SS");
+        const std::vector<double>& f = d->f;
         const int tr = first_of(*d, "transition"), sep = first_of(*d, "separated");
         const Compare cf = compare(f, *d, fig), cx = compare(d->x_c, *d, fig);
         std::printf("VALIDATION %s %s station fraction f: transition %.4f (fig %s), separation %.4f (fig %s); "
@@ -222,4 +214,39 @@ TEST_CASE("validation: Aungier (2003) Fig. 5-15, the Dunavant case on the medium
         report(run.name, r, c);
         CHECK(r.viscous);
     }
+}
+
+TEST_CASE("viscous: the Dunavant case's two-way coupling converges with the defaults", "[turbolenza][viscous][slow]")
+{
+    // PORT.md "The Fig. 5-15 study": omega_BL 0.5 (the old default) goes sonic at the SS TE in BL iteration 2;
+    // 0.2 converged in 35 iterations (constant wake), beta_out 25.87 deg
+    TURBOLENZA_CASCADE_OR_SKIP(ref);
+    const BladeSection section = fixture::v1_section(ref->family.at("cascade"));
+    CaseSettings s;
+    s.case_name = "dunavant_two_way_defaults";
+    s.chord = 0.127;
+    s.solidity = 1.0;
+    s.stagger_deg = 33.0;
+    s.inlet_flow_angle_deg = 45.0;
+    s.inlet_mach = 0.65;
+    s.inlet_total_temperature = 335.0;
+    s.inlet_total_pressure = total_pressure_for_reynolds(550000.0, 0.30, 335.0, 0.127, s.gamma, s.gas_constant, s.sutherland);
+    s.grid_level = std::string("medium");
+    s.density_relaxation = 0.3;
+    s.kutta_relaxation = 0.3;
+    s.density_tolerance = 1e-5;
+    s.kutta_tolerance = 1e-5;
+    s.viscous = true;
+    s.bl_coupling = BlCoupling::TwoWay;  // omega_BL, max_bl_iterations, wake model, tolerance: the defaults
+    const RunResult r = run_case(build_case(s, section));
+    INFO(r.error);
+    REQUIRE(r.viscous);
+    CHECK(r.converged);
+    const ViscousData& v = *r.viscous;
+    REQUIRE(!v.history.empty());
+    sref::measure("viscous Dunavant two-way defaults BL iterations", static_cast<double>(v.history.size() - 1));
+    const double beta = v.history.back().beta_out * 180.0 / 3.141592653589793;
+    sref::measure("viscous Dunavant two-way defaults beta_out [deg]", beta);
+    CHECK(v.history.back().max_change_m <= s.bl_tolerance);
+    CHECK(std::abs(beta - 25.868) < 0.01);  // measured 25.868286 deg (omega 0.2, 2026-11-24)
 }

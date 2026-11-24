@@ -209,39 +209,47 @@ found no case without suction-surface separation to compare: β1 42 deg and M1 0
 thinner separated layer) fits the known limit of direct, edge-velocity-driven coupling near separation, for
 which inverse and semi-inverse couplings exist. That is cited from general knowledge; no paper was opened.
 
-**Recommendation (not applied).** Set the default omega_BL to 0.2 and max_bl_iterations to 60. At 0.2 the
-reference case converged in 35 iterations (constant wake) and 34 (marched), above today's default limit of
-30. The independent check also ran 0.2 at β1 42 deg (35 iterations, 25.70 deg) and at M1 0.5 (36
-iterations, 25.75 deg). At 0.1 it took 74. The current default, 0.5, diverges on the reference case.
+**Defaults (changed 2026-11-24, the user's decision).** omega_BL = 0.2 and max_bl_iterations = 60. They
+were 0.5 and 30. Both live in `CaseSettings` and `ViscousSettings`, and the window's Solver page takes
+them from `CaseSettings`. At 0.2 the reference case converged in 35 iterations (constant wake) and 34
+(marched), above the old limit of 30. The independent check also ran 0.2 at β1 42 deg (35 iterations, 25.70 deg) and at M1 0.5 (36
+iterations, 25.75 deg). At 0.1 it took 74. The old default, 0.5, diverges on the reference case.
+A test checks that this case converges with the defaults (`test_bl_validation.cpp`, `[slow]`).
 
 The stability limit depends on the case. It comes from one eigenvalue estimate on one case, and 0.2 leaves
 a margin of only about 1.6 below it. Another blade, incidence or Mach number can have a stronger
 separated-tail response and a lower limit.
 
-**User decisions.**
+**Decisions (the user, 2026-11-24).**
 
-1. Accept the station-fraction reading of Fig. 5-15's axis. The validation now reports both abscissae.
-   Should the window and the files also give f for the transition and separation?
-2. Is the inviscid SS distribution against Fig. 5-6 (a potential-flow question) worth a study of its own?
-   - **Ruled out:** the Kutta condition or the exit angle, and the station count. very_coarse (21 stations)
-     matches medium within 0.003.
-   - **The circulation check.** Integrating Fig. 5-6's W_SS − W_PS over the interior stations gives
-     Γ ≥ 12.65 m²/s. Γ = s ΔW_u is 12.17 at Aungier's 24.4 deg and 12.51 at our 23.57 deg. So Fig. 5-6
-     carries more circulation yet less turning, which a potential flow of our blade, pitch and inlet cannot
-     do.
-   - **Candidates first:**
+1. **Station fraction.** The station-fraction reading of the axis is accepted. f is in
+   `BoundaryLayerSurfaceData` (`f`, `transition_f`, `separation_f`, `laminar_separation_f`;
+   `Viscous.hpp` `blade_station_fraction`) and in `bl_suction.csv` / `bl_pressure.csv` (the column after
+   `x_c`). The Boundary layer window has a selectable abscissa (x/c or f).
+2. **The inviscid SS study is later.** It is open item 1 below.
+3. **omega_BL 0.2 and 60 BL iterations are the defaults.** The limit, about 0.3, depends on the case
+   (above).
+4. **The laminar start stays as it is.** It is the backward difference of Eq. 5-106 from θ = 0, with
+   its first-order start error.
+5. **The Re reading stays** (fixed P0, T0 from Re 5.5e5 at M 0.30).
+
+**Open items.**
+
+1. **Our inviscid SS distribution against Fig. 5-6** (a potential-flow study, for later).
+   - Ruled out: the Kutta condition or the exit angle, and the station count (very_coarse with 21
+     stations matches medium within 0.003).
+   - The circulation check: Fig. 5-6's W_SS − W_PS over the interior stations gives Γ ≥ 12.65 m²/s,
+     against s ΔW_u = 12.17 at 24.4 deg and 12.51 at our 23.57 deg. That is more circulation with less
+     turning, which a potential flow of our blade, pitch and inlet cannot produce.
+   - Candidates first:
      - the blade geometry: the camber-line distribution and Aungier's Ch. 4 representation;
-     - the solidity or pitch: about 0.94 would reconcile the two, a hypothesis only;
+     - the solidity or pitch: about 0.94 would reconcile them, a hypothesis only;
      - the inlet definition.
-   - **The LE:** our SS/PS first-station Mach 0.77/0.34 against his 0.76/0.66. The stagnation point sits
+   - The LE: our SS/PS first-station Mach 0.77/0.34 against his 0.76/0.66. The stagnation point sits
      elsewhere.
-3. Keep or change the laminar start. The squared form removes the first-order start error, and shifts the
-   transition by about one medium-grid station.
-4. The default omega_BL and max_bl_iterations: 0.2 and 60 recommended (above); defaults unchanged.
-5. Keep the Re reading (no change made).
-6. An open point, not part of this question: at β1 = 40 deg the one-way layer fails at laminar station 2
-   ("no momentum thickness", dW/W = −0.26 in one step). The backward-difference station equation has no
-   root for such a step. Should it become an issue?
+2. **β1 = 40 deg, one way: the layer fails at laminar station 2.** The message is "no momentum
+   thickness", with dW/W = −0.26 in one step. The backward-difference station equation has no root for
+   such a step. Is it a refusal or a defect? Not yet decided.
 
 ## Not a port: the stream sheet and rotating rows
 

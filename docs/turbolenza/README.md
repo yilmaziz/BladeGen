@@ -29,8 +29,8 @@ Work through the tree on the left, top to bottom:
    - Linear solver: Eigen SparseLU, or Intel MKL PARDISO when BladeGen was built with MKL.
    - **Run** starts the solve and **Stop** ends it after the current pass.
    - **Boundary layer (Aungier Sec. 5.6):** off by default. One way, or two way by transpiration;
-     the laminar c_f form, the wake model, ω_BL, the tolerance, the BL iteration limit, the
-     transition Re_θ and the separation H_k. See "Boundary layer" below.
+     the laminar c_f form, the wake model, ω_BL (default 0.2), the tolerance, the BL iteration limit
+     (default 60), the transition Re_θ and the separation H_k. See "Boundary layer" below.
 5. **Run.** Every pass prints one line to the program's terminal and to the log pane. The residual
    plot is live. A viscous run prints "[BL iteration k]" at the start of each inviscid solve.
 6. **Post-processing.** After a run these open as separate windows:
@@ -39,9 +39,15 @@ Work through the tree on the left, top to bottom:
    - **Blade loading:** Mach, p or Dunavant's S against x/c. A two-way run shows the coupled
      loading, with the inviscid one (BL iteration 0) dashed beside it (a check box).
    - **Boundary layer:** H, θ/c, δ*/c, c_f or Re_θ of both surfaces, with transition (o) and
-     separation (x). For Aungier's case (β1 45°, M1 0.65, σ 1, stagger 33°) his Fig. 5-15 is
-     overlaid by default; the check box switches it for any case. Below: the coupling history
-     (change of m and β_out per BL iteration).
+     separation (x).
+     - The abscissa is selectable: x/c of each wall node, or the blade-station fraction
+       f = (m − m_first)/(m_last − m_first).
+     - f is the axis of Aungier's Fig. 5-15, as we read it (PORT.md, "The Fig. 5-15 study"). For
+       Aungier's case (β1 45°, M1 0.65, σ 1, stagger 33°) the figure is overlaid by default, and the
+       check box switches it on for any case. Compare against it on f.
+     - Below: the coupling history (change of m and β_out per BL iteration).
+     - `bl_suction.csv` and `bl_pressure.csv` give both x_c and f. Save results also writes
+       `bl_H_f.png`, H against f.
 
    **Save results...** writes CSV/JSON files and the plots as PNG to a folder you choose.
 
@@ -108,7 +114,8 @@ H against Fig. 5-15 (one way, 2 + Λ/6), at the figure's vertices downstream of 
   against about 2.6 in the figure;
 - TE: H = 2.511 (SS) and 1.564 (PS), against Aungier's 2.512 and 1.577.
 
-With the default ω_BL = 0.5 the two-way iteration diverges on this case. What was measured:
+With ω_BL = 0.5, the default until 2026-11-24, the two-way iteration diverges on this case. What was
+measured:
 
 - The inviscid speed of the last SS station falls by 16 % in its last step, so θ grows 2.7-fold in
   that step and δ* reaches 0.055 c.
@@ -120,6 +127,17 @@ With the default ω_BL = 0.5 the two-way iteration diverges on this case. What w
 With ω_BL = 0.2 the iteration contracts by about 0.77 per iteration and converges. The constant
 wake is continuous at the TE by construction (mismatch 0). The marched wake's first exit jump
 differs from the TE sum by 3.0e-3 mdot'.
+
+The defaults are now ω_BL = 0.2 and 60 BL iterations. The stability limit, about 0.3 on this case,
+depends on the case: it is one eigenvalue estimate from one case, and 0.2 leaves a margin of only about
+1.6 (PORT.md, "The Fig. 5-15 study"). If a two-way run oscillates and goes sonic at the SS trailing
+edge, lower ω_BL.
+
+On the blade-station fraction f, the axis of Fig. 5-15: the one-way SS transition is at 0.146, the
+station after f 0.122 (Re_θ 248), and the PS transition at 0.171 (0.130 and 0.173 in the figure).
+The SS separation is at 0.927 against 0.739. Fed with Aungier's own Fig. 5-6 Mach numbers on his 24
+stations, our layer lands on the figure's stations. The SS separation gap is therefore our inviscid SS
+Mach distribution (PORT.md).
 
 ## Stream surface and rotating rows (not in v1)
 

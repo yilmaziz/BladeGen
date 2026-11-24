@@ -43,5 +43,7 @@ if(TURBOLENZA_TESTS)
         set(_env "PATH=${BLADEGEN_OCCT_BIN_DIR}\;$ENV{PATH}")
         string(REPLACE ";" "\;" _env "${_env}")
     endif()
-    catch_discover_tests(test_turbolenza DISCOVERY_MODE PRE_TEST TEST_SPEC "${BLADEGEN_TEST_SPEC}" PROPERTIES ENVIRONMENT "${_env}")
+    # a v1-comparison test without its reference data SKIPs (Catch2 exit code 4): ctest reports it as skipped
+    catch_discover_tests(test_turbolenza DISCOVERY_MODE PRE_TEST TEST_SPEC "${BLADEGEN_TEST_SPEC}"
+                         PROPERTIES ENVIRONMENT "${_env}" SKIP_RETURN_CODE 4)
 endif()

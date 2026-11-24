@@ -42,7 +42,7 @@ TEST_CASE("matrix assembly: v1's F and Q entry by entry", "[turbolenza][assembly
 {
     TURBOLENZA_REF_OR_SKIP(d, "m065_very_coarse_12");
     for (int k = 0; k < 2; ++k) {
-        const ref::json& p = d.at("passes").at(k);
+        const ref::json& p = d.at("passes").at(static_cast<std::size_t>(k));
         const auto g = sref::grid(p.at("grid"));
         const GridMetrics metrics = sref::metrics(p.at("metrics"), g);
         const BoundaryConditions bcs = build_boundary_conditions(g);

@@ -16,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <limits>
 
 namespace sref {
 
@@ -104,7 +105,7 @@ inline double record_diff(const T::PassRecord& a, const json& b, std::string* wo
                                                        {"tan_correction", a.tan_correction}};
     double m = 0.0;
     auto take = [&](const char* name, double d) {
-        if (std::isnan(d)) d = INFINITY;
+        if (std::isnan(d)) d = std::numeric_limits<double>::infinity();
         if (d > m) {
             m = d;
             if (worst) *worst = name;

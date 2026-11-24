@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <limits>
 
 using namespace BladeGen::Turbolenza;
 
@@ -48,7 +49,7 @@ TEST_CASE("eos: refusals (nothing is clipped)", "[turbolenza][eos]")
     CHECK_THROWS_AS(PerfectGas(1.0, 287.0), ThermodynamicStateError);
     CHECK_THROWS_AS(PerfectGas(1.4, 0.0), ThermodynamicStateError);
     CHECK_THROWS_AS(TotalState(0.0, 288.0), ThermodynamicStateError);
-    CHECK_THROWS_AS(TotalState(1e5, NAN), ThermodynamicStateError);
+    CHECK_THROWS_AS(TotalState(1e5, std::numeric_limits<double>::quiet_NaN()), ThermodynamicStateError);
     const PerfectGas gas;
     const BladeRowReference ref = blade_row_reference(TotalState(101325.0, 288.15), gas);
     CHECK_THROWS_AS(blade_row_reference(TotalState(101325.0, 288.15), gas, 10.0), ThermodynamicStateError);
@@ -56,7 +57,7 @@ TEST_CASE("eos: refusals (nothing is clipped)", "[turbolenza][eos]")
     CHECK_THROWS_AS(static_state_at(W_max, gas, ref), ThermodynamicStateError);
     CHECK_THROWS_AS(static_state_at(-1.0, gas, ref), ThermodynamicStateError);
     Field W(1, 3, 100.0);
-    W.v[1] = NAN;
+    W.v[1] = std::numeric_limits<double>::quiet_NaN();
     CHECK_THROWS_AS(static_state_from_velocity(W, gas, ref), ThermodynamicStateError);
     const Field a(1, 3, 1.0), b(1, 3, 2.0);
     CHECK_THROWS_AS(relax_density(a, b, 0.0), ThermodynamicStateError);

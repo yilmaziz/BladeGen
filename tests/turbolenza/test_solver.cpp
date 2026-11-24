@@ -102,7 +102,7 @@ TEST_CASE("solver: v1 coupled passes 0 and 1 (pass 1 on v1's rebuilt grid)", "[t
     std::vector<std::string> checks;
     int seen = 0;
     o.inspect = [&](const PassFields& f) {
-        const ref::json& p = d.at("passes").at(seen);
+        const ref::json& p = d.at("passes").at(static_cast<std::size_t>(seen));
         const std::string tag = " pass " + std::to_string(seen);
         // pass 0 from the start state: SuperLU (v1) vs SparseLU round-off only; pass 1 carries
         // pass 0's differences through rho(1) and beta_out(1)

@@ -14,7 +14,7 @@ TEST_CASE("kutta: v1 residual and correction from v1's flow", "[turbolenza][kutt
 {
     TURBOLENZA_REF_OR_SKIP(d, "m065_very_coarse_12");
     for (int k = 0; k < 2; ++k) {
-        const ref::json& p = d.at("passes").at(k);
+        const ref::json& p = d.at("passes").at(static_cast<std::size_t>(k));
         const auto g = sref::grid(p.at("grid"));
         const GridMetrics m = sref::metrics(p.at("metrics"), g);
         const FlowField f = sref::flow(p.at("flow"));

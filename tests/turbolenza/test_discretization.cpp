@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <limits>
 
 using namespace BladeGen::Turbolenza;
 
@@ -100,7 +101,7 @@ TEST_CASE("discretization: refusals", "[turbolenza][discretization]")
     CHECK_THROWS_AS(interior_stencil(one, one, one, one, one, 0.0, 0.2), DiscretizationError);
     CHECK_THROWS_AS(interior_stencil(one, one, one, one, Field(9, 5, 1.0), 0.1, 0.2), DiscretizationError);
     Field bad(9, 6, 1.0);
-    bad(3, 3) = NAN;
+    bad(3, 3) = std::numeric_limits<double>::quiet_NaN();
     CHECK_THROWS_AS(interior_stencil(one, bad, one, one, one, 0.1, 0.2), DiscretizationError);
     auto ghost = [](int k) { return Elimination{{k, 6}, {Term{{k, 1}, 1.0}}, 1.0}; };
     // three inlet and four exit periodic stations are needed

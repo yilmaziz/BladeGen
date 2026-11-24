@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <limits>
 
 using namespace BladeGen::Turbolenza;
 
@@ -15,7 +16,7 @@ TEST_CASE("flow: v1 velocities from v1's psi", "[turbolenza][flow][v1ref]")
 {
     TURBOLENZA_REF_OR_SKIP(d, "m065_very_coarse_12");
     for (int k = 0; k < 2; ++k) {
-        const ref::json& p = d.at("passes").at(k);
+        const ref::json& p = d.at("passes").at(static_cast<std::size_t>(k));
         const auto g = sref::grid(p.at("grid"));
         const GridMetrics m = sref::metrics(p.at("metrics"), g);
         const BoundaryConditions b = build_boundary_conditions(g);
@@ -102,7 +103,7 @@ TEST_CASE("flow: uniform flow in a channel; the refusals", "[turbolenza][flow]")
     // a density other than the coefficients' own
     CHECK_THROWS_AS(velocity_components(psi, Field(31, 9, 1.2), c, m, b), FlowRecoveryError);
     Field bad = psi;
-    bad(3, 3) = NAN;
+    bad(3, 3) = std::numeric_limits<double>::quiet_NaN();
     CHECK_THROWS_AS(velocity_components(bad, Field(31, 9, rho), c, m, b), FlowRecoveryError);
     const BoundaryConditions other = build_boundary_conditions(std::make_shared<const Grid>(*g));
     CHECK_THROWS_AS(velocity_components(psi, Field(31, 9, rho), c, m, other), FlowRecoveryError);

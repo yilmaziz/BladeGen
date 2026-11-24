@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <vector>
+#include <limits>
 
 using namespace BladeGen::Turbolenza;
 
@@ -39,7 +40,7 @@ TEST_CASE("linear solver: psi of v1 passes from the assembled system", "[turbole
 {
     TURBOLENZA_REF_OR_SKIP(d, "m065_very_coarse_12");
     for (int k = 0; k < 2; ++k) {
-        const ref::json& p = d.at("passes").at(k);
+        const ref::json& p = d.at("passes").at(static_cast<std::size_t>(k));
         const auto g = sref::grid(p.at("grid"));
         const AssemblyResult a = assemble_from_coefficients(sref::coefficients(p.at("coefficients")),
                                                             sref::metrics(p.at("metrics"), g),
@@ -75,9 +76,9 @@ TEST_CASE("linear solver: a hand system, and the refusals", "[turbolenza][linear
         CHECK(std::abs(x[2] - 3.0) <= 1e-15);
         CHECK(residual_norm(F, x, Q) <= 1e-15);
         CHECK_THROWS_AS(solve(dense({{1.0, 1.0}, {1.0, 1.0}}), {1.0, 2.0}, kind), LinearSolveError);
-        CHECK_THROWS_AS(solve(dense({{1.0, 0.0}, {0.0, NAN}}), {1.0, 2.0}, kind), LinearSolveError);
+        CHECK_THROWS_AS(solve(dense({{1.0, 0.0}, {0.0, std::numeric_limits<double>::quiet_NaN()}}), {1.0, 2.0}, kind), LinearSolveError);
         CHECK_THROWS_AS(solve(F, {1.0, 2.0}, kind), LinearSolveError);
-        CHECK_THROWS_AS(solve(F, {1.0, INFINITY, 0.0}, kind), LinearSolveError);
+        CHECK_THROWS_AS(solve(F, {1.0, std::numeric_limits<double>::infinity(), 0.0}, kind), LinearSolveError);
         CHECK_THROWS_AS(solve(SparseMatrix(0, 0), {}, kind), LinearSolveError);
     }
     if (!pardiso_available()) CHECK_THROWS_AS(solve(F, Q, LinearSolverKind::Pardiso), LinearSolveError);

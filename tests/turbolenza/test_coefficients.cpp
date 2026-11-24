@@ -15,7 +15,7 @@ TEST_CASE("coefficients: v1 A..E from v1 metrics and density", "[turbolenza][coe
 {
     TURBOLENZA_REF_OR_SKIP(d, "m065_very_coarse_12");
     for (int k = 0; k < 2; ++k) {
-        const ref::json& p = d.at("passes").at(k);
+        const ref::json& p = d.at("passes").at(static_cast<std::size_t>(k));
         const auto g = sref::grid(p.at("grid"));
         const GridMetrics metrics = sref::metrics(p.at("metrics"), g);
         const CoefficientFields v1 = sref::coefficients(p.at("coefficients"));

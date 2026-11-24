@@ -297,7 +297,7 @@ void PlotWidget::drawAxes(QPainter& p, const QRect& r)
         const double sx = toScreen({0, 0}).x();
         p.drawLine(QPointF(sx, r.top()), QPointF(sx, r.bottom()));
     }
-    if (y0_ < 0 && y1_ > 0) {
+    if (y0_ < 0 && y1_ > 0 && !(logY && !swapAxes)) {  // no "zero" line on a log axis (it would be y = 1)
         const double sy = toScreen({0, 0}).y();
         p.drawLine(QPointF(r.left(), sy), QPointF(r.right(), sy));
     }

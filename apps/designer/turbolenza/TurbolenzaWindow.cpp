@@ -161,6 +161,7 @@ TurbolenzaWindow::TurbolenzaWindow(Session& s, QWidget* parent) : QMainWindow(pa
 
 TurbolenzaWindow::~TurbolenzaWindow()
 {
+    if (mesh_watch_) mesh_watch_->waitForFinished();
     if (ch_) ch_->cancel = true;
     if (worker_.joinable()) worker_.join();
 }
@@ -605,7 +606,7 @@ int TurbolenzaWindow::selfTest(const QString& dir, int passes)
     // 3. a very_coarse mesh
     showPage(kMesh);
     level_->setCurrentText("very_coarse");
-    if (!generateMesh()) return fail(("the very_coarse mesh failed: " + mesh_error_->text().toStdString()).c_str(), 24);
+    if (!generateMesh(true)) return fail(("the very_coarse mesh failed: " + mesh_error_->text().toStdString()).c_str(), 24);
     QApplication::processEvents();
     stack_->widget(kMesh)->grab().save(dir + "/tl_mesh.png");
     // 4. a short solve

@@ -27,6 +27,7 @@
 #include <QStandardItemModel>
 #include <QTabWidget>
 #include <QTimer>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QVBoxLayout>
 
 #include <cmath>
@@ -472,6 +473,7 @@ QWidget* TurbolenzaWindow::meshPage()
     f->addRow("downstream extension", ext_down_);
     v->addWidget(g);
     auto* gen = new QPushButton("Generate mesh", left);
+    gen_button_ = gen;
     v->addWidget(gen);
     mesh_error_ = new QLabel(left);
     mesh_error_->setWordWrap(true);
@@ -494,6 +496,8 @@ QWidget* TurbolenzaWindow::meshPage()
     for (auto* s : {n_passage_, n_eta_}) connect(s, &QSpinBox::valueChanged, this, [this] { mesh_case_.reset(); });
     for (auto* s : {ext_up_, ext_down_}) connect(s, &QDoubleSpinBox::valueChanged, this, [this] { mesh_case_.reset(); });
     connect(gen, &QPushButton::clicked, this, [this] { generateMesh(); });
+    mesh_watch_ = new QFutureWatcher<MeshJob>(this);
+    connect(mesh_watch_, &QFutureWatcher<MeshJob>::finished, this, [this] { meshFinished(); });
     page->addWidget(scrolled(left));
     grid_plot_ = new PlotWidget(page);
     page->addWidget(grid_plot_);
@@ -502,8 +506,9 @@ QWidget* TurbolenzaWindow::meshPage()
     return page;
 }
 
-bool TurbolenzaWindow::generateMesh()
+bool TurbolenzaWindow::generateMesh(bool wait)
 {
+    if (mesh_watch_->isRunning()) return false;
     mesh_error_->clear();
     mesh_info_->clear();
     mesh_case_.reset();
@@ -512,30 +517,49 @@ bool TurbolenzaWindow::generateMesh()
         mesh_error_->setText("the section cannot be built: " + section_error_);
         return false;
     }
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    QString err;
-    try {
-        mesh_case_ = T::build_case(settings(), *sec);
-    } catch (const T::GridTopologyError& e) {
-        err = QString("GridTopologyError: %1").arg(e.what());
-    } catch (const T::GridError& e) {
-        err = QString("GridError: %1").arg(e.what());
-    } catch (const T::CaseError& e) {
-        err = QString("CaseError: %1").arg(e.what());
-    } catch (const T::GeometryError& e) {
-        err = QString("GeometryError: %1").arg(e.what());
-    } catch (const std::exception& e) {
-        err = QString("error: %1").arg(e.what());
-    }
-    QApplication::restoreOverrideCursor();
-    if (!mesh_case_) {
-        mesh_error_->setText(err);
+    // build_case (cascade + grid; a standard level searches its candidates, ~0.35 s each) runs off
+    // the GUI thread
+    gen_button_->setEnabled(false);
+    mesh_info_->setText("generating the mesh...");
+    mesh_watch_->setFuture(QtConcurrent::run([st = settings(), b = *sec] {
+        MeshJob j;
+        try {
+            j.c = T::build_case(st, b);
+        } catch (const T::GridGenerationError& e) {
+            j.err = QString("GridGenerationError: %1").arg(e.what());
+            for (const auto& [why, n] : e.reasons) j.err += QString("\n  %1: %2 candidate(s)").arg(QString::fromStdString(why)).arg(n);
+        } catch (const T::GridTopologyError& e) {
+            j.err = QString("GridTopologyError: %1").arg(e.what());
+        } catch (const T::GridError& e) {
+            j.err = QString("GridError: %1").arg(e.what());
+        } catch (const T::CaseError& e) {
+            j.err = QString("CaseError: %1").arg(e.what());
+        } catch (const T::GeometryError& e) {
+            j.err = QString("GeometryError: %1").arg(e.what());
+        } catch (const std::exception& e) {
+            j.err = QString("error: %1").arg(e.what());
+        }
+        return j;
+    }));
+    if (!wait) return true;
+    while (mesh_watch_->isRunning() || !gen_button_->isEnabled()) QApplication::processEvents(QEventLoop::AllEvents, 50);
+    return mesh_case_.has_value();
+}
+
+void TurbolenzaWindow::meshFinished()
+{
+    MeshJob j = mesh_watch_->result();
+    gen_button_->setEnabled(true);
+    mesh_info_->clear();
+    if (!j.c) {
+        mesh_error_->setText(j.err);
         grid_plot_->setSeries({});
         grid_plot_->setFills({});
-        grid_plot_->setBadge({err, 2});
+        grid_plot_->setBadge({j.err, 2});
         grid_plot_->commit(true);
-        return false;
+        return;
     }
+    mesh_case_ = std::move(j.c);
     const auto& c = *mesh_case_;
     const auto& gr = c.grid;
     Tl::drawGrid(grid_plot_, gr);
@@ -593,7 +617,6 @@ bool TurbolenzaWindow::generateMesh()
     mesh_info_->setText(t);
     if (!ok) mesh_error_->setText("the first or last blade station does not cut one suction and one pressure surface");
     status_->setText(QString("mesh %1 x %2").arg(gr.n_m()).arg(gr.n_eta()));
-    return true;
 }
 
 // ── Solver ───────────────────────────────────────────────────────────────────

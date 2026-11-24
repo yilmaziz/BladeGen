@@ -27,6 +27,7 @@
 #include "turbolenza/BladeGenSource.hpp"
 #include "turbolenza/Case.hpp"
 
+#include <QFutureWatcher>
 #include <QMainWindow>
 
 #include <atomic>
@@ -65,9 +66,10 @@ public:
 
     /// Copies layer k of the open design (and its stagger and 2-D solidity) into the window.
     void takeLayer(int k);
-    /// Builds the case of the current settings and shows its grid; false (and the message on the
-    /// Mesh page) when the section, cascade or grid cannot be built.
-    bool generateMesh();
+    /// Builds the case of the current settings on a worker thread and shows its grid (or the
+    /// message on the Mesh page).  wait: block (with the event loop running) until it is built and
+    /// return whether it was; otherwise return whether the build started.
+    bool generateMesh(bool wait = false);
     void startRun();
     void stopRun();
     [[nodiscard]] bool running() const { return worker_.joinable(); }
@@ -82,6 +84,11 @@ protected:
 
 private:
     struct Channel;       // worker thread -> GUI
+    struct MeshJob
+    {
+        std::optional<BladeGen::Turbolenza::Case> c;
+        QString err;
+    };
     class Observer;
     class PostWindow;
 
@@ -97,6 +104,7 @@ private:
     void bladeChanged();       ///< layer_ edited: the section, cascade and mesh are stale
     void refreshProfile();
     void refreshCascade();
+    void meshFinished();
     void updateSolverEnabled();
     [[nodiscard]] BladeGen::Turbolenza::CaseSettings settings() const;
     void setCascadeDefaults(double stagger_deg, double solidity);
@@ -171,6 +179,8 @@ private:
     QSpinBox *n_passage_ = nullptr, *n_eta_ = nullptr;
     QDoubleSpinBox *ext_up_ = nullptr, *ext_down_ = nullptr;
     QLabel *mesh_info_ = nullptr, *mesh_error_ = nullptr;
+    QPushButton* gen_button_ = nullptr;
+    QFutureWatcher<MeshJob>* mesh_watch_ = nullptr;
     PlotWidget* grid_plot_ = nullptr;
 
     // solver page

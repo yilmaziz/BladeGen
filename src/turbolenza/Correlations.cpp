@@ -141,7 +141,8 @@ double design_attack_angle_deg(double ksh, double kti, double camber_deg, double
 
 double lieblein_zero_camber_incidence_deg(double beta1_deg, double solidity)
 {
-    require_beta1_nonnegative(beta1_deg, "Eq. 6-13");
+    require_angle(beta1_deg, "beta1", "Eq. 6-13");
+    if (beta1_deg < 0.0) return -lieblein_zero_camber_incidence_deg(-beta1_deg, solidity);  // odd extension (ours)
     require_positive(solidity, "solidity sigma", "Eq. 6-13");
     const double s3 = solidity * solidity * solidity;
     const double p = 0.914 + s3 / 160.0;  // [6-14]
@@ -193,7 +194,8 @@ LiebleinIncidence lieblein_design_incidence(double ksh, double kti, double stagg
 
 double lieblein_zero_camber_deviation_deg(double beta1_deg, double solidity)
 {
-    require_beta1_nonnegative(beta1_deg, "Eq. 6-20");
+    require_angle(beta1_deg, "beta1", "Eq. 6-20");
+    if (beta1_deg < 0.0) return -lieblein_zero_camber_deviation_deg(-beta1_deg, solidity);  // odd extension (ours)
     require_positive(solidity, "solidity sigma", "Eq. 6-20");
     return 0.01 * solidity * beta1_deg +
            (0.74 * std::pow(solidity, 1.9) + 3.0 * solidity) * std::pow(beta1_deg / 90.0, 1.67 + 1.09 * solidity);  // [6-20]
@@ -244,8 +246,7 @@ double howell_design_deviation_deg(double ksh, double ktd, double a_c, double ka
         refuse(std::format("Eq. 6-26: 1 - 0.002 theta/sqrt(sigma) = {} must be > 0 (theta = {} deg, sigma = {})", denom,
                            camber_deg, solidity));
     const double corr = ksh * ktd - 1.0;
-    // (delta*_0)_10 only when its factor is not zero (ours: a 10 % NACA profile then needs no beta1 >= 0)
-    const double d0 = corr != 0.0 ? lieblein_zero_camber_deviation_deg(beta1_deg, solidity) : 0.0;
+    const double d0 = lieblein_zero_camber_deviation_deg(beta1_deg, solidity);  // odd for beta1 < 0 (ours)
     return (0.92 * a_c * a_c + 0.002 * kappa2_deg) / denom * camber_deg / rs + corr * d0;  // [6-26]
 }
 
@@ -447,15 +448,18 @@ StallRanges stall_ranges(double design_attack_deg, double stagger_deg, double ca
 {
     require_finite(design_attack_deg, "alpha*", "Eqs. 6-47, 6-48");
     require_angle(stagger_deg, "stagger gamma", "Eqs. 6-47, 6-48");
-    require_finite(camber_deg, "theta", "Eqs. 6-47, 6-48");
+    if (!(std::isfinite(camber_deg) && camber_deg >= 0.0 && camber_deg < 90.0))
+        refuse(std::format("Eqs. 6-47, 6-48: the camber theta = {} deg must lie in [0, 90) deg", camber_deg));
     StallRanges r;
     // positive stall: beta_1s = gamma + alpha* + (alpha_s - alpha*)(beta_1s), linear in beta_1s [6-48]
     r.beta1s_deg = (stagger_deg + design_attack_deg + 10.3 + 2.92 * camber_deg / 8.2) /
                    (1.0 + camber_deg / (15.6 * 8.2));
     r.positive_deg = positive_stall_attack_offset_deg(r.beta1s_deg, camber_deg);  // R_s [6-50]
     // negative stall: beta_1c = gamma + alpha* + (alpha_c - alpha*)(max(beta_1c, 20)) [6-47], p. 135
-    // Ours: plain substitution from beta_1c = gamma + alpha* - 9 to |change| <= 1e-12 deg (the map's
-    // slope 0.48 (30/b)^0.48 theta/(4.176 b) is < 0.5 for b >= 20 deg, theta < 90 deg).
+    // Ours: plain substitution from beta_1c = gamma + alpha* - 9 to |change| <= 1e-12 deg.  It converges
+    // because the map is a contraction: its slope is 0.48 (30/b)^0.48 theta / (4.176 b) for b >= 20 deg,
+    // largest at b = 20 deg, where it is 0.0070 theta (0.63 at theta = 90 deg), and 0 below 20 deg (the
+    // limit holds the argument); camber is restricted to [0, 90) deg, so the Lipschitz constant is < 0.63.
     double b = stagger_deg + design_attack_deg - 9.0;
     for (int k = 1; k <= 500; ++k) {
         const double used = std::max(b, 20.0);
@@ -682,11 +686,11 @@ ShockLoss shock_loss(double mach1, double camber_deg, double tb_c, double stagge
     require_positive(mach1, "M'_1", "Sec. 6.7");
     require_gamma(gamma);
     ShockLoss s;
-    s.geometry = shock_expansion_geometry(camber_deg, tb_c, stagger_deg, solidity);
-    if (mach1 <= 1.0) {  // no bow shock
+    if (mach1 <= 1.0) {  // no bow shock; the geometry of Fig. 6-17 is not needed (nor checked)
         s.surface_mach = s.shock_mach = mach1;
         return s;
     }
+    s.geometry = shock_expansion_geometry(camber_deg, tb_c, stagger_deg, solidity);
     s.surface_mach = prandtl_meyer_mach(prandtl_meyer_angle(mach1, gamma) + rad(s.geometry.expansion_deg), gamma);  // [6-70]
     s.shock_mach = std::sqrt(mach1 * s.surface_mach);                                                             // [6-71]
     s.total_pressure_ratio = normal_shock_total_pressure_ratio(s.shock_mach, gamma);
@@ -744,8 +748,8 @@ double seal_contraction_ratio(double clearance_over_fin_thickness)
 double seal_throttling_coefficient(int fins, double pressure_ratio)
 {
     if (fins < 1) refuse(std::format("Eq. 6-93: the number of fins N = {} must be >= 1", fins));
-    if (!(std::isfinite(pressure_ratio) && pressure_ratio >= 0.0 && pressure_ratio < 1.0))
-        refuse(std::format("Eq. 6-93: the seal pressure ratio P_R = {} (lower / higher) must lie in [0, 1)", pressure_ratio));
+    if (!(std::isfinite(pressure_ratio) && pressure_ratio >= 0.0 && pressure_ratio <= 1.0))
+        refuse(std::format("Eq. 6-93: the seal pressure ratio P_R = {} (lower / higher) must lie in [0, 1]", pressure_ratio));
     const double n = static_cast<double>(fins);
     // Aungier (2000) Eq. 4-35, p. 64: 2.143 [ln(N) - 1.464] / (N - 4.322); the 2003 Eq. 6-93 is
     // printed 2.143 ln(N) - 1.464 (negative for N = 2..4, a pole at 4.322).  N is an integer, so
@@ -801,7 +805,7 @@ ShroudSealLoss shroud_seal_loss(const ShroudSealInput& in)
 }
 
 // ================================================================================================
-// The row-level leakage call (contract Sec. 4.1 B) and the p. 147 distribution
+// The row-level leakage call (Secs. 6.9, 6.10) and the p. 147 distribution
 // ================================================================================================
 
 RowLeakage endwall_leakage(const RowWallData& row, const WallState& qn1, const WallState& qn2, double mass_flow,
@@ -824,7 +828,7 @@ RowLeakage endwall_leakage(const RowWallData& row, const WallState& qn1, const W
         t.rho2 = qn2.density;
         t.cm1 = qn1.cm;
         t.cm2 = qn2.cm;
-        const double sd = static_cast<double>(row.row_sign);  // cascade signs (contract Sec. 2.3)
+        const double sd = static_cast<double>(row.row_sign);  // cascade signs (ours; |tau| makes it immaterial)
         t.ctheta1 = sd * qn1.ctheta;
         t.ctheta2 = sd * qn2.ctheta;
         t.mean_density = 0.5 * (qn1.density + qn2.density);  // rho_bar of 6-87, 6-88: ours (undefined in the book)
@@ -853,7 +857,7 @@ RowLeakage endwall_leakage(const RowWallData& row, const WallState& qn1, const W
     r.seal = shroud_seal_loss(si);
     r.total_pressure_loss = r.seal.total_pressure_loss;
     r.leakage_mass_flow = r.seal.leakage_mass_flow;
-    r.seal_flow_direction = qn2.pressure > qn1.pressure ? 1 : -1;
+    r.seal_flow_direction = qn2.pressure > qn1.pressure ? 1 : (qn2.pressure < qn1.pressure ? -1 : 0);
     return r;
 }
 
@@ -914,7 +918,7 @@ CascadePerformance evaluate(const CascadeGeometry& geo, const InletState& in, co
 
     CascadePerformance r;
 
-    // ---- the cascade frame: s_row (contract Sec. 0.2), then Aungier's p. 128 flip for a guide vane
+    // ---- the cascade frame: s_row (the caller's), then Aungier's p. 128 flip for a guide vane
     // of negative camber; a non-IGV row of negative camber after s_row is refused
     const bool igv = geo.kind == BladeRowKind::InletGuideVane;
     int s = geo.row_sign;
@@ -935,7 +939,7 @@ CascadePerformance evaluate(const CascadeGeometry& geo, const InletState& in, co
     const double u_ratio = sd * in.omega * in.radius / in.wm;  // U1 / W_m1: a tangential velocity, sign-changed too
     const double sigma = geo.solidity, tb = geo.thickness_ratio, ac = geo.max_camber_position;
     require_angle(beta1, "beta1", "InletState");
-    // Re_c = rho1 W1 c / mu1 (ours, contract F12)
+    // Re_c = rho1 W1 c / mu1 (ours: the book gives no formula)
     if (in.density > 0.0 && in.viscosity > 0.0)
         r.reynolds = in.density * std::hypot(in.wm, in.wtheta) * geo.chord / in.viscosity;
 
@@ -1004,7 +1008,7 @@ CascadePerformance evaluate(const CascadeGeometry& geo, const InletState& in, co
         require_positive(geo.pitch_over_height, "pitch over height s/h", "CascadeGeometry (Eq. 6-99)");
         k1 = 0.0073;  // p. 150
         const double k_re = opt.reynolds_correction ? reynolds_factor(r.reynolds) : 0.0;  // [6-101], [6-102]
-        k2 = aspect_ratio_k2(geo.pitch_over_height, b2s, k_re, k1);                       // [6-99], [6-100]
+        k2 = aspect_ratio_k2(geo.pitch_over_height, b2s, k_re, k1);  // [6-99], [6-100] at beta2* (ours)
         break;
     }
     }
@@ -1028,7 +1032,16 @@ CascadePerformance evaluate(const CascadeGeometry& geo, const InletState& in, co
     }
 
     // ---- stall incidence, low speed (Sec. 6.5)
-    const StallRanges sr = stall_ranges(r.design_attack_deg, gamma_d, theta);
+    StallRanges sr = stall_ranges(r.design_attack_deg, gamma_d, theta);
+    if (opt.stall_ranges == StallRangeModel::DunavantA4K6) {
+        if (geo.camberline != Camberline::NacaA4K6)
+            refuse("StallRangeModel::DunavantA4K6: Dunavant's constant ranges are quoted for the A4K6 camberline only (p. 136)");
+        sr.negative_deg = sr.positive_deg = 10.0;  // alpha_s - alpha* = 10, alpha_c - alpha* = -10 deg (p. 136)
+        r.notes.push_back("stall ranges R_c = R_s = 10 deg (Dunavant 1957 for A4K6, p. 136) instead of Eqs. 6-47, 6-48");
+    } else if (geo.camberline == Camberline::NacaA4K6) {
+        r.notes.push_back("A4K6 stall ranges from Eqs. 6-47, 6-48 (Aungier's practice, p. 136); Dunavant's constant "
+                          "+-10 deg is StallRangeModel::DunavantA4K6");
+    }
     r.stall_range_negative_deg = sr.negative_deg;
     r.stall_range_positive_deg = sr.positive_deg;
     r.beta1_negative_stall_deg = sr.beta1c_deg;

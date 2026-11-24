@@ -129,7 +129,10 @@ TEST_CASE("Sec. 6.2 design incidence: Eqs. 6-8 .. 6-18", "[turbolenza][correlati
               Approx(std::pow(40.0, p) / (5.0 + 46.0 * std::exp(-2.3)) - 0.1 * std::exp(-7.5)).margin(1e-12));
     }
     CHECK(std::abs(lieblein_zero_camber_incidence_deg(0.0, 1.0)) < 1e-8);  // passes through 0 (Fig. 6-4)
-    CHECK_THROWS_AS(lieblein_zero_camber_incidence_deg(-1.0, 1.0), CorrelationError);
+    // beta1 < 0: the odd extension of the zero-camber function (ours, Correlations.hpp)
+    CHECK(lieblein_zero_camber_incidence_deg(-30.0, 1.2) == -lieblein_zero_camber_incidence_deg(30.0, 1.2));
+    CHECK_THROWS_AS(lieblein_zero_camber_incidence_deg(-90.0, 1.0), CorrelationError);
+    CHECK_THROWS_AS(lieblein_incidence_slope(-1.0, 1.0), CorrelationError);  // n multiplies a positive camber
     // slope factor n (6-15): Fig. 6-5 at sigma 0.4: -0.46 at 70 deg, -0.05 at 0 deg
     CHECK(lieblein_incidence_slope(70.0, 0.4) == Approx(-0.462).margin(0.01));
     CHECK(lieblein_incidence_slope(0.0, 0.4) == Approx(-0.05).margin(1e-12));
@@ -147,6 +150,16 @@ TEST_CASE("Sec. 6.2 design incidence: Eqs. 6-8 .. 6-18", "[turbolenza][correlati
         CHECK(li.pseudo_kappa1_deg == Approx(ba.kappa1_deg).margin(1e-12));
         CHECK(li.incidence_deg == Approx(li.pseudo_incidence_deg).margin(1e-12));
         CHECK(li.iterations > 1);
+        // gamma < 0 (a sign-changed guide vane): kappa1_bar = |gamma| + theta/2 (6-16), alpha* from 6-17,
+        // i* from 6-18 with the true gamma and kappa1
+        const BladeAngles bn = blade_angles(Camberline::ParabolicArc, -10.0, 25.0, 0.4);
+        const LiebleinIncidence ln = lieblein_design_incidence(1.0, kti, -10.0, 25.0, 0.4, bn.kappa1_deg, 1.2);
+        CHECK(ln.pseudo_kappa1_deg == Approx(22.5).margin(1e-14));
+        const double bb = 22.5 + ln.pseudo_incidence_deg;
+        CHECK(ln.pseudo_incidence_deg ==
+              Approx(kti * lieblein_zero_camber_incidence_deg(bb, 1.2) + lieblein_incidence_slope(bb, 1.2) * 25.0).margin(1e-11));
+        CHECK(ln.attack_deg == Approx(22.5 + ln.pseudo_incidence_deg - 10.0 - 0.1 * 25.0).margin(1e-12));
+        CHECK(ln.incidence_deg == Approx(ln.attack_deg - 10.0 - bn.kappa1_deg).margin(1e-12));
         // a/c != 0.5: Eq. 6-17 shifts alpha* by (a/c - 0.5) theta
         const LiebleinIncidence l4 = lieblein_design_incidence(1.1, kti, 30.0, 25.0, 0.4, ba.kappa1_deg, 1.2);
         CHECK(l4.attack_deg - li.attack_deg == Approx(-0.1 * 25.0).margin(1e-12));
@@ -160,6 +173,11 @@ TEST_CASE("Sec. 6.3 design deviation: Eqs. 6-19 .. 6-26", "[turbolenza][correlat
     CHECK(lieblein_zero_camber_deviation_deg(70.0, 1.0) == Approx(2.57).margin(0.03));
     CHECK(lieblein_zero_camber_deviation_deg(70.0, 2.0) == Approx(4.73).margin(0.05));
     CHECK(lieblein_zero_camber_deviation_deg(0.0, 1.0) == 0.0);
+    // beta1 < 0: the odd extension (ours), continuous at 0 with the slope 0.01 sigma of Eq. 6-20 from both sides
+    CHECK(lieblein_zero_camber_deviation_deg(-25.0, 0.9) == -lieblein_zero_camber_deviation_deg(25.0, 0.9));
+    CHECK((lieblein_zero_camber_deviation_deg(1e-6, 1.3) - lieblein_zero_camber_deviation_deg(-1e-6, 1.3)) / 2e-6 ==
+          Approx(0.013).margin(1e-9));
+    CHECK_THROWS_AS(deviation_incidence_slope(-1.0, 1.0), CorrelationError);  // 6-76: no extension
     // m_1.0 (Fig. 6-7) at 70 deg and sigma 1: 0.310 NACA 65, 0.3445 circular arc; 0.17 / 0.249 at 0
     CHECK(lieblein_deviation_slope(Camberline::Naca65, 70.0, 1.0) == Approx(0.17 - 0.0333 * 0.7 + 0.333 * 0.49).margin(1e-14));
     CHECK(lieblein_deviation_slope(Camberline::Naca65, 70.0, 1.0) == Approx(0.310).margin(0.002));
@@ -279,6 +297,13 @@ TEST_CASE("Sec. 6.5 stall incidence: Eqs. 6-47 .. 6-50", "[turbolenza][correlati
     CHECK(r.positive_deg == Approx(r.beta1s_deg - 40.0).margin(1e-11));
     CHECK(r.negative_deg == Approx(40.0 - r.beta1c_deg).margin(1e-11));
     CHECK_FALSE(r.beta1c_limited);
+    // the corner of the contraction (beta_1c ~ 21 deg, theta = 89.9 deg: slope ~0.59 there) still converges
+    // to the fixed point; theta = 90 deg is outside the domain
+    const StallRanges corner = stall_ranges(14.02, 20.0, 89.9);
+    CHECK_FALSE(corner.beta1c_limited);
+    CHECK(corner.beta1c_deg < 22.0);
+    CHECK(corner.beta1c_deg == Approx(34.02 + negative_stall_attack_offset_deg(corner.beta1c_deg, 89.9)).margin(1e-11));
+    CHECK_THROWS_AS(stall_ranges(14.02, 20.0, 90.0), CorrelationError);
     // a low-stagger cascade: beta_1c < 20 deg, Eq. 6-47 at 20 deg (Aungier's limit)
     const StallRanges lo = stall_ranges(5.0, 5.0, 20.0);
     CHECK(lo.beta1c_limited);
@@ -358,6 +383,9 @@ TEST_CASE("Sec. 6.7 shock loss: Eqs. 6-61 .. 6-75 (perfect gas)", "[turbolenza][
     CHECK(normal_shock_total_pressure_ratio(2.0, 1.4) == Approx(0.72087).margin(1e-5));
     // the shock loss: 0 subsonic, positive and growing above M = 1; omega_s = (1 - P_t2/P_t1)/(1 - P1/P_t1)
     CHECK(shock_loss(0.9, 10.0, 0.05, 50.0, 1.2, 1.4).loss == 0.0);
+    // subsonic: the Fig. 6-17 geometry is not built, so gamma + theta_u/2 >= 90 deg is no refusal there
+    CHECK(shock_loss(0.5, 45.0, 0.12, 55.0, 1.0, 1.4).loss == 0.0);
+    CHECK_THROWS_AS(shock_loss(1.2, 45.0, 0.12, 55.0, 1.0, 1.4), CorrelationError);
     const ShockLoss s = shock_loss(1.3, 10.0, 0.05, 50.0, 1.2, 1.4);
     CHECK(s.surface_mach > 1.3);
     CHECK(s.shock_mach == Approx(std::sqrt(1.3 * s.surface_mach)).margin(1e-15));  // 6-71: the geometric mean
@@ -474,7 +502,8 @@ TEST_CASE("Secs. 6.9, 6.10 tip clearance and shroud seal: Eqs. 6-85 .. 6-96", "[
           Approx(1.0 + (13.15 + 0.1625 * 15.0) * (0.05 - 1.32 * std::log(1.05)) / (1.0 - 1.32)).margin(1e-14));
     CHECK(seal_carryover_coefficient(4, 0.05) > 1.0);
     CHECK_THROWS_AS(seal_throttling_coefficient(0, 0.5), CorrelationError);
-    CHECK_THROWS_AS(seal_throttling_coefficient(3, 1.0), CorrelationError);
+    CHECK(seal_throttling_coefficient(3, 1.0) == 0.0);  // P_R = 1: no pressure difference, no throttled flow
+    CHECK_THROWS_AS(seal_throttling_coefficient(3, 1.01), CorrelationError);
 
     ShroudSealInput s;
     s.seal_radius = 0.15;
@@ -753,6 +782,16 @@ TEST_CASE("the row-level leakage call and the p. 147 distribution", "[turbolenza
     row.fin_pitch = 0.004;
     const Gas gas{1.4, 287.0};
     const RowLeakage s = endwall_leakage(row, a, b, 30.0, gas);
+    // P1 = P2: no pressure difference, no leakage, no direction (C_t = 0 at P_R = 1)
+    {
+        WallState be = b;
+        be.pressure = a.pressure;
+        const RowLeakage z = endwall_leakage(row, a, be, 30.0, gas);
+        CHECK(z.leakage_mass_flow == 0.0);
+        CHECK(z.total_pressure_loss == 0.0);
+        CHECK(z.seal_flow_direction == 0);
+        CHECK(endwall_leakage(row, b, a, 30.0, gas).seal_flow_direction == -1);
+    }
     ShroudSealInput si;
     si.seal_radius = 0.15;
     si.clearance = 0.0004;
@@ -783,4 +822,140 @@ TEST_CASE("the row-level leakage call and the p. 147 distribution", "[turbolenza
     CHECK_THROWS_AS(leakage_loss_at(100.0, 1.1, EndWall::Hub), CorrelationError);
     CHECK(loss_coefficient_from_pressure(500.0, 1.2e5, 1.0e5) == Approx(0.025).margin(1e-16));
     CHECK_THROWS_AS(loss_coefficient_from_pressure(500.0, 1.0e5, 1.0e5), CorrelationError);
+}
+
+TEST_CASE("evaluate: guide vanes of every profile, the off-design and design W_max, i_m != i*, choke angle",
+          "[turbolenza][correlations]")
+{
+    const CorrelationOptions opt;
+    const Gas gas;
+
+    // ---- inlet guide vanes: Eq. 6-26 for ALL of them (p. 128), also non-NACA and t_b/c != 0.1, where
+    // the sign-changed beta1* < 0 needs the odd extension of (delta*_0)_10
+    const auto vane = [](ProfileFamily pf, Camberline cl, double ac, double tb, double stagger_deg) {
+        CascadeGeometry v;
+        v.kind = BladeRowKind::InletGuideVane;
+        v.profile = pf;
+        v.camberline = cl;
+        v.max_camber_position = ac;
+        v.chord = 0.06;
+        v.solidity = 1.0;
+        v.stagger = stagger_deg * kDeg;
+        v.camber = -25.0 * kDeg;
+        v.thickness_ratio = tb;
+        v.throat_over_pitch = 0.85;
+        v.pitch_over_height = 0.3;
+        return v;
+    };
+    const InletState axial = inlet(0.0, 0.3);
+    struct Case
+    {
+        ProfileFamily pf;
+        Camberline cl;
+        double ac, tb;
+    };
+    for (const Case& c : {Case{ProfileFamily::Naca, Camberline::NacaA4K6, 0.4, 0.08},
+                          Case{ProfileFamily::Naca, Camberline::NacaA4K6, 0.4, 0.06},
+                          Case{ProfileFamily::C4, Camberline::ParabolicArc, 0.4, 0.10},
+                          Case{ProfileFamily::C4, Camberline::CircularArc, 0.5, 0.10},
+                          Case{ProfileFamily::DoubleCircularArc, Camberline::CircularArc, 0.5, 0.05}}) {
+        const CascadeGeometry v = vane(c.pf, c.cl, c.ac, c.tb, 12.0);
+        CorrelationOptions oa = opt;
+        oa.lieblein_alpha = 0.007;  // needed for the DCA vane at i > i* (6-38); it does not enter the deviation
+        const CascadePerformance p = evaluate(v, axial, discharge(axial), gas, oa);
+        CHECK(p.frame_sign == -1);
+        CHECK(p.design_beta1_deg < 0.0);  // the extension is exercised
+        const double ksh = profile_shape_factor(c.pf), ktd = deviation_thickness_factor(c.tb);
+        const BladeAngles ba = blade_angles(c.cl, -12.0, 25.0, c.ac);
+        // the hand value of 6-26 with (delta*_0)_10(beta1*) = -(delta*_0)_10(-beta1*)
+        const double rs = 1.0;
+        const double hand = (0.92 * c.ac * c.ac + 0.002 * ba.kappa2_deg) / (1.0 - 0.002 * 25.0 / rs) * 25.0 / rs -
+                            (ksh * ktd - 1.0) * lieblein_zero_camber_deviation_deg(-p.design_beta1_deg, 1.0);
+        CHECK(p.design_deviation_deg == Approx(hand).margin(1e-12));
+        CHECK(p.beta2 == Approx(-(ba.kappa2_deg + p.deviation_deg) * kDeg).margin(1e-15));
+    }
+    // a NACA 65 / circular-arc guide vane goes to Howell too, not to Lieblein's 6-19
+    {
+        const CascadeGeometry v = vane(ProfileFamily::Naca, Camberline::Naca65, 0.5, 0.10, 2.0);
+        const CascadePerformance p = evaluate(v, axial, discharge(axial), gas, opt);
+        const BladeAngles ba = blade_angles(Camberline::Naca65, -2.0, 25.0, 0.5);
+        const double howell = howell_design_deviation_deg(1.0, 1.0, 0.5, ba.kappa2_deg, 25.0, p.design_beta1_deg, 1.0);
+        CHECK(p.design_deviation_deg == Approx(howell).margin(1e-13));
+        CHECK(std::abs(howell - lieblein_design_deviation_deg(Camberline::Naca65, 1.0, 1.0, p.design_beta1_deg, 25.0, 1.0)) > 0.5);
+        // beta1* >= 0 here (stagger 2 deg): Eq. 6-76 would be defined, and still the guide vane's deviation
+        // does not move with incidence (6-77 without its incidence term, p. 144)
+        CHECK(p.design_beta1_deg > 0.0);
+        const InletState turned = inlet(-6.0 * kDeg, 0.3);  // +6 deg in the sign-changed cascade frame
+        const CascadePerformance q = evaluate(v, turned, discharge(turned), gas, opt);
+        CHECK(q.incidence_deg - p.incidence_deg == Approx(6.0).margin(1e-12));
+        CHECK(q.deviation_deg == Approx(p.deviation_deg).margin(1e-13));
+        CHECK(q.deviation_deg == Approx(p.design_deviation_deg).margin(1e-13));
+        CHECK(6.0 * deviation_incidence_slope(p.design_beta1_deg, 1.0) > 0.25);  // a non-IGV would add 0.27 deg (measured)
+    }
+    // the A4K6 stall ranges: Eqs. 6-47 / 6-48 by default (noted), Dunavant's 10 deg on request
+    {
+        const CascadeGeometry v = vane(ProfileFamily::Naca, Camberline::NacaA4K6, 0.4, 0.08, 12.0);
+        const CascadePerformance h = evaluate(v, axial, discharge(axial), gas, opt);
+        CorrelationOptions od = opt;
+        od.stall_ranges = StallRangeModel::DunavantA4K6;
+        const CascadePerformance d = evaluate(v, axial, discharge(axial), gas, od);
+        CHECK(d.stall_range_negative_deg == 10.0);
+        CHECK(d.stall_range_positive_deg == 10.0);
+        CHECK(d.positive_stall_incidence_deg == Approx(d.design_incidence_deg + 10.0 / (1.0 + 0.5 * 0.027)).margin(1e-12));
+        CHECK(h.stall_range_positive_deg != 10.0);
+        CHECK_FALSE(h.notes.empty());
+        const CascadeGeometry nv = vane(ProfileFamily::Naca, Camberline::Naca65, 0.5, 0.10, 2.0);
+        CHECK_THROWS_AS(evaluate(nv, axial, discharge(axial), gas, od), CorrelationError);
+    }
+
+    // ---- i > i*: W_max/W1 of 6-39 with alpha (i - i*)^1.43 in DEGREES, and D_eq of 6-30
+    const CascadeGeometry g = naca_cascade();
+    const InletState d0i = inlet(0.0, 0.4);
+    const CascadePerformance d0 = evaluate(g, d0i, discharge(d0i), gas, opt);
+    {
+        const InletState hi = inlet((d0.design_beta1_deg + 5.0) * kDeg, 0.4);
+        const CascadePerformance p = evaluate(g, hi, discharge(hi), gas, opt);
+        const double exc = p.incidence_deg - p.design_incidence_deg;
+        CHECK(exc == Approx(5.0).margin(1e-12));
+        const double wmax = 1.12 + 0.61 * cosd(p.beta1_deg) * cosd(p.beta1_deg) / 1.2 * (tand(p.beta1_deg) - tand(p.beta2_deg)) +
+                            0.0117 * std::pow(5.0, 1.43);  // 0.0117 * 10.0 = 0.117
+        CHECK(p.wmax_ratio == Approx(wmax).margin(1e-12));
+        CHECK(p.d_eq == Approx(wmax * cosd(p.beta2_deg) / cosd(p.beta1_deg)).margin(1e-12));
+        CHECK(0.0117 * std::pow(5.0, 1.43) > 0.1);  // the radian reading would give 0.0117 * 0.087^1.43 = 3e-4
+    }
+
+    // ---- the design W_max* and D_eq* of a rotating row with r2 != r1 (6-39 at i*, Klapproth's terms)
+    {
+        const InletState ip = inlet((d0.design_beta1_deg + 2.0) * kDeg, 0.4, 100.0, 0.3, 1.2 * 100.0 / 0.3);
+        const CascadePerformance p = evaluate(g, ip, discharge(ip, 0.95, 1.05), gas, opt);
+        const double b1 = p.design_beta1_deg, b2 = p.design_beta2_deg;
+        const double wmax = 1.12 + 0.61 * cosd(b1) * cosd(b1) / 1.2 * (tand(b1) - 1.05 * 0.95 * tand(b2) + 1.2 * (1.0 - 1.05 * 1.05));
+        CHECK(p.wmax_ratio_design == Approx(wmax).margin(1e-12));
+        CHECK(p.d_eq_design == Approx(wmax * cosd(b2) / (cosd(b1) * 0.95)).margin(1e-12));
+    }
+
+    // ---- the choke angle (6-53) by hand, and omega_m with i_m != i* (6-55, 6-58 with R_s, 6-60)
+    {
+        const InletState i85 = inlet(d0.design_beta1_deg * kDeg, 0.85);
+        const CascadePerformance m = evaluate(g, i85, discharge(i85), gas, opt);
+        const double flux = 0.85 * std::pow(2.4 / (2.0 + 0.4 * 0.85 * 0.85), 3.0);  // (g+1)/(2(g-1)) = 3 for g = 1.4
+        CHECK(m.choke_beta1_deg == Approx(std::acos(0.7 / flux) / kDeg).margin(1e-11));
+        CascadeGeometry gc = g;
+        gc.throat_over_pitch = 0.69;
+        const CascadePerformance c = evaluate(gc, i85, discharge(i85), gas, opt);
+        REQUIRE(c.choke_limit_active);
+        CHECK(c.choke_beta1_deg == Approx(std::acos(0.69 / flux) / kDeg).margin(1e-11));
+        const double rc = c.stall_range_negative_deg, rsr = c.stall_range_positive_deg;
+        REQUIRE(std::abs(rc - rsr) > 0.4);  // R_c and R_s differ (by 0.497 deg, measured): the R_s of 6-58 is tested
+        CHECK(c.minimum_loss_incidence_deg == Approx(c.negative_stall_incidence_deg + (c.positive_stall_incidence_deg -
+                                                                                      c.negative_stall_incidence_deg) *
+                                                                                         rc / (rc + rsr))
+                                                  .margin(1e-12));
+        const double dm = (c.minimum_loss_incidence_deg - c.design_incidence_deg) / rsr;
+        double wm = c.losses.design * (1.0 + dm * dm);  // 6-58 with the low-speed R_s
+        const double ws = std::sqrt((2.0 + 0.4 * 0.85 * 0.85) / (2.4 * 0.85 * 0.85));
+        if (0.85 > c.critical_mach) wm += std::pow((0.85 / c.critical_mach - 1.0) * ws, 2);  // 6-60, K_sh = 1
+        CHECK(c.losses.minimum == Approx(wm).margin(1e-14));
+        CHECK(c.minimum_loss_incidence_deg - c.design_incidence_deg > 0.5);
+    }
 }

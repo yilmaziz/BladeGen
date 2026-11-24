@@ -116,6 +116,25 @@ TEST_CASE("Dunavant's NACA 65-(12A10)10 cascade: design incidence, deviation, lo
         CHECK(p.d_factor == Catch::Approx(0.39931).margin(1e-5));
         CHECK(p.d_eq == Catch::Approx(1.62985).margin(1e-5));
         CHECK(p.k_w == 1.0);
+        // stall, Mach and loss (hand values, the same arithmetic; agreed by the independent review):
+        // M 0.65: i_c -9.8073, i_s 4.8055, i_m -2.5222, choke beta1 34.978, M'_c 0.7421, omega 0.012490;
+        // M 0.30: i_c -10.6973, i_s 5.7006, no choke angle, M'_c 0.7190, omega 0.012475
+        CHECK(p.minimum_loss_incidence_deg == Catch::Approx(-2.5222).margin(1e-4));
+        CHECK(p.losses.minimum == Catch::Approx(p.losses.design).margin(1e-15));  // i_m = i*
+        if (M > 0.5) {
+            CHECK(p.negative_stall_incidence_deg == Catch::Approx(-9.8073).margin(1e-4));
+            CHECK(p.positive_stall_incidence_deg == Catch::Approx(4.8055).margin(1e-4));
+            CHECK(p.choke_beta1_deg == Catch::Approx(34.978).margin(1e-3));
+            CHECK(p.critical_mach == Catch::Approx(0.7421).margin(1e-4));
+            CHECK(p.loss == Catch::Approx(0.012490).margin(1e-6));
+            CHECK_FALSE(p.choke_limit_active);
+        } else {
+            CHECK(p.negative_stall_incidence_deg == Catch::Approx(-10.6973).margin(1e-4));
+            CHECK(p.positive_stall_incidence_deg == Catch::Approx(5.7006).margin(1e-4));
+            CHECK(std::isnan(p.choke_beta1_deg));
+            CHECK(p.critical_mach == Catch::Approx(0.7190).margin(1e-4));
+            CHECK(p.loss == Catch::Approx(0.012475).margin(1e-6));
+        }
 
         // the book: alpha = 12 deg is "within 0.5 deg of the optimum" (p. 91).  Eq. 6-8 gives
         // alpha* = 12.557 deg: 0.557 deg away (measured), just outside the stated 0.5 deg; the bound

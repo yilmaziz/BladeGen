@@ -9,8 +9,8 @@ its number as read from the page images, and every choice the book does not make
 
 ## Sources
 
-- Ch. 6, all equations 6-1 to 6-102, read from the page images. An independent transcription
-  (`q3d/eq_ch06.md`) agrees with every one of these readings.
+- Ch. 6, all equations 6-1 to 6-102, read from the page images. A second, independent reading of the
+  same pages agrees with every one of them.
 - Ch. 4, pp. 66-76: the blade angles of the circular arc (4-7, 4-35), the parabolic arc (4-17 to 4-20)
   and the NACA C_l0-to-camber relation (4-29 = 6-7). The parabolic arc is also used for A4K6 (p. 66).
 - Ch. 7, Sec. 7.3, pp. 162-164: how the through-flow uses the models (7-43 to 7-50). Eq. 7-6, p. 157:
@@ -21,7 +21,8 @@ its number as read from the page images, and every choice the book does not make
 
 ## Conventions
 
-These follow the q3d data contract (Secs. 0 and 2). Full text: the file comment of `Correlations.hpp`.
+These are the interface to the through-flow (Ch. 7) and the quasi-3D analysis (Ch. 12). Full text: the
+file comment of `Correlations.hpp`.
 
 **Input frame.** Inputs are in the book's Ch. 7 frame:
 - Angles are measured from the meridional direction and signed with +theta.
@@ -43,7 +44,7 @@ These follow the q3d data contract (Secs. 0 and 2). Full text: the file comment 
 **Loss coefficient.** omega_bar = Delta P't / (P't1 - P1) at QN1 (Eq. 7-49).
 - The shock Delta P't is converted with the perfect-gas P't1 - P1 at M'_1 (ours).
 - Row-level leakage losses are pressures. `leakage_loss_at` distributes them and
-  `loss_coefficient_from_pressure` converts them (ours, contract Sec. 2.3).
+  `loss_coefficient_from_pressure` converts them (ours: the book gives no conversion).
 
 **Reynolds number.** Re_c = rho1 W1 c / mu1 (ours: the book gives no formula). It is needed only with the
 Reynolds correction, which Aungier does "not normally" use (p. 150).
@@ -76,7 +77,8 @@ This is the per-stream-surface call of Sec. 7.3.
 `endwall_leakage(RowWallData, WallState qn1, WallState qn2, mdot, Gas) -> RowLeakage` is the row-level
 call:
 - Tip clearance: 6-85 to 6-89.
-- Shroud seal: 6-90 to 6-96.
+- Shroud seal: 6-90 to 6-96. For N > 12 the carryover coefficient uses Aungier (2000) Eqs. 4-36 and
+  4-37 (p. 64), where the 2003 text refers (p. 149), instead of refusing.
 - `leakage_loss_at(DeltaP_t, psi, gap_side)` gives the linear distribution of p. 147.
 
 Every single correlation is also a public function (degrees, cascade frame), named for its equation in
@@ -131,6 +133,15 @@ the header.
   the cascade frame, with C_theta = W_m tan(beta) + omega r and omega sign-changed with the row. This
   makes r1 C_theta1 - r2 C_theta2 positive both for a stator and for a work-adding rotor. Rotation
   enters only through (U1/W_m1)(1 - (r2/r1)^2). A test checks that term.
+- **(delta*_0)_10 and (i*_0)_10 for beta1 < 0** (Eqs. 6-20, 6-13). After the p. 128 sign change a
+  guide vane usually has a slightly negative beta1*, and Eq. 6-26 (used for ALL guide vanes, p. 128)
+  needs (delta*_0)_10 there. Both functions are defined for beta1 < 0 by their odd extension
+  f(beta1) = -f(-beta1) (ours). The basis: they describe a cascade of zero camber as a function of beta1
+  and sigma only. Mirroring a zero-camber cascade gives a zero-camber cascade with beta1, kappa1, kappa2
+  and beta2 sign-changed, so its deviation and incidence change sign. 6-20 is 0 at beta1 = 0, so its
+  extension is continuous, with the same slope. 6-13's second term leaves a jump of about
+  5e-9 sigma^3 deg. The argument does not hold for the camber slopes n and m (6-15, 6-21), which multiply
+  a positive camber, nor for 6-76. Those still refuse beta1 < 0.
 - **6-38 and 6-39 for i < i*.** The book states alpha (i - i*)^1.43 "for i >= i*". For i < i* the term
   is omitted (ours), and a note is written. `wmax_ratio` refuses a negative excess.
 - **6-38 and 6-39 for DCA.** The book gives alpha only for NACA (0.0117) and C.4 (0.007). For DCA,
@@ -139,6 +150,15 @@ the header.
   i = i* (ours, after p. 133: "for both design and off-design operation"). For a planar stationary
   cascade this is 6-35.
 - **beta1 in 6-76.** It is read as beta1*, because the slope is "at the design incidence angle" (ours).
+- **beta2 in 6-99 and 6-100.** It is taken as beta2*, because K2 belongs to the design loss 6-46 (ours).
+- **The Lieblein route.** The pseudo-blade route 6-16 to 6-18 is given for A4K6 and parabolic arcs
+  (p. 123). It is used for every camberline and stagger sign (ours). For a/c = 0.5 and gamma >= 0 it is
+  6-12 itself, and |gamma| keeps it defined for gamma < 0.
+- **A4K6 stall ranges.** p. 136 quotes Dunavant's nearly constant A4K6 ranges, alpha_s - alpha* = 10 deg
+  and alpha_c - alpha* = -10 deg. Aungier computes the stall incidence of all blade sections with
+  6-47 and 6-48, and attributes the constancy to the guide vanes' constant inlet angle. So 6-47 and 6-48
+  are the default, with a note for A4K6. `StallRangeModel::DunavantA4K6` gives R_c = R_s = 10 deg
+  (A4K6 only).
 - **6-52.** K_sh <= 1, as stated, and reported. In 6-60, K_sh is used as defined: the constraint is
   stated for 6-52 only (ours).
 - **6-60.** M' is M'_1 limited to 1 (p. 138). W*/W1 is taken at the actual M'_1.
@@ -148,14 +168,19 @@ the header.
   If i_c rises to i_s or beyond, the input is refused: no low-loss range is left.
 - **6-71.** The geometric mean is used, as the equation gives it. The prose says "average".
 - **6-47.** beta_1c >= 20 deg is Aungier's own limit (p. 135). The equation is evaluated at 20 deg and
-  a note is written.
+  a note is written. beta_1c is found by substitution. It converges because the map is a contraction:
+  its slope is largest at beta_1c = 20 deg, where it is 0.0070 theta (0.63 at theta = 90 deg). Camber is
+  restricted to [0, 90) deg.
+- **The bow shock.** For M'_1 <= 1 there is no shock loss, and the Fig. 6-17 geometry is not built.
+- **The seal at P1 = P2.** C_t = 0 at P_R = 1, so the leakage and the loss are 0, and the direction is 0.
 - **6-85.** |tau| is used. A stator, which removes swirl, gives tau < 0, and 6-87 would then be
   imaginary.
 - **rho_bar in 6-87 and 6-88.** (rho1 + rho2)/2 in `endwall_leakage` (ours).
 - **6-90 and 6-91.** For the seal: Delta P = |P2 - P1|, P_R = P_low/P_high, and rho, T from the
   higher-pressure side (Aungier 2000 p. 63).
 - **The p. 147 distribution.** Linear in the mass fraction, zero at the opposite wall, with a
-  mass-weighted mean equal to the row value (ours, contract).
+  mass-weighted mean equal to the row value (ours: the book says only "a linear distribution across
+  the annulus").
 - **H in 6-74.** The total enthalpy, implicit in the perfect-gas normal-shock relations.
 - **The Fig. 6-6 legend.** "t_b = 0.1" means t_b/c = 0.1.
 - **Data ranges.** Ranges beyond the figures' data are reported, not refused: beta1* outside 0 to

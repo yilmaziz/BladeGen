@@ -20,14 +20,15 @@
 /// "2R/c = sin(theta/2)"; the circular arc through both blade ends has c/2 = R sin(theta/2)
 /// (Eq. 4-7, p. 66), i.e. c/(2R) = sin(theta/2), and that is what is used.
 ///
-/// ## Conventions (aligned with the q3d data contract between Chs. 5, 6, 7, 8 and 12)
+/// ## Conventions (the interface to the through-flow of Ch. 7 and the quasi-3D analysis of Ch. 12)
 ///
-///  * Input frame: the BOOK's through-flow frame of Ch. 7 (contract Sec. 0.1): angles measured from
-///    the meridional direction on the stream surface, signed with +theta; W_theta = C_theta - omega r
-///    (Eq. 7-44), tan beta' = W_theta / W_m (Eq. 7-50); omega signed (TURBOlenza / BladeGen map onto
-///    it with omega_book = -2 pi rpm / 60, contract Sec. 0.3).  Ch. 6 calls the reference direction
+///  * Input frame: the book's through-flow frame of Ch. 7: angles measured from the meridional
+///    direction on the stream surface, signed with +theta; W_theta = C_theta - omega r (Eq. 7-44),
+///    tan beta' = W_theta / W_m (Eq. 7-50); omega signed.  A caller with another sign convention maps
+///    onto it before the call (in TURBOlenza / BladeGen a positive rpm turns the blades toward -theta,
+///    so omega = -2 pi rpm / 60 there).  Ch. 6 calls the reference direction
 ///    "axial" in its text (p. 119) and "meridional" in its nomenclature (p. 118): meridional is used.
-///  * The row sign s_row = CascadeGeometry::row_sign (+1 or -1, contract Sec. 0.2): every signed input
+///  * The row sign s_row = CascadeGeometry::row_sign (+1 or -1, the caller's): every signed input
 ///    (stagger, camber, beta'_1, W_theta1, omega) is multiplied by s_row at entry, which gives the
 ///    positive-camber CASCADE frame the correlations are written in (theta = kappa1 - kappa2 > 0,
 ///    Eq. 6-6; turning beta1 - beta2 > 0, Eq. 6-4; Fig. 6-1).  A row whose camber is still negative
@@ -51,14 +52,14 @@
 ///    and D_eq (6-39 with C_theta2 = W_m2 tan beta'_2 + r2 omega, 7-50) follows from delta.
 ///  * Loss coefficient: omega_bar = Delta P't / (P't1 - P1), the relative total pressure loss over the
 ///    relative inlet dynamic head at QN1 on the stream surface (Eq. 7-49, P't2 = P't2,id -
-///    omega_bar (P't1 - P1); Ch. 2 Eq. 2-68).  The correlations' omega_bar (Eqs. 6-46, 6-58 .. 6-82) is
+///    omega_bar (P't1 - P1)).  The correlations' omega_bar (Eqs. 6-46, 6-58 .. 6-82) is
 ///    used as that.  The shock loss (a normal-shock Delta P't) is converted with the same P't1 - P1 of
 ///    the perfect gas at M'_1 (ours: the book is silent on the conversion).  The row-level leakage
 ///    losses are pressures [Pa]; leakage_loss_at() spreads them across the annulus and
-///    loss_coefficient_from_pressure() converts them (ours, contract Sec. 2.3).
+///    loss_coefficient_from_pressure() converts them (ours: the book gives no conversion).
 ///  * Wake blockage: K_W = 1 - B_wake (Eq. 7-6), for Eq. 7-5 at QN2.
 ///  * Chord Reynolds number (Eqs. 6-101, 6-102): Re_c = rho1 W1 c / mu1 at QN1 (ours: the book names
-///    Re_c, pp. 118, 150, without a formula; contract F12).  Needed only with the Reynolds correction.
+///    Re_c, pp. 118, 150, without a formula).  Needed only with the Reynolds correction.
 ///  * Gas: a thermally and calorically perfect gas (Gas::gamma, Gas::gas_constant) where Ch. 6 needs an
 ///    equation of state: choke (6-53, rho* W* "for the local inlet relative total conditions", p. 136),
 ///    W* of Eqs. 6-59 / 6-60, the bow shock (6-70 .. 6-75), the seal (6-91).  Aungier uses the general
@@ -95,7 +96,7 @@ public:
 };
 
 // ================================================================================================
-// The public data contract: geometry, inlet, options, result
+// The public interface: geometry, inlet, discharge estimate, gas, options, result
 // ================================================================================================
 
 /// The blade profile (thickness distribution) family: sets K_sh (p. 121) and Lieblein's alpha of
@@ -183,6 +184,14 @@ enum class LossCalibration {
     AspectRatio,            ///< Sec. 6.11: K1 = 0.0073 (p. 150) and K2 of Eq. 6-99 (6-100 with the Reynolds correction); Eq. 6-46 only
 };
 
+/// The low-speed stall ranges R_c, R_s (Sec. 6.5).
+enum class StallRangeModel {
+    Herrig,         ///< Eqs. 6-47, 6-48 for every blade (Aungier's practice, p. 136: "for all blade sections")
+    DunavantA4K6,   ///< R_s = R_c = 10 deg, the nearly constant A4K6 ranges of Dunavant (1957) quoted on p. 136;
+                    ///< A4K6 camberlines only.  Aungier suggests the constancy is due to the guide vanes' constant
+                    ///< inlet angle rather than the camberline, and uses 6-47 / 6-48 (p. 136): hence not the default
+};
+
 struct CorrelationOptions
 {
     DesignIncidenceModel incidence = DesignIncidenceModel::AngleOfAttack;
@@ -192,6 +201,7 @@ struct CorrelationOptions
     double k2 = 4.0;                         ///< with LossCalibration::Constants
     bool reynolds_correction = false;        ///< Eqs. 6-100 .. 6-102 ("not normally used", p. 150); needs AspectRatio
     std::optional<double> lieblein_alpha;    ///< overrides alpha of Eq. 6-38/6-39 (required for DoubleCircularArc at i > i*)
+    StallRangeModel stall_ranges = StallRangeModel::Herrig;
 };
 
 /// The loss coefficient and its parts (Eqs. 6-46, 6-58 .. 6-60, 6-78 .. 6-82).
@@ -297,13 +307,18 @@ struct BladeAngles
 [[nodiscard]] double design_attack_angle_deg(double ksh, double kti, double camber_deg, double a_c, double solidity);
 
 /// (i*_0)_10 = beta1^p / (5 + 46 exp(-2.3 sigma)) - 0.1 sigma^3 exp[(beta1 - 70)/4],
-/// p = 0.914 + sigma^3/160 (6-13, 6-14).  beta1 >= 0.
+/// p = 0.914 + sigma^3/160 (6-13, 6-14), for 0 <= beta1 < 90.  For -90 < beta1 < 0 the odd extension
+/// (i*_0)_10(beta1) = -(i*_0)_10(-beta1) (ours; see lieblein_zero_camber_deviation_deg).
 [[nodiscard]] double lieblein_zero_camber_incidence_deg(double beta1_deg, double solidity);
 
 /// n = 0.025 sigma - 0.06 - (beta1/90)^(1 + 1.2 sigma) / (1.5 + 0.43 sigma) (6-15).  beta1 >= 0.
 [[nodiscard]] double lieblein_incidence_slope(double beta1_deg, double solidity);
 
-/// Lieblein's design incidence with Aungier's pseudo-blade extension (6-12, 6-16 .. 6-18).
+/// Lieblein's design incidence with Aungier's pseudo-blade extension (6-12, 6-16 .. 6-18).  Aungier
+/// gives the pseudo-blade route for the A4K6 and parabolic-arc blades (p. 123); it is used here for
+/// every camberline and stagger sign (ours): for a/c = 0.5 and gamma >= 0 it is Eq. 6-12 itself
+/// (kappa1_bar = kappa1, the shift (a/c - 0.5) theta vanishes), and |gamma| of Eq. 6-16 keeps it
+/// defined for gamma < 0 (a sign-changed guide vane).
 struct LiebleinIncidence
 {
     double pseudo_kappa1_deg = 0.0;     ///< kappa1_bar = |gamma| + theta/2 (6-16)
@@ -315,7 +330,17 @@ struct LiebleinIncidence
 [[nodiscard]] LiebleinIncidence lieblein_design_incidence(double ksh, double kti, double stagger_deg, double camber_deg,
                                                           double a_c, double kappa1_deg, double solidity);
 
-/// (delta*_0)_10 = 0.01 sigma beta1 + [0.74 sigma^1.9 + 3 sigma] (beta1/90)^(1.67 + 1.09 sigma) (6-20).
+/// (delta*_0)_10 = 0.01 sigma beta1 + [0.74 sigma^1.9 + 3 sigma] (beta1/90)^(1.67 + 1.09 sigma) (6-20),
+/// for 0 <= beta1 < 90.  For -90 < beta1 < 0 (ours) the odd extension
+/// (delta*_0)_10(beta1) = -(delta*_0)_10(-beta1).  Its basis: (delta*_0)_10 is the design deviation of
+/// a cascade of ZERO camber, a function of beta1 and sigma only (Eq. 6-20, Fig. 6-6).  Mirroring such a
+/// cascade (theta -> -theta) maps it onto a zero-camber cascade again, with beta1, kappa1, kappa2 and
+/// beta2 sign-changed, hence delta = beta2 - kappa2 sign-changed: the function is odd in beta1.  The
+/// extension is continuous at 0 (6-20 vanishes there) with the same slope 0.01 sigma from both sides.
+/// It is needed where a sign-changed guide vane (p. 128) has a slightly negative beta1* (Eq. 6-26).
+/// The same argument holds for (i*_0)_10 (Eq. 6-13), whose second term leaves a jump of
+/// 2 * 0.1 sigma^3 exp(-17.5) ~ 5e-9 sigma^3 deg at 0; it does NOT hold for the camber slopes n, m
+/// (Eqs. 6-15, 6-21), which multiply a positive camber, nor for Eq. 6-76: those refuse beta1 < 0.
 [[nodiscard]] double lieblein_zero_camber_deviation_deg(double beta1_deg, double solidity);
 
 /// m = m_1.0 / sigma^b (6-21); m_1.0 NACA 65 (6-22) or circular arc (6-23), x = beta1/100;
@@ -383,7 +408,8 @@ struct LiebleinIncidence
 [[nodiscard]] double howell_lift_coefficient(double beta1_deg, double beta2_deg, double solidity);
 [[nodiscard]] double howell_secondary_drag(double lift_coefficient);
 
-/// K2 = 1 + (s/h) cos(beta2) (6-99); + 0.004 K_Re / K1 (6-100).
+/// K2 = 1 + (s/h) cos(beta2) (6-99); + 0.004 K_Re / K1 (6-100).  evaluate() takes beta2 = beta2*, the
+/// design discharge angle (ours: the book writes beta2; K2 belongs to the design loss of Eq. 6-46).
 [[nodiscard]] double aspect_ratio_k2(double pitch_over_height, double beta2_deg, double k_re, double k1);
 
 /// K_Re = sqrt(2.5e5/Re_c) - 1 for Re_c < 2.5e5 (6-101), [log(2.5e5)/log(Re_c)]^2.58 - 1 above (6-102).
@@ -522,7 +548,7 @@ struct TipClearanceLoss
 /// C_r = 1 - 1 / (3 + [54.3 / (1 + 100 delta_c/t)]^3.45) (6-92 = 2000 Eq. 4-34).
 [[nodiscard]] double seal_contraction_ratio(double clearance_over_fin_thickness);
 /// C_t = 2.143 [ln N - 1.464] / (N - 4.322) [1 - P_R]^(0.375 P_R) (2000 Eq. 4-35; 2003 Eq. 6-93 misprinted),
-/// P_R = lower / higher pressure, 0 <= P_R < 1.
+/// P_R = lower / higher pressure, 0 <= P_R <= 1 (C_t = 0 at P_R = 1: no pressure difference, no leakage).
 [[nodiscard]] double seal_throttling_coefficient(int fins, double pressure_ratio);
 /// C_c = 1 + X1 [delta_c/p - X2 ln(1 + delta_c/p)] / (1 - X2) (6-94), delta_c/p <= X2 - 1;
 /// X1 = 15.1 - 0.05255 exp[0.507 (12 - N)], X2 = 1.058 + 0.0218 N for N <= 12 (6-95, 6-96);
@@ -551,7 +577,7 @@ struct ShroudSealLoss
 };
 [[nodiscard]] ShroudSealLoss shroud_seal_loss(const ShroudSealInput& in);
 
-// --- the row-level call for the through-flow (contract Sec. 4.1 B) ------------------------------
+// --- the row-level call for the through-flow (Secs. 6.9, 6.10 need both quasi-normals) ----------
 
 enum class EndWall { Hub, Shroud };
 
@@ -587,13 +613,13 @@ struct RowLeakage
 {
     double total_pressure_loss = 0.0;  ///< Delta P_t [Pa], the row average (6-89 or 6-90)
     double leakage_mass_flow = 0.0;    ///< m_dot_c (6-88) or m_dot_leak (6-91) [kg/s], >= 0
-    int seal_flow_direction = 0;       ///< seal: +1 from the discharge (QN2) to the inlet (QN1) when P2 > P1, -1 otherwise; 0 for a tip gap
+    int seal_flow_direction = 0;       ///< seal: +1 from the discharge (QN2) to the inlet (QN1) when P2 > P1, -1 when P2 < P1; 0 for P2 = P1 (no leakage) and for a tip gap
     TipClearanceLoss clearance;        ///< the tip-gap details (when !shrouded)
     ShroudSealLoss seal;               ///< the seal details (when shrouded)
 };
 
 /// The leakage loss of one row from the gap-side wall states at QN1 and QN2 and the row mass flow.
-/// Ours where the book is silent (contract Sec. 2.3): tip gap rho_bar = (rho1 + rho2)/2; seal:
+/// Ours where the book is silent: tip gap rho_bar = (rho1 + rho2)/2; seal:
 /// P_R = min(P1, P2)/max(P1, P2), Delta P = |P2 - P1|, rho and T of the higher-pressure side
 /// (Aungier 2000 p. 63: "evaluated on the upstream (higher pressure) side of the seal").
 [[nodiscard]] RowLeakage endwall_leakage(const RowWallData& row, const WallState& qn1, const WallState& qn2,

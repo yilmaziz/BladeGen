@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <stdexcept>
 #include <string>
@@ -29,6 +30,21 @@ double u_at_z(const Math::BSpline2& w, double z)
         else b = mid;
     }
     return 0.5 * (a + b);
+}
+
+/// The throat o (Eq. 6-53) of a placed section (ours, approximate): the smallest distance from the
+/// LE point of the neighbouring blade (theta_LE +- 2 pi / Z) to the section's loop in the conformal
+/// plane, ds = r sqrt(dm'^2 + dtheta^2) with r = r_LE (exact only where r is constant), in BladeGen's
+/// length unit.
+double throat(const Design::LayerResult& lr, int n_blades)
+{
+    const double pitch = 2.0 * std::numbers::pi / static_cast<double>(n_blades);
+    double best = std::numeric_limits<double>::infinity();
+    for (double sgn : {1.0, -1.0}) {
+        const double mle = lr.mprime_le, tle = lr.theta_le + sgn * pitch;
+        for (const auto& q : lr.conformal) best = std::min(best, std::hypot(q.x() - mle, q.y() - tle));
+    }
+    return lr.r_le * best;
 }
 
 /// The chordwise position of the largest camber-line ordinate (ours: a / c).
@@ -112,12 +128,15 @@ BladeGenThroughflowGeometry throughflow_geometry(const Design::BladeDesign& d, D
         q.r_hub = L * ph.y();
         q.z_shroud = opt.layout == BladeGenThroughflowOptions::Layout::Radial ? q.z_hub : L * pc.x();  // radial: the same z
         q.r_shroud = L * pc.y();
-        wall_slope_curvature(hub, uh, q.phi_hub, q.kappa_hub);
-        wall_slope_curvature(cas, uc, q.phi_shroud, q.kappa_shroud);
-        q.kappa_hub /= L;  // curvature in 1/m
-        q.kappa_shroud /= L;
+        double fh = 0.0, kh = 0.0, fs = 0.0, ks = 0.0;
+        wall_slope_curvature(hub, uh, fh, kh);
+        wall_slope_curvature(cas, uc, fs, ks);
+        q.phi_hub = fh;
+        q.phi_shroud = fs;
+        q.kappa_hub = kh / L;  // curvature in 1/m
+        q.kappa_shroud = ks / L;
         const int ik = static_cast<int>(k);
-        if (ik == out.qn_before_le || ik == out.qn_after_te) q.hub_omega = omega;
+        if (ik == out.qn_after_te) q.hub_wall_omega = omega;  // the hub segment across the rotor
         out.quasi_normals.push_back(q);
     }
 
@@ -134,6 +153,7 @@ BladeGenThroughflowGeometry throughflow_geometry(const Design::BladeDesign& d, D
     row.qn_inlet = out.qn_before_le;
     row.qn_outlet = out.qn_after_te;
     row.omega = omega;
+    out.compressor_omega = omega;
     row.n_blades = d.n_blades;
     row.s_row = res.layers[mid].beta_le > res.layers[mid].beta_te ? 1 : -1;
     row.profile_family = d.layers[mid].uses_custom() ? "custom" : "NACA65";
@@ -159,6 +179,7 @@ BladeGenThroughflowGeometry throughflow_geometry(const Design::BladeDesign& d, D
         g.thickness_ratio = cam.max_thickness;
         g.max_thickness_position = cam.max_thickness_x;
         g.max_camber_position = max_camber_position(cam);
+        g.throat = L * throat(lr, d.n_blades);
         row.sections.push_back(g);
     }
     return out;

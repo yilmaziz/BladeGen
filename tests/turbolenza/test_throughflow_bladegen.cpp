@@ -157,8 +157,8 @@ TEST_CASE("throughflow bladegen: the model levels on the curved default channel 
     }
     std::printf("[throughflow-bg] full model: |b_mass / b - 1| walls %.3e, interior %.3e; sheets |b / b_geometric - 1| %.3e\n",
                 ew, ei, es);
-    CHECK(ew <= 0.2);    // measured 1.44e-1
-    CHECK(ei <= 0.05);   // measured 2.11e-2
+    CHECK(ew <= 0.08);   // measured 3.9e-2
+    CHECK(ei <= 0.03);   // measured 1.1e-2
     CHECK(es <= 0.01);   // measured 7.2e-4
 }
 

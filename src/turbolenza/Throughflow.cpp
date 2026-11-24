@@ -16,6 +16,7 @@
 /// from Eqs. 7-37, 7-38 at constant entropy.
 #include "turbolenza/Throughflow.hpp"
 
+#include "turbolenza/BoundaryLayer.hpp"
 #include "turbolenza/ThroughflowNumerics.hpp"
 
 #include <algorithm>
@@ -87,7 +88,7 @@ void place(const QnGeometry& g, double y, double& z, double& r)
     r = g.rh + (g.rs - g.rh) * y / g.ys;
 }
 
-/// The row's blade height: the mean of its LE and TE line lengths (ours, contract Sec. 2.1).
+/// The row's blade height: the mean of its LE and TE line lengths (ours).
 double blade_height(const BladeRowSpec& b)
 {
     return 0.5 * (std::hypot(b.le_shroud_z - b.le_hub_z, b.le_shroud_r - b.le_hub_r) +
@@ -111,18 +112,24 @@ Vec initial_positions(const QnGeometry& g, int nss)
     return y;
 }
 
-/// The node-centred stream tube of every surface: dy_j and dpsi_j (CONVENTIONS, ours).
-void tubes(const Vec& y, Vec& dy, Vec& dpsi)
+/// Sheet values (sheet k between surfaces k and k + 1, located at its y-midpoint) carried to the
+/// surfaces at second order: linear interpolation between the two neighbouring sheet midpoints
+/// inside, linear extrapolation from the two nearest midpoints at the walls (ours).
+Vec sheets_to_surfaces(const Vec& y, const Vec& v)
 {
     const std::size_t n = y.size();
-    dy.assign(n, 0.0);
-    dpsi.assign(n, 0.0);
-    const double h = 1.0 / static_cast<double>(n - 1);
+    Vec out(n);
+    auto mid = [&](std::size_t k) { return 0.5 * (y[k] + y[k + 1]); };
+    auto line = [&](std::size_t k, double x) {  // through sheets k and k + 1
+        const double a = mid(k), b = mid(k + 1);
+        return v[k] + (v[k + 1] - v[k]) * (x - a) / (b - a);
+    };
     for (std::size_t j = 0; j < n; ++j) {
-        const std::size_t a = j == 0 ? 0 : j - 1, b = j + 1 == n ? j : j + 1;
-        dy[j] = 0.5 * (y[b] - y[a]);
-        dpsi[j] = 0.5 * h * static_cast<double>(b - a);
+        if (j == 0) out[j] = line(0, y[0]);
+        else if (j + 1 == n) out[j] = line(n - 3, y[j]);
+        else out[j] = line(j - 1, y[j]);
     }
+    return out;
 }
 
 /// Eq. 7-58 with the square root (the book prints m = int [1 + (dr/dz)^2] dz, a misprint: arc
@@ -156,8 +163,10 @@ struct NodeState
 
 struct Geo
 {
-    Vec y, z, r, phi, kappa, eps, dphidy, m;
-    double cosl = 1.0;  ///< cos(lambda) = dr/dy
+    Vec y, z, r, m;
+    Vec phi, eps;               ///< geometric: the mass equations (Eqs. 7-5, 7-32, 7-54) and the outputs
+    Vec phi_eq, kappa_eq, eps_eq, dphidy;  ///< what the normal-momentum equation uses (the model level)
+    double cosl = 1.0;          ///< cos(lambda) = dr/dy
 };
 
 /// The state at W_m on node j; valid = false when h <= 0 (not thrown: the W_m(0) search probes).
@@ -191,6 +200,8 @@ void ThroughflowGas::validate() const
     if (!(gamma > 1.0) || !finite(gamma)) fail("gamma must be > 1");
     if (!(gas_constant > 0.0) || !finite(gas_constant)) fail("R must be > 0");
     if (!(viscosity > 0.0) || !finite(viscosity)) fail("the viscosity must be > 0");
+    if (!(mu_ref > 0.0) || !(t_mu > 0.0) || !(s_mu > 0.0) || !finite(mu_ref) || !finite(t_mu) || !finite(s_mu))
+        fail("Sutherland's constants must be > 0");
     if (!(t_ref > 0.0) || !(p_ref > 0.0) || !finite(t_ref) || !finite(p_ref)) fail("the entropy reference must be > 0");
 }
 
@@ -205,6 +216,17 @@ double ThroughflowGas::pressure(double h, double s) const
     if (!(h > 0.0) || !finite(h) || !finite(s)) fail("pressure at a non-positive enthalpy");
     const double T = h / cp();
     return p_ref * std::exp((cp() * std::log(T / t_ref) - s) / gas_constant);  // Eq. 2-25 solved for P
+}
+
+double ThroughflowGas::mu(double T) const
+{
+    if (!(T > 0.0) || !finite(T)) fail("viscosity at a non-positive temperature");
+    if (!sutherland) return viscosity;
+    SutherlandLaw law;
+    law.mu_ref = mu_ref;
+    law.t_ref = t_mu;
+    law.s = s_mu;
+    return sutherland_viscosity(T, law);
 }
 
 GasState gas_state(const ThroughflowGas& gas, double h, double s)
@@ -297,6 +319,25 @@ std::string to_string(ThroughflowResult::Status s)
     return "?";
 }
 
+double novak_damping(double mach_m, double y_s, double dm, double bstar, double mach_cap)
+{
+    if (!(y_s > 0.0) || !(dm > 0.0) || !(bstar > 0.0) || !finite(mach_m) || !(mach_cap > 0.0 && mach_cap < 1.0))
+        fail("novak_damping: y_s, dm, B* must be > 0 and the Mach cap in (0, 1)");
+    const double Mm = std::min(std::abs(mach_m), mach_cap);               // p. 165: M_m <= 0.95
+    return 1.0 / (1.0 + (1.0 - Mm * Mm) * y_s * y_s / (bstar * dm * dm));  // Eq. 7-57
+}
+
+double BstarControl::update(double error)
+{
+    if (error > (1.0 + threshold) * min_error) {
+        bstar = 0.5 * (bstar + 1.0);  // Eq. 7-59
+        min_error = error;
+    } else {
+        min_error = std::min(min_error, error);
+    }
+    return bstar;
+}
+
 double line_crossing_fraction(double az, double ar, double bz, double br, double z1, double r1, double z2, double r2)
 {
     // a + t (b - a) = p1 + u (p2 - p1): Cramer's rule for t
@@ -311,13 +352,15 @@ void ThroughflowCase::validate() const
 {
     gas.validate();
     if (!(mass_flow > 0.0) || !finite(mass_flow)) fail("the mass flow must be > 0");
+    if (!finite(compressor_omega)) fail("non-finite compressor speed");
     const int nqn = ii(quasi_normals.size());
     if (nqn < 3) fail("at least three quasi-normals are needed");
     for (int i = 0; i < nqn; ++i) {
         const auto& q = quasi_normals[us(i)];
-        for (double v : {q.z_hub, q.r_hub, q.z_shroud, q.r_shroud, q.phi_hub, q.kappa_hub, q.phi_shroud, q.kappa_shroud,
-                         q.hub_omega, q.shroud_omega})
+        for (double v : {q.z_hub, q.r_hub, q.z_shroud, q.r_shroud, q.hub_wall_omega, q.shroud_wall_omega})
             if (!finite(v)) fail("quasi-normal " + std::to_string(i) + " has a non-finite value");
+        for (const auto& v : {q.phi_hub, q.kappa_hub, q.phi_shroud, q.kappa_shroud})
+            if (v && !finite(*v)) fail("quasi-normal " + std::to_string(i) + " has a non-finite wall slope or curvature");
         if (!(q.r_hub > 0.0) || !(q.r_shroud > 0.0)) fail("quasi-normal " + std::to_string(i) + ": r must be > 0");
         if (q.inside_blade_row)
             fail("quasi-normal " + std::to_string(i) + " lies inside a blade row: Chapter 7 places them outside (p. 155)");
@@ -361,6 +404,8 @@ void ThroughflowCase::validate() const
         if (!(b.hub_clearance >= 0.0) || !(b.tip_clearance >= 0.0) || !finite(b.hub_clearance) || !finite(b.tip_clearance))
             fail(who + ": clearances must be >= 0");
         if (std::find(used.begin(), used.end(), b.qn_inlet) != used.end()) fail(who + ": two rows between the same quasi-normals");
+        if (!used.empty() && !(b.qn_inlet > used.back()))
+            fail(who + ": the rows must be listed in the flow direction (N_row of Eq. 6-87 is their order)");
         used.push_back(b.qn_inlet);
         if (!b.model) fail(who + ": no blade-row model");
         if (b.n_blades < 1) fail(who + ": n_blades must be >= 1");
@@ -424,6 +469,28 @@ public:
         }
         m_hub_ = meridional_coordinate(zh, rh);
         m_shroud_ = meridional_coordinate(zs, rs);
+        // the end-wall slope and curvature at every quasi-normal (the Approximate model): given, or
+        // from the wall points by Eqs. 7-2 and 7-9 with Eq. 7-67 inside and Eq. 7-70 at the ends (ours)
+        const Vec* mw[2] = {&m_hub_, &m_shroud_};
+        const Vec* rw[2] = {&rh, &rs};
+        for (int side = 0; side < 2; ++side) {
+            const Vec drdm = derivative(*mw[side], *rw[side], EndRule::TwoPoint);
+            Vec phi(us(nqn_));
+            for (int i = 0; i < nqn_; ++i) {
+                if (!(std::abs(drdm[us(i)]) < 1.0)) fail("Eq. 7-2: |dr/dm| >= 1 on a wall");
+                phi[us(i)] = std::asin(drdm[us(i)]);
+            }
+            const Vec dphidm = derivative(*mw[side], phi, EndRule::TwoPoint);
+            wall_phi_[side].resize(us(nqn_));
+            wall_kappa_[side].resize(us(nqn_));
+            for (int i = 0; i < nqn_; ++i) {
+                const auto& q = c.quasi_normals[us(i)];
+                const auto& gphi = side == 0 ? q.phi_hub : q.phi_shroud;
+                const auto& gkap = side == 0 ? q.kappa_hub : q.kappa_shroud;
+                wall_phi_[side][us(i)] = gphi ? *gphi : phi[us(i)];
+                wall_kappa_[side][us(i)] = gkap ? *gkap : -dphidm[us(i)];
+            }
+        }
     }
 
     ThroughflowResult run();
@@ -466,6 +533,7 @@ private:
     std::vector<int> row_at_, row_from_;
     Vec leak_;  ///< the latest seal leakage flow of every row (RowLossModel)
     Vec m_hub_, m_shroud_;
+    Vec wall_phi_[2], wall_kappa_[2];  ///< hub, shroud: given or from the wall points (QuasiNormal)
     // full model: stream-surface geometry of the current pass, [j][i]
     std::vector<Vec> sm_, sphi_, skappa_, kappa_prev_;
 };
@@ -493,7 +561,6 @@ void Solver::surface_geometry(std::vector<Vec>& m, std::vector<Vec>& phi, std::v
 Geo Solver::geometry(int i, const Vec& y) const
 {
     const auto& g = q_[us(i)].g;
-    const auto& qn = c_.quasi_normals[us(i)];
     Geo ge;
     ge.y = y;
     ge.cosl = g.cosl;
@@ -501,8 +568,10 @@ Geo Solver::geometry(int i, const Vec& y) const
     ge.z.resize(n);
     ge.r.resize(n);
     ge.phi.assign(n, 0.0);
-    ge.kappa.assign(n, 0.0);
     ge.eps.assign(n, 0.0);
+    ge.phi_eq.assign(n, 0.0);
+    ge.kappa_eq.assign(n, 0.0);
+    ge.eps_eq.assign(n, 0.0);
     ge.dphidy.assign(n, 0.0);
     ge.m.assign(n, 0.0);
     for (std::size_t j = 1; j < n; ++j)
@@ -512,24 +581,50 @@ Geo Solver::geometry(int i, const Vec& y) const
     case ThroughflowModel::FullNormalEquilibrium:
         for (std::size_t j = 0; j < n; ++j) {
             ge.phi[j] = sphi_[j][us(i)];
-            ge.kappa[j] = skappa_[j][us(i)];
+            ge.kappa_eq[j] = skappa_[j][us(i)];
             ge.m[j] = sm_[j][us(i)];
         }
         ge.dphidy = derivative(ge.y, ge.phi, EndRule::ThreePoint);  // p. 172: Eqs. 7-67 to 7-69 in y
         break;
-    case ThroughflowModel::Approximate:  // p. 168: phi and kappa_m linear in y from hub to shroud
+    case ThroughflowModel::Approximate: {  // p. 168: phi and kappa_m linear in y from hub to shroud
+        const double ph = wall_phi_[0][us(i)], ps = wall_phi_[1][us(i)];
+        const double kh = wall_kappa_[0][us(i)], ks = wall_kappa_[1][us(i)];
         for (std::size_t j = 0; j < n; ++j) {
             const double t = y[j] / g.ys;
-            ge.phi[j] = qn.phi_hub + t * (qn.phi_shroud - qn.phi_hub);
-            ge.kappa[j] = qn.kappa_hub + t * (qn.kappa_shroud - qn.kappa_hub);
-            ge.dphidy[j] = (qn.phi_shroud - qn.phi_hub) / g.ys;
+            ge.phi[j] = ph + t * (ps - ph);
+            ge.kappa_eq[j] = kh + t * (ks - kh);
+            ge.dphidy[j] = (ps - ph) / g.ys;
         }
         break;
-    case ThroughflowModel::SimpleNonIsentropic:
-    case ThroughflowModel::SimpleIsentropic: break;  // p. 168: epsilon = kappa_m = 0 (phi not used then)
     }
-    if (!simple())
-        for (std::size_t j = 0; j < n; ++j) ge.eps[j] = ge.phi[j] - g.lambda;  // Eq. 7-3
+    case ThroughflowModel::SimpleNonIsentropic:
+    case ThroughflowModel::SimpleIsentropic: {
+        // epsilon = kappa_m = 0 in the normal-momentum equation only (p. 168); the mass equations keep
+        // the geometric phi, from Eq. 7-2 by Eq. 7-70 on the marching pair (i - 1, i) (p. 172: the data
+        // downstream are not known when quasi-normal i is solved).  Quasi-normal 0 has no upstream
+        // pair: there phi is linear in y between the end-wall angles (ours, as the Approximate model)
+        if (i == 0) {
+            for (std::size_t j = 0; j < n; ++j)
+                ge.phi[j] = wall_phi_[0][0] + y[j] / g.ys * (wall_phi_[1][0] - wall_phi_[0][0]);
+            break;
+        }
+        const auto& go = q_[us(i - 1)].g;
+        const Vec& yo = q_[us(i - 1)].y;
+        for (std::size_t j = 0; j < n; ++j) {
+            double zo = 0.0, ro = 0.0;
+            place(go, yo[j], zo, ro);
+            ge.phi[j] = std::atan2(ge.r[j] - ro, ge.z[j] - zo);  // sin(phi) = dr/dm, dm the chord of the pair (Eq. 7-70)
+        }
+        break;
+    }
+    }
+    for (std::size_t j = 0; j < n; ++j) {
+        ge.eps[j] = ge.phi[j] - g.lambda;  // Eq. 7-3
+        if (!simple()) {
+            ge.phi_eq[j] = ge.phi[j];
+            ge.eps_eq[j] = ge.eps[j];
+        }
+    }
     return ge;
 }
 
@@ -648,14 +743,16 @@ Spec Solver::link(int i, const Geo& ge, const Vec& Wm, const Vec& rho_est)
         in.alpha1 = std::atan2(Ct1, Wm1);
         in.mach1_rel = in.W1 / in.a1;
         in.mach1_abs = std::hypot(Wm1, Ct1) / in.a1;
-        in.reynolds = in.rho1 * in.W1 * in.geometry.chord / gas.viscosity;
+        in.reynolds = in.rho1 * in.W1 * in.geometry.chord / gas.mu(in.T1);
         in.h1 = h1;
         in.Hrel1 = Hrel1;
-        in.mu1 = gas.viscosity;
+        in.mu1 = gas.mu(in.T1);
         in.s_row = row.s_row;
         in.is_igv = row.is_igv;
         in.profile_family = row.profile_family;
         in.blade_height = blade_height(row);
+        in.row_number = k + 1;
+        in.mass_flow = c_.mass_flow;
         in.Wm2 = Wm[j];
         in.rho2 = rho_est[j];
         const BladeRowDischarge d = row.model->evaluate(in);
@@ -683,7 +780,7 @@ Spec Solver::link(int i, const Geo& ge, const Vec& Wm, const Vec& rho_est)
     discharge_entropy();
     sp.row_loss.assign(n, 0.0);
     if (row.row_loss) {
-        // the row-level losses (contract Sec. 2.3): wall states at both quasi-normals, the discharge at
+        // the row-level losses (Ch. 6 Secs. 6.9, 6.10): wall states at both quasi-normals, the discharge at
         // the current estimate with the per-surface losses only (ours)
         RowLossInput rl;
         rl.row = k;
@@ -697,8 +794,10 @@ Spec Solver::link(int i, const Geo& ge, const Vec& Wm, const Vec& rho_est)
         rl.blade_height = blade_height(row);
         rl.hub_section = row.sections.front();
         rl.shroud_section = row.sections.back();
+        rl.row_number = k + 1;
         rl.hub1 = up.wall[0];
         rl.shroud1 = up.wall[1];
+        for (WallState* w1 : {&rl.hub1, &rl.shroud1}) w1->Wtheta = w1->Ctheta - w1->r * w;  // the row's frame (Eq. 7-44)
         NodeState x;
         for (int side = 0; side < 2; ++side) {
             const std::size_t j = side == 0 ? 0 : n - 1;
@@ -715,7 +814,7 @@ Spec Solver::link(int i, const Geo& ge, const Vec& Wm, const Vec& rho_est)
         const Vec a = distribute_row_loss(lr.clearance_dPt, lr.clearance_side, psi);
         const Vec b = distribute_row_loss(lr.seal_dPt, lr.seal_side, psi);
         for (std::size_t j = 0; j < n; ++j) {
-            sp.row_loss[j] = (a[j] + b[j]) / qref[j];  // Delta P_t,j / (P't1 - P1)_j (contract, ours)
+            sp.row_loss[j] = (a[j] + b[j]) / qref[j];  // Delta P_t,j / (P't1 - P1)_j (ours)
             sp.loss[j] += sp.row_loss[j];
         }
         discharge_entropy();
@@ -884,7 +983,7 @@ WallState Solver::wall_state(const Geo& ge, const Spec& sp, std::size_t j, const
     w.P = x.g.P;
     w.T = x.g.T;
     w.a = x.g.a;
-    w.mu = c_.gas.viscosity;
+    w.mu = c_.gas.mu(x.g.T);
     const double H = sp.I[j] + sp.omega * ge.r[j] * x.Ct;  // Eq. 7-51
     w.Tt = H / c_.gas.cp();
     w.Pt = c_.gas.pressure(H, sp.s[j]);
@@ -899,6 +998,7 @@ EndwallStation Solver::endwall_station(int i, int pass, const Geo& ge, const Spe
     e.n_qn = nqn_;
     e.pass = pass;
     e.mass_flow = c_.mass_flow;
+    e.compressor_omega = c_.compressor_omega;
     e.y_s = q_[us(i)].g.ys;
     e.lambda = q_[us(i)].g.lambda;
     e.frame_omega = sp.omega;
@@ -913,14 +1013,15 @@ EndwallStation Solver::endwall_station(int i, int pass, const Geo& ge, const Spe
         w.Vtheta = st[j].Ct - ge.r[j] * wall_omega;  // Eq. 8-4
         return w;
     };
-    e.hub = edge(0, m_hub_[us(i)], qn.hub_omega);
-    e.shroud = edge(last, m_shroud_[us(i)], qn.shroud_omega);
-    // the row data (contract Sec. 2.4): for the row upstream the step QN1 -> QN2 ends here
+    e.hub = edge(0, m_hub_[us(i)], qn.hub_wall_omega);
+    e.shroud = edge(last, m_shroud_[us(i)], qn.shroud_wall_omega);
+    // the row data: for the row upstream the boundary-layer step across the row ends here
     auto row_data = [&](int k, bool discharge) {
         EndwallRow w;
         if (k < 0) return w;
         const BladeRowSpec& b = c_.rows[us(k)];
         w.row = k;
+        w.row_number = k + 1;
         w.omega = b.omega;
         w.n_blades = b.n_blades;
         w.shrouded = b.shrouded;
@@ -976,8 +1077,11 @@ void Solver::fill_station(int i, const Geo& ge, const Spec& sp, const std::vecto
     s.mach_limit_active = mach_limit;
     s.converged = converged;
     s.iterations = iterations;
-    Vec dy, dpsi;
-    tubes(ge.y, dy, dpsi);
+    // the sheets' y-widths carried to the surfaces (CONVENTIONS)
+    Vec width(n - 1);
+    for (std::size_t k = 0; k + 1 < n; ++k) width[k] = ge.y[k + 1] - ge.y[k];
+    const Vec D = sheets_to_surfaces(ge.y, width);
+    const double dpsi = 1.0 / static_cast<double>(n - 1);
     d.Wm.resize(n);
     d.H.resize(n);
     d.rCt.resize(n);
@@ -997,7 +1101,7 @@ void Solver::fill_station(int i, const Geo& ge, const Spec& sp, const std::vecto
         nd.m = ge.m[j];
         nd.mass_fraction = static_cast<double>(j) / static_cast<double>(n - 1);
         nd.phi = ge.phi[j];
-        nd.kappa_m = ge.kappa[j];
+        nd.kappa_m = ge.kappa_eq[j];
         nd.epsilon = ge.eps[j];
         nd.Wm = x.Wm;
         nd.Ctheta = x.Ct;  // Eq. 7-50 on a rotor discharge
@@ -1011,6 +1115,7 @@ void Solver::fill_station(int i, const Geo& ge, const Spec& sp, const std::vecto
         nd.rho = x.g.rho;
         nd.a = x.g.a;
         nd.h = x.h;
+        nd.mu = gas.mu(x.g.T);
         nd.mach = nd.C / x.g.a;
         nd.mach_rel = nd.W / x.g.a;
         nd.mach_m = x.Wm / x.g.a;
@@ -1026,8 +1131,8 @@ void Solver::fill_station(int i, const Geo& ge, const Spec& sp, const std::vecto
         nd.Pt_rel = gas.pressure(x.Hrel, sp.s[j]);
         nd.K_W = sp.KW[j];
         nd.K_B_blade = sp.KBlade[j];
-        nd.b = std::cos(ge.eps[j]) * dy[j];  // the area term of Eq. 7-32
-        nd.b_mass = dpsi[j] * c_.mass_flow /
+        nd.b = std::cos(ge.eps[j]) * D[j];  // the area term of Eq. 7-32 for a sheet of dpsi at the surface
+        nd.b_mass = dpsi * c_.mass_flow /
                     (2.0 * kPi * ge.r[j] * KB * sp.KW[j] * sp.KBlade[j] * x.g.rho * x.Wm);  // Eq. 12-39
         nd.loss_coefficient = sp.loss[j];
         nd.row_loss_coefficient = sp.row_loss[j];
@@ -1043,7 +1148,7 @@ void Solver::fill_station(int i, const Geo& ge, const Spec& sp, const std::vecto
         d.a[j] = nd.a;
         d.Ct[j] = nd.Ctheta;
     }
-    // the stream sheets (j, j + 1) at their mean surfaces (CONVENTIONS, contract Sec. 2.6)
+    // the stream sheets (j, j + 1) at their mean surfaces (CONVENTIONS)
     const double dmdot_sheet = c_.mass_flow / static_cast<double>(n - 1);
     for (std::size_t j = 0; j + 1 < n; ++j) {
         ThroughflowSheetNode sh;
@@ -1094,7 +1199,7 @@ bool Solver::solve_qn(int i, int pass, int& iterations, bool& converged)
     std::vector<NodeState> st(n);
     bool choked = false;
     converged = false;
-    Vec dy, dpsi, f1(n), f4(n);
+    Vec f1(n), f4(n);
     for (iterations = 1; iterations <= o_.max_flow_iterations; ++iterations) {
         // Link To Upstream Quasi-Normal (Sec. 7.3), at the current discharge estimate
         const Spec sp = link(i, ge, Wm, rho);
@@ -1107,35 +1212,50 @@ bool Solver::solve_qn(int i, int pass, int& iterations, bool& converged)
         Vec rtb(n);
         for (std::size_t j = 0; j < n; ++j) rtb[j] = sp.known_beta ? ge.r[j] * sp.tanb[j] : sp.rCt[j];
         const Vec dXdy = derivative(ge.y, rtb, EndRule::ThreePoint);  // d(r tan beta')/dy or d(r C_theta)/dy
-        tubes(ge.y, dy, dpsi);
+        // Eqs. 7-31 to 7-33 on the stream tubes between the surfaces (the sheets): sheet k carries the
+        // share dpsi = 1 / (n - 1) of the K_B-free mass function of Eq. 7-54, dmdot = dpsi mdot / K_B
+        // (ours: Eq. 7-32 omits K_B, Eq. 7-5 has it), and dA = 2 pi r K_W cos(eps) dy (Eq. 7-32) with the
+        // mean of the sheet's two surfaces; its rho dA / dmdot (= 1 / W_m of the sheet, Eq. 7-31) is
+        // carried to the surfaces at second order (ours)
+        Vec g_tube(n, 0.0);
+        if (o_.stream_tube_form) {
+            const double dm = c_.mass_flow / (static_cast<double>(n - 1) * KB);
+            Vec gk(n - 1);
+            for (std::size_t k = 0; k + 1 < n; ++k) {
+                auto area = [&](std::size_t j) {  // rho 2 pi r K_W K_B_blade cos(eps), per unit dy
+                    return st[j].g.rho * 2.0 * kPi * ge.r[j] * sp.KW[j] * sp.KBlade[j] * std::cos(ge.eps[j]);
+                };
+                const double dA_rho = 0.5 * (area(k) + area(k + 1)) * (ge.y[k + 1] - ge.y[k]);
+                gk[k] = dA_rho / dm;
+            }
+            g_tube = sheets_to_surfaces(ge.y, gk);
+        }
         bool mach_limit = false;
         for (std::size_t j = 0; j < n; ++j) {
             const NodeState& x = st[j];
-            const double r = ge.r[j], ce = std::cos(ge.eps[j]), se = std::sin(ge.eps[j]);
+            // the normal-momentum equation's epsilon and kappa_m (0 in the simple models, p. 168)
+            const double r = ge.r[j], ce = std::cos(ge.eps_eq[j]), se = std::sin(ge.eps_eq[j]);
+            const double kap = ge.kappa_eq[j];
             // (1 / W_m) dW_m/dm from Eq. 7-29 with the limit Eq. 7-30 (Mtheta = C_theta / a, Eq. 7-28)
             const double Mm = x.Wm / x.g.a, Mt = x.Ct / x.g.a;
             const double lim = std::max(1.0 - Mm * Mm, o_.min_one_minus_mm2);
             if (1.0 - Mm * Mm < o_.min_one_minus_mm2 && se != 0.0) mach_limit = true;
             const double dlnW =
-                (-(1.0 + Mt * Mt) * std::sin(ge.phi[j]) / r - ge.dphidy[j] / ce - ge.kappa[j] * std::tan(ge.eps[j])) / lim;
+                (-(1.0 + Mt * Mt) * std::sin(ge.phi_eq[j]) / r - ge.dphidy[j] / ce - kap * std::tan(ge.eps_eq[j])) / lim;
             const double entropy_term = c_.model == ThroughflowModel::SimpleIsentropic ? 0.0 : x.g.T * dsdy[j];
             double f2 = 0.0, f3 = 0.0;
             if (sp.known_beta) {
                 const double tb = sp.tanb[j], cb2 = 1.0 / (1.0 + tb * tb);  // cos^2 beta'
-                f1[j] = cb2 * (-ge.kappa[j] * ce - tb / r * dXdy[j] + se * dlnW);  // Eq. 7-19
+                f1[j] = cb2 * (-kap * ce - tb / r * dXdy[j] + se * dlnW);  // Eq. 7-19
                 f2 = -2.0 * sp.omega * cb2 * tb * ge.cosl;  // Eq. 7-20: -2 omega cos(beta') sin(beta') cos(lambda)
-                f3 = cb2 * (dIdy[j] - entropy_term);                                // Eq. 7-21
+                f3 = cb2 * (dIdy[j] - entropy_term);       // Eq. 7-21
             } else {
-                f1[j] = -ge.kappa[j] * ce + se * dlnW;                     // Eq. 7-16
-                f2 = 0.0;                                                  // Eq. 7-17
-                f3 = dIdy[j] - entropy_term - x.Wt / r * dXdy[j];          // Eq. 7-18
+                f1[j] = -kap * ce + se * dlnW;                     // Eq. 7-16
+                f2 = 0.0;                                          // Eq. 7-17
+                f3 = dIdy[j] - entropy_term - x.Wt / r * dXdy[j];  // Eq. 7-18
             }
-            // Eqs. 7-31 to 7-33: 1 / W_m = rho dA / dmdot, dA = 2 pi r K_W cos(eps) dy (Eq. 7-32) and
-            // dmdot the tube's share of the K_B-free mass function of Eq. 7-54, dpsi mdot / K_B (ours)
-            const double dA = 2.0 * kPi * r * sp.KW[j] * sp.KBlade[j] * ce * dy[j];
-            const double dm = dpsi[j] * c_.mass_flow / KB;
             // Eq. 7-33 (Aungier's choice, p. 160), or Eq. 7-15 as it stands: f3 / W_m
-            f4[j] = o_.stream_tube_form ? f2 + f3 * x.g.rho * dA / dm : f2 + f3 / x.Wm;
+            f4[j] = o_.stream_tube_form ? f2 + f3 * g_tube[j] : f2 + f3 / x.Wm;
         }
         const LinearOdeSolution ode = solve_linear_ode(ge.y, f1, f4);  // Eqs. 7-35, 7-36
         bool ch = false;
@@ -1185,8 +1305,10 @@ ThroughflowResult Solver::run()
 {
     ThroughflowResult res;
     res.model = c_.model;
+    BstarControl bc;
+    bc.bstar = o_.bstar;
+    bc.threshold = o_.bstar_growth_threshold;
     double bstar = o_.bstar;
-    double last_error = std::numeric_limits<double>::infinity();
     int repositionings = 0;
     const int passes = full() ? o_.max_outer_iterations : 1;
     for (int pass = 0; pass < passes; ++pass) {
@@ -1267,9 +1389,8 @@ ThroughflowResult Solver::run()
             res.status = ThroughflowResult::Status::Converged;
             break;
         }
-        if (o_.adjust_bstar && err > (1.0 + o_.bstar_growth_threshold) * last_error) bstar = 0.5 * (bstar + 1.0);  // Eq. 7-59
+        if (o_.adjust_bstar) bstar = bc.update(err);  // Eq. 7-59 (BstarControl)
         rec.bstar = bstar;
-        last_error = err;
         // Novak's damping, Eq. 7-57, with M_m <= 0.95 (p. 165); dm the smallest meridional spacing to
         // the adjacent quasi-normals along the stream surface (Eq. 7-58 coordinates of this pass)
         double fmin = 1.0;
@@ -1281,9 +1402,7 @@ ThroughflowResult Solver::run()
                 double dm = std::numeric_limits<double>::infinity();
                 if (i > 0) dm = std::min(dm, mj[us(i)] - mj[us(i - 1)]);
                 if (i + 1 < nqn_) dm = std::min(dm, mj[us(i + 1)] - mj[us(i)]);
-                const double Mm = std::min(d.out.nodes[us(j)].mach_m, o_.max_mach_damping);
-                const double invF = 1.0 + (1.0 - Mm * Mm) * d.g.ys * d.g.ys / (bstar * dm * dm);
-                const double F = 1.0 / invF;
+                const double F = novak_damping(d.out.nodes[us(j)].mach_m, d.g.ys, dm, bstar, o_.max_mach_damping);
                 fmin = std::min(fmin, F);
                 d.y[us(j)] += F * (ycalc[us(i)][us(j)] - d.y[us(j)]);
             }

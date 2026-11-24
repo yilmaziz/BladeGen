@@ -27,15 +27,19 @@
 /// from the placed camber line (LayerResult::gamma, beta_le, beta_te), t_b / c and its position from
 /// the camber line, a / c the chordwise position of the largest camber-line ordinate (ours).
 ///
-/// Sign convention (the quasi-3D contract Sec. 0.3, stated here once).  BladeGen's theta is the
+/// Sign convention (stated here once).  BladeGen's theta is the
 /// through-flow's theta (Throughflow.hpp CONVENTIONS): every BladeGen angle is used as it is, and
 /// omega = -2 pi rpm / 60.  A positive rpm turns the default BladeGen rotor in the compressor sense:
 /// with axial inflow W_theta = -omega r > 0, so beta'_1 > 0 like its LE metal angle kappa_1, and
 /// TURBOlenza's blade-to-blade frame (positive relative inlet angle for rpm > 0) needs no sign
 /// change.  The Chapter 6 cascade sign is s_row = +1 when the mid-span layer has kappa_1 > kappa_2,
-/// else -1 (contract Sec. 0.2).
-/// The hub wall rotates at omega on the two quasi-normals bounding the row, all other walls are at
-/// rest (QuasiNormal::hub_omega; for the end-wall model only, ours).
+/// else -1.
+/// The hub wall segment across the rotor (from the quasi-normal before the LE to the one after the TE)
+/// rotates at omega, all other wall segments are at rest (QuasiNormal::hub_wall_omega of the discharge
+/// quasi-normal; for the end-wall model only, ours).  compressor_omega = omega (Eq. 8-61's omega_c) is
+/// returned for ThroughflowCase::compressor_omega.  The throat o of every section (Eq. 6-53) is the
+/// smallest distance from the neighbouring blade's LE to the section in the conformal plane at the LE
+/// radius (ours, approximate).
 #pragma once
 
 #include "turbolenza/Throughflow.hpp"
@@ -69,6 +73,7 @@ struct BladeGenThroughflowGeometry
     std::vector<QuasiNormal> quasi_normals;
     BladeRowSpec row;            ///< everything but the model
     int qn_before_le = 0, qn_after_te = 0;
+    double compressor_omega = 0.0;  ///< omega of the row (ThroughflowCase::compressor_omega)
 };
 
 /// The quasi-normals and the blade row of a design.  Throws std::invalid_argument (or what BladeGen

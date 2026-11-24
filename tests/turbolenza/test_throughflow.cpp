@@ -125,8 +125,8 @@ TEST_CASE("throughflow: uniform axial flow in a straight annulus (all four model
         }
         std::printf("[throughflow] uniform, %s: |b_mass / b - 1| walls %.3e, interior %.3e\n", TF::to_string(model).c_str(),
                     ew, ei);
-        CHECK(ew <= 0.05);   // measured 4.3e-2 (n_ss = 11)
-        CHECK(ei <= 0.005);  // measured 2.9e-3
+        CHECK(ew <= 1e-2);   // measured 4.6e-3 (n_ss = 11)
+        CHECK(ei <= 3e-3);   // measured 1.4e-3
         // Eq. 7-58 on a cylinder: m = z
         for (std::size_t i = 0; i < r.stream_surfaces[5].m.size(); ++i)
             CHECK(std::abs(r.stream_surfaces[5].m[i] - 0.1 * static_cast<double>(i)) <= 1e-12);
@@ -171,23 +171,57 @@ TEST_CASE("throughflow: forced vortex C_theta = Omega r against W_m^2 = W_mh^2 -
         auto c = annulus(TF::ThroughflowModel::SimpleNonIsentropic);
         c.options.n_stream_surfaces = nss;
         c.options.stream_tube_form = tube;
-        c.inlet = swirl_profile(0.3, 0.5, 2, [](double r) { return 200.0 * r; });  // linear: exact
+        c.inlet = swirl_profile(0.3, 0.5, 2, [](double r) { return 150.0 * r; });  // linear: exact
         const auto r = TF::solve_throughflow(c);
         REQUIRE(r.status == TF::ThroughflowResult::Status::Converged);
         const auto& st = r.stations[3];
         const double wh = st.nodes.front().Wm;
         double e = 0.0;
         for (const auto& nd : st.nodes) {
-            const double ref = std::sqrt(wh * wh - 2.0 * 200.0 * 200.0 * (nd.r * nd.r - 0.09));
+            const double ref = std::sqrt(wh * wh - 2.0 * 150.0 * 150.0 * (nd.r * nd.r - 0.09));
             e = std::max(e, std::abs(nd.Wm - ref) / ref);
         }
         std::printf("[throughflow] forced vortex, %s, n_ss = %2d: max |W_m - closed form| / W_m = %.3e (W_m hub %.4f)\n",
                     tube ? "Eq. 7-33" : "f3 / W_m", nss, e, wh);
-        // measured ratios: Eq. 7-33 1.74, 1.65, 2.12 (first order); f3 / W_m 7.2, 5.7, 4.0 (second order)
-        if (prev > 0.0) CHECK(prev / e >= (tube ? 1.5 : 3.5));
+        // measured ratios: Eq. 7-33 2.33, 2.98, 3.40 (toward 4: second order); f3 / W_m 5.1, 6.0, 6.8
+        if (prev > 0.0) CHECK(prev / e >= (tube ? 2.2 : 4.5));
         prev = e;
         CHECK(max_mass_error(r) <= 1e-11);
     }
+    CHECK(prev <= (tube ? 2e-4 : 1e-5));  // n_ss = 41: measured 1.1e-4 and 4.2e-6
+    }
+}
+
+TEST_CASE("throughflow: the order of both f4 forms on a 45-degree cone with swirl (self-convergence)",
+          "[turbolenza][throughflow]")
+{
+    // W_m at psi = 0, 0.5, 1 on quasi-normal 3 against 81 surfaces, simple model, forced-vortex inlet
+    for (bool tube : {true, false}) {
+        auto run = [&](int nss) {
+            auto c = annulus(TF::ThroughflowModel::SimpleNonIsentropic);
+            for (auto& q : c.quasi_normals) {
+                q.r_hub = 0.3 + q.z_hub;
+                q.r_shroud = 0.5 + q.z_shroud;
+            }
+            c.options.n_stream_surfaces = nss;
+            c.options.stream_tube_form = tube;
+            c.inlet = swirl_profile(0.3, 0.5, 2, [](double r) { return 150.0 * r; });
+            const auto r = TF::solve_throughflow(c);
+            REQUIRE(r.status == TF::ThroughflowResult::Status::Converged);
+            const auto& n = r.stations[3].nodes;
+            return std::vector<double>{n.front().Wm, n[n.size() / 2].Wm, n.back().Wm};
+        };
+        const auto ref = run(81);
+        double prev = 0.0;
+        for (int nss : {11, 21, 41}) {
+            const auto v = run(nss);
+            double e = 0.0;
+            for (std::size_t k = 0; k < 3; ++k) e = std::max(e, std::abs(v[k] / ref[k] - 1.0));
+            std::printf("[throughflow] cone order, %s, n_ss = %2d: max |W_m / W_m(81) - 1| at psi 0, 0.5, 1 = %.3e\n",
+                        tube ? "Eq. 7-33" : "f3 / W_m", nss, e);
+            if (prev > 0.0) CHECK(prev / e >= 2.5);  // measured: see the report
+            prev = e;
+        }
     }
 }
 
@@ -376,7 +410,7 @@ TEST_CASE("throughflow: the end-wall model interface (call order, K_B in Eq. 7-5
     CHECK(ew->last.mass_flow == 50.0);
     CHECK(ew->last.hub.r == 0.3);
     CHECK(ew->last.shroud.r == 0.5);
-    CHECK(ew->last.hub.mu == c.gas.viscosity);
+    CHECK(ew->last.hub.mu == c.gas.mu(ew->last.hub.T));  // Sutherland at the edge static temperature
     // K_B multiplies the whole integral: rho W_m (the uniform flow) carries mdot / K_B
     const auto& nd = r.stations[3].nodes[4];
     const double area = std::numbers::pi * (0.25 - 0.09);

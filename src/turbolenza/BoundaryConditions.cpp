@@ -160,7 +160,7 @@ Elimination BoundaryConditions::periodic_ghost(int i, int j, double jump) const
         std::format("a periodic ghost node is j = -1 or j = n_eta = {}, got j = {}", n_eta, j));
 }
 
-BoundaryConditions build_boundary_conditions(std::shared_ptr<const Grid> grid)
+BoundaryConditions build_boundary_conditions(std::shared_ptr<const Grid> grid, const Transpiration* transpiration)
 {
     if (!grid) throw BoundaryConditionError("build_boundary_conditions takes a Grid, got None");
     const Grid& g = *grid;
@@ -217,14 +217,35 @@ BoundaryConditions build_boundary_conditions(std::shared_ptr<const Grid> grid)
                 throw BoundaryConditionError(
                     "a wall node is also periodic or on a far station: contradictory classification");
 
+    b.psi_lower_wall.assign(sz(n_m), kPsiLowerWall);
+    b.psi_upper_wall.assign(sz(n_m), kPsiUpperWall);
+    b.periodic_jump.assign(sz(n_m), kPsiPeriodicJump);
+    if (transpiration) {  // the equivalent inviscid flow (Lighthill 1958): the values per station
+        const Transpiration& t = *transpiration;
+        if (t.lower_wall.size() != sz(n_m) || t.upper_wall.size() != sz(n_m) || t.jump.size() != sz(n_m))
+            throw BoundaryConditionError(std::format("a transpiration needs {} values per list (one per station), got {}, "
+                                                     "{}, {}",
+                                                     n_m, t.lower_wall.size(), t.upper_wall.size(), t.jump.size()));
+        for (int i = 0; i < n_m; ++i) {
+            const bool blade = f <= i && i <= l;
+            if (blade) {
+                b.psi_lower_wall[sz(i)] = real(t.lower_wall[sz(i)], "the transpiration's lower-wall psi");
+                b.psi_upper_wall[sz(i)] = real(t.upper_wall[sz(i)], "the transpiration's upper-wall psi");
+            } else {
+                b.periodic_jump[sz(i)] = real(t.jump[sz(i)], "the transpiration's periodic jump");
+            }
+        }
+        b.transpiration = true;
+    }
     const int N = n_m - 1;
     for (int i = f; i <= l; ++i)
-        b.relations.emplace_back(RelationKind::LowerWall, std::vector<Term>{Term{{i, 0}, 1.0}}, kPsiLowerWall, Node{i, 0});
+        b.relations.emplace_back(RelationKind::LowerWall, std::vector<Term>{Term{{i, 0}, 1.0}}, b.psi_lower_wall[sz(i)],
+                                 Node{i, 0});
     for (int i = f; i <= l; ++i)
-        b.relations.emplace_back(RelationKind::UpperWall, std::vector<Term>{Term{{i, n_eta - 1}, 1.0}}, kPsiUpperWall,
+        b.relations.emplace_back(RelationKind::UpperWall, std::vector<Term>{Term{{i, n_eta - 1}, 1.0}}, b.psi_upper_wall[sz(i)],
                                  Node{i, n_eta - 1});
     for (int i = 0; i < n_m; ++i)
-        if (i < f || i > l) b.relations.push_back(periodic(i, n_eta, kPsiPeriodicJump));
+        if (i < f || i > l) b.relations.push_back(periodic(i, n_eta, b.periodic_jump[sz(i)]));
     for (int j = 0; j < n_eta; ++j)
         b.relations.emplace_back(RelationKind::Upstream,
                                  std::vector<Term>{Term{{0, j}, kForward[0]}, Term{{1, j}, kForward[1]},

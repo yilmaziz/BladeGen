@@ -180,8 +180,9 @@ FlowField velocity_components(const Field& psi, const Field& density, const Coef
     }
     for (int i = 0; i < n_m; ++i) {
         if (!bcs.periodic_lower[bcs.at(i, 0)]) continue;
-        const double below = bcs.periodic_ghost(i, -1).value(psi);     // psi[i, -1] = psi[i, J - 1] - 1
-        const double above = bcs.periodic_ghost(i, n_eta).value(psi);  // psi[i, J + 1] = psi[i, 1] + 1
+        const double jump = bcs.station_jump(i);  // 1 (v1), or the wake's jump of the equivalent inviscid flow
+        const double below = bcs.periodic_ghost(i, -1, jump).value(psi);     // psi[i, -1] = psi[i, J - 1] - 1
+        const double above = bcs.periodic_ghost(i, n_eta, jump).value(psi);  // psi[i, J + 1] = psi[i, 1] + 1
         psi_eta(i, 0) = (psi(i, 1) - below) / (2.0 * deta);
         psi_eta(i, J) = (above - psi(i, J - 1)) / (2.0 * deta);
     }
@@ -192,9 +193,27 @@ FlowField velocity_components(const Field& psi, const Field& density, const Coef
         throw FlowRecoveryError(std::string("psi_m by m region: ") + error.what());
     }
     out.psi_m.v = d_dm_runs(psi.v, n_eta, dm, regions);
-    for (int i = 0; i < n_m; ++i)
-        for (int j = 0; j < n_eta; ++j)
-            if (bcs.blade_wall(i, j)) out.psi_m(i, j) = 0.0;  // the walls take precedence
+    // v1: psi_m = 0 on the walls (Dirichlet psi = 0, 1).  With transpiration the wall psi varies along
+    // m and psi_m there is d(psi_wall)/dm, the differences of the blade run along the wall itself
+    if (!bcs.transpiration)
+        for (int i = 0; i < n_m; ++i)
+            for (int j = 0; j < n_eta; ++j)
+                if (bcs.blade_wall(i, j)) out.psi_m(i, j) = 0.0;  // the walls take precedence
+    if (bcs.transpiration) {
+        // a jump that varies along the exit (the marched wake) is a source sheet on the wake cut: psi_m
+        // of the two images differs by d(jump)/dm.  Ours: both images take the mean (the sheet's normal
+        // velocity split equally between its sides), so W and the density stay periodic, as the
+        // coefficients require.  A constant jump (v1, the constant wake) is left as it is.
+        const int first_exit = blade.back() + 1;
+        bool varying = false;
+        for (int i = first_exit + 1; i < n_m; ++i) varying = varying || bcs.station_jump(i) != bcs.station_jump(first_exit);
+        if (varying)
+            for (int i = first_exit; i < n_m; ++i) {
+                const double mean = 0.5 * (out.psi_m(i, 0) + out.psi_m(i, J));
+                out.psi_m(i, 0) = mean;
+                out.psi_m(i, J) = mean;
+            }
+    }
 
     // v1 _velocities: Eqs. 5-18, 5-19 with mu = mdot' / rho
     const int n = n_m * n_eta;

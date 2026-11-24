@@ -9,7 +9,12 @@
 ///    psi[i, J+1] = psi[i, 1] + 1, i.e. (psi[i, 1] - psi[i, J-1] + 1) / (2 deta);
 ///  * psi_m: by m region (metrics.py's runs and stencils: central inside a run, one-sided at its
 ///    ends, so backward at f - 1, forward at f, backward at l, forward at l + 1), and exactly 0
-///    on the blade walls (Dirichlet).
+///    on the blade walls (Dirichlet).  Not in v1: with boundary conditions built with a
+///    Transpiration (the equivalent inviscid flow of the boundary-layer coupling) the wall psi
+///    varies along m; psi_m on the walls is then d(psi_wall)/dm, the same run differences along
+///    the wall, and the periodic continuation carries each station's jump.  Where that jump varies
+///    along the exit (the marched wake: a source sheet on the wake cut), psi_m of the two periodic
+///    images differs by d(jump)/dm; both take their mean, so W and the density stay periodic (ours).
 /// Mass flow (station_mass_flow, a diagnostic): the trapezoidal integral over eta of rho W_m S.
 /// Inlet closure (inlet_state, stationary only): W1 the root of W / a(W) = M1 by bisection to
 /// adjacent doubles on eos's sound speed; mdot' = rho1 W1 cos(beta1) S1.

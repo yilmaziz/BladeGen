@@ -116,7 +116,7 @@ enum class Camberline {
 };
 
 /// The blade row: an inlet guide vane uses Howell's deviation Eq. 6-26 (p. 128) and no incidence
-/// term in Eq. 6-77 (p. 144).  Rotor and stator are treated alike (a rotor through InletState::omega,
+/// term in Eq. 6-77 (p. 144).  Rotor and stator are treated alike (a rotor through CascadeInletState::omega,
 /// the blade speed of Eq. 6-39).
 enum class BladeRowKind { Rotor, Stator, InletGuideVane };
 
@@ -140,7 +140,7 @@ struct CascadeGeometry
 };
 
 /// The flow at QN1 (upstream of the row) on the stream surface, book frame, relative to this row.
-struct InletState
+struct CascadeInletState
 {
     double radius = 0.0;      ///< r1 [m]
     double wm = 0.0;          ///< W_m1 = C_m1 [m/s] (> 0)
@@ -254,8 +254,8 @@ struct CascadePerformance
     // stall and Mach number effects (cascade frame, degrees)
     double stall_range_negative_deg = 0.0;  ///< R_c = alpha* - alpha_c (6-47, 6-49), low speed
     double stall_range_positive_deg = 0.0;  ///< R_s = alpha_s - alpha* (6-48, 6-50), low speed
-    double beta1_negative_stall_deg = 0.0;  ///< beta_1c (solved with Eq. 6-47, before the 20 deg limit)
-    double beta1_positive_stall_deg = 0.0;  ///< beta_1s (solved with Eq. 6-48)
+    double beta1_negative_stall_deg = 0.0;  ///< beta_1c (solved with Eq. 6-47, before the 20 deg limit; DunavantA4K6: gamma + alpha* - 10)
+    double beta1_positive_stall_deg = 0.0;  ///< beta_1s (solved with Eq. 6-48; DunavantA4K6: gamma + alpha* + 10)
     double negative_stall_incidence_deg = 0.0;  ///< i_c (6-51, then the choke limit 6-54)
     double positive_stall_incidence_deg = 0.0;  ///< i_s (6-52)
     double minimum_loss_incidence_deg = 0.0;    ///< i_m (6-55)
@@ -273,7 +273,7 @@ struct CascadePerformance
 
 /// The cascade performance of Sec. 7.3: exit relative angle, loss (with parts), stall margins and
 /// K_W.  Throws CorrelationError (see the file comment).
-[[nodiscard]] CascadePerformance evaluate(const CascadeGeometry& geometry, const InletState& inlet,
+[[nodiscard]] CascadePerformance evaluate(const CascadeGeometry& geometry, const CascadeInletState& inlet,
                                           const DischargeEstimate& discharge, const Gas& gas = {},
                                           const CorrelationOptions& options = {});
 

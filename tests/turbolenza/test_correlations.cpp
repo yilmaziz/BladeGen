@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <numbers>
+#include <string>
 
 using namespace BladeGen::Turbolenza;
 using Catch::Approx;
@@ -35,9 +36,9 @@ CascadeGeometry naca_cascade()
 }
 
 /// The QN1 state of a stream surface: W_theta1 = W_m1 tan(beta'_1).
-InletState inlet(double beta1_rad, double mach, double wm = 100.0, double r = 0.3, double omega = 0.0)
+CascadeInletState inlet(double beta1_rad, double mach, double wm = 100.0, double r = 0.3, double omega = 0.0)
 {
-    InletState s;
+    CascadeInletState s;
     s.radius = r;
     s.wm = wm;
     s.wtheta = wm * std::tan(beta1_rad);
@@ -46,7 +47,7 @@ InletState inlet(double beta1_rad, double mach, double wm = 100.0, double r = 0.
     return s;
 }
 
-DischargeEstimate discharge(const InletState& in, double wm_ratio = 1.0, double radius_ratio = 1.0)
+DischargeEstimate discharge(const CascadeInletState& in, double wm_ratio = 1.0, double radius_ratio = 1.0)
 {
     return {in.radius * radius_ratio, in.wm * wm_ratio};
 }
@@ -529,7 +530,7 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     CorrelationOptions opt;  // Aungier's: alpha* (6-8), Eq. 6-46 with K1 = 0.0073, K2 of 6-99
     const Gas gas;
     CascadeGeometry g = naca_cascade();
-    InletState in = inlet(0.0, 0.4);
+    CascadeInletState in = inlet(0.0, 0.4);
 
     // at beta1 = beta1*, W_m2 = W_m1, low Mach: i = i*, delta = delta*, xi = 0, omega = omega*
     const CascadePerformance d0 = evaluate(g, in, discharge(in), gas, opt);
@@ -555,7 +556,7 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     // the loss rises away from i_m on both sides and the deviation with incidence (Fig. 6-13, Eq. 6-77)
     double prev_dev = -1e9;
     for (const double di : {-6.0, -3.0, 0.0, 3.0, 6.0}) {
-        const InletState ii = inlet((d.design_beta1_deg + di) * kDeg, 0.4);
+        const CascadeInletState ii = inlet((d.design_beta1_deg + di) * kDeg, 0.4);
         const CascadePerformance p = evaluate(g, ii, discharge(ii), gas, opt);
         CHECK(p.loss >= d.loss - 1e-15);
         CHECK(p.deviation_deg > prev_dev);
@@ -565,7 +566,7 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     }
     // the stall points carry twice the minimum loss (Fig. 6-13)
     {
-        const InletState ii = inlet((d.kappa1_deg + d.positive_stall_incidence_deg) * kDeg, 0.4);
+        const CascadeInletState ii = inlet((d.kappa1_deg + d.positive_stall_incidence_deg) * kDeg, 0.4);
         CHECK(evaluate(g, ii, discharge(ii), gas, opt).loss == Approx(2.0 * d.losses.minimum).margin(1e-12));
     }
 
@@ -576,8 +577,8 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     gr.row_sign = -1;
     gr.stagger = -g.stagger;
     gr.camber = -g.camber;
-    const InletState ip = inlet((d.design_beta1_deg + 2.0) * kDeg, 0.4, 100.0, 0.3, 1.2 * 100.0 / 0.3);
-    InletState im = ip;
+    const CascadeInletState ip = inlet((d.design_beta1_deg + 2.0) * kDeg, 0.4, 100.0, 0.3, 1.2 * 100.0 / 0.3);
+    CascadeInletState im = ip;
     im.wtheta = -ip.wtheta;
     im.omega = -ip.omega;
     const CascadePerformance ps = evaluate(g, ip, discharge(ip, 0.95, 1.05), gas, opt);
@@ -589,7 +590,7 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     // Klapproth's term sees the rotation: U1/W_m1 = 1.2 with r2 = 1.05 r1 lowers W_max/W1 by
     // 0.61 cos^2(b1)/sigma * 1.2 (1 - 1.05^2) relative to omega = 0
     {
-        InletState i0 = ip;
+        CascadeInletState i0 = ip;
         i0.omega = 0.0;
         const CascadePerformance p0 = evaluate(g, i0, discharge(i0, 0.95, 1.05), gas, opt);
         CHECK(ps.wmax_ratio - p0.wmax_ratio ==
@@ -617,7 +618,7 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     gv.thickness_ratio = 0.10;
     gv.throat_over_pitch = 0.85;
     gv.pitch_over_height = 0.3;
-    const InletState v0i = inlet(0.0, 0.3), v1i = inlet(8.0 * kDeg, 0.3);
+    const CascadeInletState v0i = inlet(0.0, 0.3), v1i = inlet(8.0 * kDeg, 0.3);
     const CascadePerformance v0 = evaluate(gv, v0i, discharge(v0i), gas, opt);
     const CascadePerformance v1 = evaluate(gv, v1i, discharge(v1i), gas, opt);
     CHECK(v0.frame_sign == -1);
@@ -633,13 +634,13 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     CascadeGeometry gz = g;
     gz.camber = 0.0;
     gz.stagger = 0.0;
-    const InletState iz = inlet(0.0, 0.3);
+    const CascadeInletState iz = inlet(0.0, 0.3);
     const CascadePerformance z = evaluate(gz, iz, discharge(iz), gas, opt);
     CHECK(z.frame_sign == 1);
     CHECK(z.kappa1_deg == 0.0);
 
     // Mach number: i_c rises toward i*, the loss at the same incidence grows; supersonic: shock loss
-    const InletState i3 = inlet(d.design_beta1_deg * kDeg, 0.3), i85 = inlet(d.design_beta1_deg * kDeg, 0.85);
+    const CascadeInletState i3 = inlet(d.design_beta1_deg * kDeg, 0.3), i85 = inlet(d.design_beta1_deg * kDeg, 0.85);
     const double l3 = evaluate(g, i3, discharge(i3), gas, opt).loss;
     const CascadePerformance m85 = evaluate(g, i85, discharge(i85), gas, opt);
     CHECK(m85.negative_stall_incidence_deg > d.negative_stall_incidence_deg);
@@ -647,7 +648,7 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     CHECK(m85.losses.shock == 0.0);
     CascadeGeometry gs = g;
     gs.throat_over_pitch = 0.95;
-    const InletState i115 = inlet(d.design_beta1_deg * kDeg, 1.15);
+    const CascadeInletState i115 = inlet(d.design_beta1_deg * kDeg, 1.15);
     const CascadePerformance m115 = evaluate(gs, i115, discharge(i115), gas, opt);
     CHECK(m115.losses.shock > 0.0);
     CHECK(m115.loss == Approx(m115.losses.shock + m115.losses.minimum + m115.losses.incidence).margin(1e-15));
@@ -667,7 +668,7 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     CascadeGeometry gh = naca_cascade();
     gh.solidity = 0.6;
     gh.camber = 45.0 * kDeg;
-    const InletState ih = inlet(60.0 * kDeg, 0.3);
+    const CascadeInletState ih = inlet(60.0 * kDeg, 0.3);
     const CascadePerformance h = evaluate(gh, ih, discharge(ih), gas, opt);
     CHECK(h.d_eq > 2.0);
     CHECK(h.k_w == Approx(std::pow(2.0 / h.d_eq, 0.9)).margin(1e-15));
@@ -677,7 +678,7 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     CorrelationOptions o2;
     o2.calibration = LossCalibration::TwoDimensionalCascade;
     g = naca_cascade();
-    const InletState i4 = inlet(d.design_beta1_deg * kDeg, 0.4);
+    const CascadeInletState i4 = inlet(d.design_beta1_deg * kDeg, 0.4);
     const CascadePerformance c2 = evaluate(g, i4, discharge(i4), gas, o2);
     CHECK(c2.losses.design * cosd(c2.design_beta2_deg) / (2.0 * g.solidity) *
               std::pow(cosd(c2.design_beta2_deg) / cosd(c2.design_beta1_deg), 2) ==
@@ -690,7 +691,7 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     CorrelationOptions re = opt;
     re.reynolds_correction = true;
     CHECK_THROWS_AS(evaluate(g, i4, discharge(i4), gas, re), CorrelationError);  // no Re_c without rho1, mu1
-    InletState ir = i4;
+    CascadeInletState ir = i4;
     ir.density = 1.2;
     ir.viscosity = 1.8e-5;
     const double re_c = 1.2 * std::hypot(ir.wm, ir.wtheta) * g.chord / 1.8e-5;  // Re_c = rho1 W1 c / mu1
@@ -701,7 +702,7 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     CascadeGeometry gd = g;
     gd.profile = ProfileFamily::DoubleCircularArc;
     gd.camberline = Camberline::CircularArc;
-    const InletState i5 = inlet((d.design_beta1_deg + 3.0) * kDeg, 0.4);
+    const CascadeInletState i5 = inlet((d.design_beta1_deg + 3.0) * kDeg, 0.4);
     CHECK_THROWS_AS(evaluate(gd, i5, discharge(i5), gas, opt), CorrelationError);  // alpha of Eq. 6-38 unknown for DCA
     CorrelationOptions oa = opt;
     oa.lieblein_alpha = 0.007;
@@ -717,7 +718,7 @@ TEST_CASE("evaluate: design point, frame sign, guide vanes, trends, refusals", "
     gb = naca_cascade();
     gb.pitch_over_height = 0.0;
     CHECK_THROWS_AS(evaluate(gb, i4, discharge(i4), gas, opt), CorrelationError);  // Eq. 6-99 needs s/h
-    InletState ib = i4;
+    CascadeInletState ib = i4;
     ib.mach = 0.0;
     CHECK_THROWS_AS(evaluate(g, ib, discharge(i4), gas, opt), CorrelationError);
     ib = i4;
@@ -843,7 +844,7 @@ TEST_CASE("evaluate: a guide vane with beta1* >= 0 goes to Howell and keeps its 
     v.thickness_ratio = 0.10;
     v.throat_over_pitch = 0.85;
     v.pitch_over_height = 0.3;
-    const InletState axial = inlet(0.0, 0.3);
+    const CascadeInletState axial = inlet(0.0, 0.3);
     // a NACA 65 / circular-arc guide vane goes to Howell too, not to Lieblein's 6-19
     {
         const CascadePerformance p = evaluate(v, axial, discharge(axial), gas, opt);
@@ -855,7 +856,7 @@ TEST_CASE("evaluate: a guide vane with beta1* >= 0 goes to Howell and keeps its 
         // does not move with incidence (6-77 without its incidence term, p. 144)
         CHECK(p.design_beta1_deg > 0.0);
         CHECK(p.deviation_slope == 0.0);  // reported as 0 for a guide vane (p. 144)
-        const InletState turned = inlet(-6.0 * kDeg, 0.3);  // +6 deg in the sign-changed cascade frame
+        const CascadeInletState turned = inlet(-6.0 * kDeg, 0.3);  // +6 deg in the sign-changed cascade frame
         const CascadePerformance q = evaluate(v, turned, discharge(turned), gas, opt);
         CHECK(q.incidence_deg - p.incidence_deg == Approx(6.0).margin(1e-12));
         CHECK(q.deviation_deg == Approx(p.deviation_deg).margin(1e-13));
@@ -887,7 +888,7 @@ TEST_CASE("evaluate: guide vanes of every profile, the off-design and design W_m
         v.pitch_over_height = 0.3;
         return v;
     };
-    const InletState axial = inlet(0.0, 0.3);
+    const CascadeInletState axial = inlet(0.0, 0.3);
     struct Case
     {
         ProfileFamily pf;
@@ -924,6 +925,16 @@ TEST_CASE("evaluate: guide vanes of every profile, the off-design and design W_m
         CHECK(d.stall_range_negative_deg == 10.0);
         CHECK(d.stall_range_positive_deg == 10.0);
         CHECK(d.positive_stall_incidence_deg == Approx(d.design_incidence_deg + 10.0 / (1.0 + 0.5 * 0.027)).margin(1e-12));
+        // the stall inlet angles are those of the model used (beta_1 = gamma + alpha, cascade frame), and no
+        // Eq. 6-47 limit note: that limit belongs to the unused Eq. 6-47
+        const double gc = static_cast<double>(d.frame_sign) * (v.stagger / kDeg);
+        CHECK(d.beta1_negative_stall_deg == Approx(gc + d.design_attack_deg - 10.0).margin(1e-12));
+        CHECK(d.beta1_positive_stall_deg == Approx(gc + d.design_attack_deg + 10.0).margin(1e-12));
+        CHECK(d.beta1_negative_stall_deg < 20.0);  // the case where the old code noted Eq. 6-47's 20 deg limit
+        for (const auto& n : d.notes) CHECK(n.find("Eq. 6-47 evaluated") == std::string::npos);
+        bool limited = false;  // Herrig's Eqs. 6-47 / 6-48 on the same vane do hit the limit and say so
+        for (const auto& n : h.notes) limited = limited || n.find("Eq. 6-47 evaluated at beta_1c = 20 deg") != std::string::npos;
+        CHECK(limited);
         CHECK(h.stall_range_positive_deg != 10.0);
         CHECK_FALSE(h.notes.empty());
         const CascadeGeometry nv = vane(ProfileFamily::Naca, Camberline::Naca65, 0.5, 0.10, 2.0);
@@ -932,10 +943,10 @@ TEST_CASE("evaluate: guide vanes of every profile, the off-design and design W_m
 
     // ---- i > i*: W_max/W1 of 6-39 with alpha (i - i*)^1.43 in DEGREES, and D_eq of 6-30
     const CascadeGeometry g = naca_cascade();
-    const InletState d0i = inlet(0.0, 0.4);
+    const CascadeInletState d0i = inlet(0.0, 0.4);
     const CascadePerformance d0 = evaluate(g, d0i, discharge(d0i), gas, opt);
     {
-        const InletState hi = inlet((d0.design_beta1_deg + 5.0) * kDeg, 0.4);
+        const CascadeInletState hi = inlet((d0.design_beta1_deg + 5.0) * kDeg, 0.4);
         const CascadePerformance p = evaluate(g, hi, discharge(hi), gas, opt);
         const double exc = p.incidence_deg - p.design_incidence_deg;
         CHECK(exc == Approx(5.0).margin(1e-12));
@@ -948,7 +959,7 @@ TEST_CASE("evaluate: guide vanes of every profile, the off-design and design W_m
 
     // ---- the design W_max* and D_eq* of a rotating row with r2 != r1 (6-39 at i*, Klapproth's terms)
     {
-        const InletState ip = inlet((d0.design_beta1_deg + 2.0) * kDeg, 0.4, 100.0, 0.3, 1.2 * 100.0 / 0.3);
+        const CascadeInletState ip = inlet((d0.design_beta1_deg + 2.0) * kDeg, 0.4, 100.0, 0.3, 1.2 * 100.0 / 0.3);
         const CascadePerformance p = evaluate(g, ip, discharge(ip, 0.95, 1.05), gas, opt);
         const double b1 = p.design_beta1_deg, b2 = p.design_beta2_deg;
         const double wmax = 1.12 + 0.61 * cosd(b1) * cosd(b1) / 1.2 * (tand(b1) - 1.05 * 0.95 * tand(b2) + 1.2 * (1.0 - 1.05 * 1.05));
@@ -958,7 +969,7 @@ TEST_CASE("evaluate: guide vanes of every profile, the off-design and design W_m
 
     // ---- the choke angle (6-53) by hand, and omega_m with i_m != i* (6-55, 6-58 with R_s, 6-60)
     {
-        const InletState i85 = inlet(d0.design_beta1_deg * kDeg, 0.85);
+        const CascadeInletState i85 = inlet(d0.design_beta1_deg * kDeg, 0.85);
         const CascadePerformance m = evaluate(g, i85, discharge(i85), gas, opt);
         const double flux = 0.85 * std::pow(2.4 / (2.0 + 0.4 * 0.85 * 0.85), 3.0);  // (g+1)/(2(g-1)) = 3 for g = 1.4
         CHECK(m.choke_beta1_deg == Approx(std::acos(0.7 / flux) / kDeg).margin(1e-11));

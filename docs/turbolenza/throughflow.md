@@ -227,6 +227,11 @@ All of them are declared in `Throughflow.hpp`, with their conventions at its top
   - Output: K_B_endwall only (Eqs. 8-76, 8-77). No force defect and no loss enters Chapter 7.
 - **Stand-ins of this version:** `SpecifiedBladeRow` (β'₂, ω̄ and K_W profiles in span) and
   `ConstantEndwall` (K_B constant, default 1).
+- **The Chapter 6 and Chapter 8 implementations** of the three interfaces, and the stream sheet for the
+  blade-to-blade solver, are the adapters of `ThroughflowCoupling.hpp` and `ThroughflowSheet.hpp`
+  ([coupling.md](coupling.md)).
+- The section handed to the row model carries every field of `BladeSectionGeometry`, the throat o included,
+  interpolated linearly in span.
 
 ## Not in this version (doors kept open for Chapter 12)
 

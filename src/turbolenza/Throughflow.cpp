@@ -698,6 +698,7 @@ Spec Solver::link(int i, const Geo& ge, const Vec& Wm, const Vec& rho_est)
         gsec.thickness_ratio = pick(&BladeSectionGeometry::thickness_ratio);
         gsec.max_camber_position = pick(&BladeSectionGeometry::max_camber_position);
         gsec.max_thickness_position = pick(&BladeSectionGeometry::max_thickness_position);
+        gsec.throat = pick(&BladeSectionGeometry::throat);  // o of Eq. 6-53 (0 where not known)
         return gsec;
     };
     Vec upz(n), upr(n), Hrel2(n), s1v(n), qref(n);

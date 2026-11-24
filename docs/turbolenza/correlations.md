@@ -158,7 +158,8 @@ the header.
   and alpha_c - alpha* = -10 deg. Aungier computes the stall incidence of all blade sections with
   6-47 and 6-48, and attributes the constancy to the guide vanes' constant inlet angle. So 6-47 and 6-48
   are the default, with a note for A4K6. `StallRangeModel::DunavantA4K6` gives R_c = R_s = 10 deg
-  (A4K6 only).
+  (A4K6 only), and its stall inlet angles beta_1c = gamma + alpha* - 10 deg and beta_1s = gamma + alpha* + 10 deg;
+  6-47 and 6-48 are not evaluated then, so 6-47's beta_1c >= 20 deg limit and its note do not apply.
 - **6-52.** K_sh <= 1, as stated, and reported. In 6-60, K_sh is used as defined: the constraint is
   stated for 6-52 only (ours).
 - **6-60.** M' is M'_1 limited to 1 (p. 138). W*/W1 is taken at the actual M'_1.

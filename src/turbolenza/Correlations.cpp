@@ -1032,15 +1032,22 @@ CascadePerformance evaluate(const CascadeGeometry& geo, const InletState& in, co
     }
 
     // ---- stall incidence, low speed (Sec. 6.5)
-    StallRanges sr = stall_ranges(r.design_attack_deg, gamma_d, theta);
+    StallRanges sr;
     if (opt.stall_ranges == StallRangeModel::DunavantA4K6) {
         if (geo.camberline != Camberline::NacaA4K6)
             refuse("StallRangeModel::DunavantA4K6: Dunavant's constant ranges are quoted for the A4K6 camberline only (p. 136)");
-        sr.negative_deg = sr.positive_deg = 10.0;  // alpha_s - alpha* = 10, alpha_c - alpha* = -10 deg (p. 136)
+        // alpha_s - alpha* = 10, alpha_c - alpha* = -10 deg (p. 136); the stall inlet angles of THIS model,
+        // beta_1 = gamma + alpha (as in Eqs. 6-47, 6-48), and no 20 deg limit (that one is Eq. 6-47's, p. 135)
+        sr.negative_deg = sr.positive_deg = 10.0;
+        sr.beta1c_deg = gamma_d + r.design_attack_deg - sr.negative_deg;
+        sr.beta1s_deg = gamma_d + r.design_attack_deg + sr.positive_deg;
+        sr.beta1c_limited = false;
         r.notes.push_back("stall ranges R_c = R_s = 10 deg (Dunavant 1957 for A4K6, p. 136) instead of Eqs. 6-47, 6-48");
-    } else if (geo.camberline == Camberline::NacaA4K6) {
-        r.notes.push_back("A4K6 stall ranges from Eqs. 6-47, 6-48 (Aungier's practice, p. 136); Dunavant's constant "
-                          "+-10 deg is StallRangeModel::DunavantA4K6");
+    } else {
+        sr = stall_ranges(r.design_attack_deg, gamma_d, theta);
+        if (geo.camberline == Camberline::NacaA4K6)
+            r.notes.push_back("A4K6 stall ranges from Eqs. 6-47, 6-48 (Aungier's practice, p. 136); Dunavant's constant "
+                              "+-10 deg is StallRangeModel::DunavantA4K6");
     }
     r.stall_range_negative_deg = sr.negative_deg;
     r.stall_range_positive_deg = sr.positive_deg;

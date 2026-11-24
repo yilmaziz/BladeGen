@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <numbers>
+#include <string>
 
 using namespace BladeGen::Turbolenza;
 using Catch::Approx;
@@ -924,6 +925,16 @@ TEST_CASE("evaluate: guide vanes of every profile, the off-design and design W_m
         CHECK(d.stall_range_negative_deg == 10.0);
         CHECK(d.stall_range_positive_deg == 10.0);
         CHECK(d.positive_stall_incidence_deg == Approx(d.design_incidence_deg + 10.0 / (1.0 + 0.5 * 0.027)).margin(1e-12));
+        // the stall inlet angles are those of the model used (beta_1 = gamma + alpha, cascade frame), and no
+        // Eq. 6-47 limit note: that limit belongs to the unused Eq. 6-47
+        const double gc = static_cast<double>(d.frame_sign) * (v.stagger / kDeg);
+        CHECK(d.beta1_negative_stall_deg == Approx(gc + d.design_attack_deg - 10.0).margin(1e-12));
+        CHECK(d.beta1_positive_stall_deg == Approx(gc + d.design_attack_deg + 10.0).margin(1e-12));
+        CHECK(d.beta1_negative_stall_deg < 20.0);  // the case where the old code noted Eq. 6-47's 20 deg limit
+        for (const auto& n : d.notes) CHECK(n.find("Eq. 6-47 evaluated") == std::string::npos);
+        bool limited = false;  // Herrig's Eqs. 6-47 / 6-48 on the same vane do hit the limit and say so
+        for (const auto& n : h.notes) limited = limited || n.find("Eq. 6-47 evaluated at beta_1c = 20 deg") != std::string::npos;
+        CHECK(limited);
         CHECK(h.stall_range_positive_deg != 10.0);
         CHECK_FALSE(h.notes.empty());
         const CascadeGeometry nv = vane(ProfileFamily::Naca, Camberline::Naca65, 0.5, 0.10, 2.0);

@@ -47,7 +47,8 @@ namespace {
 
 enum Page : int { kBlade = 0, kCascade, kMesh, kSolver, kRun, kPost, kStudy };
 constexpr double kDeg = 180.0 / std::numbers::pi;
-const QStringList kExportNames = {"surface_mach.csv", "surface_pressure.csv", "convergence_history.csv", "fields.csv", "run_summary.json"};
+const QStringList kExportNames = {"surface_mach.csv", "surface_pressure.csv", "convergence_history.csv", "fields.csv", "run_summary.json",
+                                  "bl_suction.csv", "bl_pressure.csv", "bl_history.csv"};
 
 }  // namespace
 
@@ -97,9 +98,10 @@ public:
             return std::string(b);
         };
         char b[512];
-        std::snprintf(b, sizeof b, "%s solve: %d x %d nodes, at most %d passes; tolerances rho %s, W %s, Kutta %s; mdot' %.6g (%s); "
+        const std::string bl = i.bl_iteration ? "[BL iteration " + std::to_string(*i.bl_iteration) + "] " : std::string();
+        std::snprintf(b, sizeof b, "%s%s solve: %d x %d nodes, at most %d passes; tolerances rho %s, W %s, Kutta %s; mdot' %.6g (%s); "
                       "first beta2 %.4f deg; %d thread(s), %s",
-                      i.mode.c_str(), i.n_m, i.n_eta, i.max_passes, tol(i.density_tolerance).c_str(), tol(i.velocity_tolerance).c_str(),
+                      bl.c_str(), i.mode.c_str(), i.n_m, i.n_eta, i.max_passes, tol(i.density_tolerance).c_str(), tol(i.velocity_tolerance).c_str(),
                       i.kutta_tolerance ? tol(*i.kutta_tolerance).c_str() : "-", i.mass_flow_per_depth, i.mass_flow_source.c_str(),
                       i.exit_angle_start * kDeg, i.threads, i.linear_solver.c_str());
         say(b);
@@ -200,7 +202,7 @@ void TurbolenzaWindow::closeEvent(QCloseEvent* e)
         pollRun();
         pollStudy();
     }
-    for (auto* w : {res_win_, contour_win_, loading_win_, study_beta_win_, study_load_win_})
+    for (auto* w : {res_win_, contour_win_, loading_win_, bl_win_, study_beta_win_, study_load_win_})
         if (w) w->hide();
     e->accept();
 }
@@ -226,6 +228,7 @@ void TurbolenzaWindow::buildTree()
     add(post, "Residuals", kPost, 1);
     add(post, "Contours", kPost, 2);
     add(post, "Blade loading", kPost, 3);
+    add(post, "Boundary layer", kPost, 6);
     add(post, "Mesh study: beta_out", kPost, 4);
     add(post, "Mesh study: blade loading", kPost, 5);
     tree_->expandAll();
@@ -237,6 +240,7 @@ void TurbolenzaWindow::buildTree()
         else if (which == 3) showLoading();
         else if (which == 4) showStudyBetaOut();
         else if (which == 5) showStudyLoading();
+        else if (which == 6) showBoundaryLayer();
     });
 }
 
@@ -258,6 +262,7 @@ void TurbolenzaWindow::buildMenus()
     post->addAction("&Residuals", this, [this] { showResiduals(); });
     post->addAction("&Contours", this, [this] { showContours(); });
     post->addAction("&Blade loading", this, [this] { showLoading(); });
+    post->addAction("Boundary &layer", this, [this] { showBoundaryLayer(); });
     post->addAction("Mesh study: &beta_out", this, [this] { showStudyBetaOut(); });
     post->addAction("Mesh study: blade &loading", this, [this] { showStudyLoading(); });
 }
@@ -749,6 +754,7 @@ void TurbolenzaWindow::openPostWindows()
     showResiduals();
     showContours();
     showLoading();
+    if (result_ && result_->viscous) showBoundaryLayer();
 }
 
 void TurbolenzaWindow::showResiduals()
@@ -829,9 +835,15 @@ void TurbolenzaWindow::showLoading()
         row->addWidget(loading_q_);
         row->addStretch(1);
         loading_win_->box->addLayout(row);
+        loading_inviscid_ = new QCheckBox("also the inviscid loading (BL iteration 0)", loading_win_);
+        loading_inviscid_->setChecked(true);
+        loading_inviscid_->setToolTip("a viscous run: the reported loading is the coupled one; this adds the inviscid "
+                                      "solution's (dashed)");
+        row->insertWidget(row->count() - 1, loading_inviscid_);
         loading_plot_ = new PlotWidget(loading_win_);
         loading_win_->box->addWidget(loading_plot_, 1);
         connect(loading_q_, &QComboBox::currentIndexChanged, this, [this] { redrawLoading(); });
+        connect(loading_inviscid_, &QCheckBox::toggled, this, [this] { redrawLoading(); });
     }
     redrawLoading();
     loading_win_->show();
@@ -849,9 +861,91 @@ void TurbolenzaWindow::redrawLoading()
     const int q = loading_q_->currentIndex();
     const auto& r = *result_;
     const QString what = q == 0 ? "Blade-surface Mach number" : q == 1 ? "Blade-surface static pressure" : "Blade-surface pressure coefficient";
+    const bool coupled = r.viscous && r.viscous->coupling == "two_way";
+    loading_inviscid_->setEnabled(coupled);
+    QString title = QString("%1: β_out %2°%3").arg(what).arg(r.solution->exit_angle * kDeg, 0, 'f', 3).arg(r.converged ? "" : "  [NOT CONVERGED]");
+    if (coupled) title += QString("  (coupled; inviscid β_out %1°)").arg(r.viscous->inviscid_exit_angle * kDeg, 0, 'f', 3);
     Tl::drawLoading(loading_plot_, *r.solution, q == 0 ? Tl::LoadingQuantity::Mach : q == 1 ? Tl::LoadingQuantity::Pressure : Tl::LoadingQuantity::DunavantS,
-                    QString("%1: β_out %2°%3").arg(what).arg(r.solution->exit_angle * kDeg, 0, 'f', 3).arg(r.converged ? "" : "  [NOT CONVERGED]"));
+                    title, coupled && loading_inviscid_->isChecked() ? &*r.viscous : nullptr);
     loading_plot_->setBadge({});
+}
+
+bool TurbolenzaWindow::referenceCase() const
+{
+    const T::CaseSettings& st = run_case_ ? run_case_->settings : run_settings_;
+    return std::abs(st.inlet_flow_angle_deg - 45.0) < 0.05 && st.inlet_mach && std::abs(*st.inlet_mach - 0.65) < 0.005 &&
+           std::abs(st.solidity - 1.0) < 0.005 && std::abs(st.stagger_deg - 33.0) < 0.05;
+}
+
+void TurbolenzaWindow::showBoundaryLayer()
+{
+    if (!bl_win_) {
+        bl_win_ = new PostWindow("TURBOlenza: Boundary layer (Aungier 2003 Sec. 5.6)", this);
+        auto* row = new QHBoxLayout;
+        bl_q_ = new QComboBox(bl_win_);
+        bl_q_->addItems({"shape factor H", "θ / c", "δ* / c", "skin friction c_f", "Re_θ"});
+        bl_overlay_ = new QCheckBox("Aungier 2003 Fig. 5-15 (H)", bl_win_);
+        bl_overlay_->setToolTip("the digitized H of Aungier's Fig. 5-15 (NACA 65(12A10)-10, β1 45°, M1 0.65), shown by "
+                                "default for that case");
+        row->addWidget(new QLabel("quantity", bl_win_));
+        row->addWidget(bl_q_);
+        row->addWidget(bl_overlay_);
+        row->addStretch(1);
+        bl_win_->box->addLayout(row);
+        auto* split = new QSplitter(Qt::Vertical, bl_win_);
+        bl_plot_ = new PlotWidget(split);
+        auto* hist = new QSplitter(Qt::Horizontal, split);
+        bl_change_plot_ = new PlotWidget(hist);
+        bl_beta_plot_ = new PlotWidget(hist);
+        split->addWidget(bl_plot_);
+        split->addWidget(hist);
+        split->setStretchFactor(0, 3);
+        split->setStretchFactor(1, 2);
+        bl_win_->box->addWidget(split, 1);
+        connect(bl_q_, &QComboBox::currentIndexChanged, this, [this] { redrawBoundaryLayer(); });
+        connect(bl_overlay_, &QCheckBox::toggled, this, [this] { redrawBoundaryLayer(); });
+    }
+    bl_overlay_->blockSignals(true);
+    bl_overlay_->setChecked(referenceCase());
+    bl_overlay_->blockSignals(false);
+    redrawBoundaryLayer();
+    bl_win_->show();
+    bl_win_->raise();
+}
+
+void TurbolenzaWindow::redrawBoundaryLayer()
+{
+    if (!bl_plot_) return;
+    if (!result_ || !result_->viscous) {
+        for (auto* w : {bl_plot_, bl_change_plot_, bl_beta_plot_}) {
+            w->setBadge({"no boundary layer: run a case with the boundary layer on (Solver page)", 1});
+            w->update();
+        }
+        return;
+    }
+    const auto& r = *result_;
+    const auto& v = *r.viscous;
+    const int q = bl_q_->currentIndex();
+    const T::BlIteration* last = v.history.empty() ? nullptr : &v.history.back();
+    auto xc = [](double x) { return std::isfinite(x) ? QString::number(x, 'f', 3) : QString("none"); };
+    QString title = QString("Boundary layer, %1 (%2, %3): transition SS %4 / PS %5, separation SS %6 / PS %7, loss ω %8%9")
+                        .arg(QString::fromStdString(v.coupling))
+                        .arg(QString::fromStdString(v.laminar_cf_form))
+                        .arg(QString::fromStdString(v.wake_model))
+                        .arg(xc(last ? last->transition_x_c_ss : std::nan("")))
+                        .arg(xc(last ? last->transition_x_c_ps : std::nan("")))
+                        .arg(xc(last ? last->separation_x_c_ss : std::nan("")))
+                        .arg(xc(last ? last->separation_x_c_ps : std::nan("")))
+                        .arg(v.loss_omega, 0, 'f', 4)
+                        .arg(r.converged ? "" : "  [NOT CONVERGED]");
+    const Tl::BlQuantity which = q == 0   ? Tl::BlQuantity::H
+                                 : q == 1 ? Tl::BlQuantity::ThetaOverC
+                                 : q == 2 ? Tl::BlQuantity::DeltaStarOverC
+                                 : q == 3 ? Tl::BlQuantity::Cf
+                                          : Tl::BlQuantity::ReTheta;
+    Tl::drawBoundaryLayer(bl_plot_, v, run_case_ ? run_case_->settings.chord : 1.0, which, bl_overlay_->isChecked(), title);
+    Tl::drawBlChange(bl_change_plot_, v, run_case_ ? run_case_->settings.bl_tolerance : std::nan(""));
+    Tl::drawBlBetaOut(bl_beta_plot_, v);
 }
 
 QStringList TurbolenzaWindow::saveResults(const QString& dir, bool overwrite)
@@ -885,6 +979,19 @@ QStringList TurbolenzaWindow::saveResults(const QString& dir, bool overwrite)
         png(loading_plot_, names[q]);
     }
     loading_q_->setCurrentIndex(q0);
+    if (result_->viscous) {
+        showBoundaryLayer();
+        QApplication::processEvents();
+        const int b0 = bl_q_->currentIndex();
+        const char* bl_names[5] = {"bl_H.png", "bl_theta.png", "bl_delta_star.png", "bl_cf.png", "bl_re_theta.png"};
+        for (int q = 0; q < 5; ++q) {
+            bl_q_->setCurrentIndex(q);
+            png(bl_plot_, bl_names[q]);
+        }
+        bl_q_->setCurrentIndex(b0);
+        png(bl_change_plot_, "bl_history_change.png");
+        png(bl_beta_plot_, "bl_history_beta_out.png");
+    }
     return out;
 }
 
@@ -987,7 +1094,42 @@ int TurbolenzaWindow::selfTest(const QString& dir, int passes)
     res_win_->close();
     QApplication::processEvents();
     if (residuals_->window() != this) return fail("the residual plot did not return to the Run page", 35);
-    std::printf("turbolenza self-test OK: %lld files in %s\n", static_cast<long long>(files.size()), qPrintable(dir));
+    // 6. the boundary layer (one way) on the same case, solved to convergence: its window and files
+    showPage(kSolver);
+    viscous_->setChecked(true);
+    bl_coupling_->setCurrentIndex(0);
+    max_rho_->setValue(5000);
+    max_k_->setValue(5000);
+    startRun();
+    if (!running()) return fail("the viscous solve did not start", 36);
+    clock.restart();
+    while (running() || (ch_ && !ch_->done)) {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        if (clock.elapsed() > 600000) {
+            stopRun();
+            return fail("the viscous solve took more than 10 minutes", 37);
+        }
+    }
+    QApplication::processEvents();
+    if (!result_ || !result_->viscous || result_->viscous->suction.x_c.empty())
+        return fail(("the viscous run has no boundary layer: " + (result_ ? result_->error : std::string("no result"))).c_str(), 38);
+    if (!bl_win_ || !bl_win_->isVisible()) return fail("the Boundary layer window did not open", 39);
+    std::printf("turbolenza self-test: one-way boundary layer, transition SS %.3f / PS %.3f, loss %.4f\n",
+                result_->viscous->suction.transition_x_c, result_->viscous->pressure_side.transition_x_c,
+                result_->viscous->loss_omega);
+    const QString vdir = QDir(dir).filePath("viscous");
+    QDir().mkpath(vdir);
+    QStringList vfiles;
+    try {
+        vfiles = saveResults(vdir, true);
+    } catch (const std::exception& e) {
+        return fail(e.what(), 40);
+    }
+    for (const char* name : {"bl_suction.csv", "bl_pressure.csv", "bl_history.csv", "bl_H.png", "bl_history_change.png"})
+        if (!QFileInfo(QDir(vdir).filePath(name)).exists()) return fail((std::string("missing: ") + name).c_str(), 41);
+    viscous_->setChecked(false);
+    std::printf("turbolenza self-test OK: %lld + %lld files in %s\n", static_cast<long long>(files.size()),
+                static_cast<long long>(vfiles.size()), qPrintable(dir));
     return 0;
 }
 

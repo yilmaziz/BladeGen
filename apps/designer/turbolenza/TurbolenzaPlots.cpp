@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <tuple>
 
 namespace Designer::Tl {
 
@@ -176,9 +177,12 @@ void drawResiduals(PlotWidget* w, const std::vector<T::PassRecord>& records, dou
                    const QString& status)
 {
     QVector<QPointF> rho, vel, kut, lin;
-    double x_max = 1.0;
+    double x_max = 1.0, position = 0.0;
     for (const auto& r : records) {
-        const double x = r.index;
+        // the pass's position in the run: its index for an inviscid run, the passes of every boundary-layer
+        // iteration one after the other for a viscous one (their indices restart at 0)
+        const double x = position;
+        position += 1.0;
         x_max = std::max(x_max, x);
         rho << QPointF(x, r.density_change);
         vel << QPointF(x, r.velocity_change);
@@ -311,7 +315,7 @@ void drawContours(PlotWidget* w, const T::SolutionData& s, ContourField f, int b
     w->commit(true);
 }
 
-void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title)
+void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title, const T::ViscousData* inviscid)
 {
     auto pts = [&](const T::SurfaceData& d) {
         QVector<QPointF> out;
@@ -319,8 +323,13 @@ void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, con
         for (std::size_t k = 0; k < d.x_c.size() && k < val.size(); ++k) out << QPointF(d.x_c[k], val[k]);
         return out;
     };
-    QVector<Series> series = {line("suction side", pts(s.suction), kSuction, 1.8), line("pressure side", pts(s.pressure_side), kPressure, 1.8)};
+    const bool both = inviscid && !inviscid->inviscid_suction.x_c.empty();
+    QVector<Series> series = {line(both ? "suction side (coupled)" : "suction side", pts(s.suction), kSuction, 1.8),
+                              line(both ? "pressure side (coupled)" : "pressure side", pts(s.pressure_side), kPressure, 1.8)};
     for (auto& x : series) x.markers = true, x.marker_size = 2;
+    if (both)
+        series << line("suction side (inviscid, k = 0)", pts(inviscid->inviscid_suction), kSuction, 1.1, Qt::DashLine)
+               << line("pressure side (inviscid, k = 0)", pts(inviscid->inviscid_pressure_side), kPressure, 1.1, Qt::DashLine);
     if (q == LoadingQuantity::Mach) series << line("M = 1", {QPointF(0.0, 1.0), QPointF(1.0, 1.0)}, QColor(85, 85, 85), 0.9, Qt::DashLine);
     const QString yl = q == LoadingQuantity::Mach       ? "surface relative Mach number"
                        : q == LoadingQuantity::Pressure ? "surface static pressure p [Pa]"
@@ -331,6 +340,131 @@ void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, con
     w->setFills({});
     w->setMarkers({});
     w->setSeries(series);
+    w->commit(true);
+}
+
+namespace {
+
+// Aungier (2003) Fig. 5-15, digitized (tests/turbolenza/validation/aungier2003_fig5_15/H_*.csv)
+const QPointF kFigSuction[] = {
+    {0.0000, 2.9547}, {0.0426, 2.8819}, {0.0863, 2.9972}, {0.1297, 1.8969}, {0.1662, 1.9048},
+    {0.2579, 1.9090}, {0.3061, 1.9006}, {0.3943, 1.9006}, {0.4319, 1.9133}, {0.4778, 1.9578},
+    {0.5224, 2.0320}, {0.5660, 2.1167}, {0.6059, 2.2100}, {0.6506, 2.3604}, {0.6965, 2.6042},
+    {0.7376, 2.6656}, {0.7459, 2.6635}, {0.7517, 2.6571}, {1.0000, 2.5123},
+};
+const QPointF kFigPressure[] = {
+    {0.0000, 2.8802}, {0.0429, 3.2135}, {0.1296, 2.7996}, {0.1732, 1.6553}, {0.1873, 1.6590},
+    {0.2191, 1.6674}, {0.3884, 1.6717}, {0.4154, 1.6844}, {0.4319, 1.6844}, {0.4789, 1.7119},
+    {0.7470, 1.9196}, {0.8329, 1.9726}, {0.8705, 1.9874}, {0.9093, 1.9663}, {0.9140, 1.9578},
+    {0.9587, 1.7819}, {0.9975, 1.5827}, {1.0000, 1.5766},
+};
+const QPointF kFigTransition[] = {{0.1297, 1.8969}, {0.1732, 1.6553}};  // suction, pressure
+const QPointF kFigSeparation(0.7459, 2.6635);                           // suction: the dashed part starts
+
+}  // namespace
+
+void drawBoundaryLayer(PlotWidget* w, const T::ViscousData& v, double chord, BlQuantity q, bool overlay, const QString& title)
+{
+    auto value = [&](const T::BoundaryLayerSurfaceData& d, std::size_t k) {
+        switch (q) {
+        case BlQuantity::H: return d.H[k];
+        case BlQuantity::ThetaOverC: return d.theta[k] / chord;
+        case BlQuantity::DeltaStarOverC: return d.delta_star[k] / chord;
+        case BlQuantity::Cf: return d.c_f[k];
+        case BlQuantity::ReTheta: return d.Re_theta[k];
+        }
+        return kNaN;
+    };
+    QVector<Series> series;
+    QVector<PointMarker> markers;
+    auto marker = [](QPointF p, char shape, const QColor& c, const QString& label) {
+        PointMarker m;
+        m.p = p;
+        m.shape = shape;
+        m.color = c;
+        m.size = 6.0;
+        m.label = label;
+        return m;
+    };
+    for (const auto& [d, c, name] : {std::tuple{&v.suction, kSuction, QString("suction surface")},
+                                     std::tuple{&v.pressure_side, kPressure, QString("pressure surface")}}) {
+        QVector<QPointF> p;
+        for (std::size_t k = 0; k < d->x_c.size(); ++k)
+            if (std::isfinite(value(*d, k))) p << QPointF(d->x_c[k], value(*d, k));
+        auto s = line(name, p, c, 1.8);
+        s.markers = true;
+        s.marker_size = 2;
+        series << s;
+        auto mark = [&](double x, char shape, const QString& label) {
+            if (!std::isfinite(x)) return;
+            for (std::size_t k = 0; k < d->x_c.size(); ++k)
+                if (d->x_c[k] == x && std::isfinite(value(*d, k))) markers << marker(QPointF(x, value(*d, k)), shape, c, label);
+        };
+        mark(d->transition_x_c, 'o', "transition");
+        mark(d->separation_x_c, 'x', "separation");
+        mark(d->laminar_separation_x_c, 's', "laminar separation");
+    }
+    if (overlay && q == BlQuantity::H) {
+        QVector<QPointF> ss(std::begin(kFigSuction), std::end(kFigSuction)), ps(std::begin(kFigPressure), std::end(kFigPressure));
+        auto a = line("Aungier 2003 Fig. 5-15, suction", ss, kSuction.darker(150), 0.9, Qt::DotLine);
+        auto b = line("Aungier 2003 Fig. 5-15, pressure", ps, kPressure.darker(150), 0.9, Qt::DotLine);
+        a.markers = b.markers = true;
+        a.marker_size = b.marker_size = 4;
+        series << a << b;
+        for (const QPointF& t : kFigTransition) markers << marker(t, '^', QColor(60, 60, 60), "Fig. 5-15 transition");
+        markers << marker(kFigSeparation, 'x', QColor(60, 60, 60), "Fig. 5-15 separation");
+    }
+    const QString yl = q == BlQuantity::H              ? "shape factor H = δ*/θ"
+                       : q == BlQuantity::ThetaOverC     ? "θ / c"
+                       : q == BlQuantity::DeltaStarOverC ? "δ* / c"
+                       : q == BlQuantity::Cf             ? "skin friction c_f"
+                                                         : "Re_θ";
+    w->setTitle(title);
+    w->setLabels("x / c", yl);
+    w->logY = false;
+    w->proportional = false;
+    w->setFills({});
+    w->setMarkers(markers);
+    w->setSeries(series);
+    w->setBadge(v.suction.x_c.empty() ? Badge{"no boundary layer in this run (it failed before one was computed)", 1} : Badge{});
+    w->commit(true);
+}
+
+void drawBlChange(PlotWidget* w, const T::ViscousData& v, double tolerance)
+{
+    QVector<QPointF> p;
+    for (const auto& h : v.history) p << QPointF(h.k, h.max_change_m);
+    auto s = line("max |m_BL - m_used| / max |m_BL|", p, QColor(31, 119, 180), 1.6);
+    s.markers = true;
+    QVector<Series> series{s};
+    if (std::isfinite(tolerance) && tolerance > 0.0 && !p.isEmpty())
+        series << line("tolerance", {QPointF(0.0, tolerance), QPointF(std::max(1.0, p.back().x()), tolerance)}, QColor(85, 85, 85),
+                       1.0, Qt::DashLine);
+    w->logY = true;
+    w->setTitle(QString("Coupling history: change of the mass deficit (%1)").arg(v.converged ? "converged" : "NOT converged"));
+    w->setLabels("BL iteration k", "max relative change of m");
+    w->proportional = false;
+    w->setFills({});
+    w->setMarkers({});
+    w->setSeries(series);
+    w->setBadge({});
+    w->commit(true);
+}
+
+void drawBlBetaOut(PlotWidget* w, const T::ViscousData& v)
+{
+    QVector<QPointF> p;
+    for (const auto& h : v.history) p << QPointF(h.k, h.beta_out * 180.0 / std::numbers::pi);
+    auto s = line("β_out of the inviscid solve of iteration k", p, QColor(214, 39, 40), 1.6);
+    s.markers = true;
+    w->logY = false;
+    w->setTitle("Coupling history: β_out");
+    w->setLabels("BL iteration k", "β_out [deg]");
+    w->proportional = false;
+    w->setFills({});
+    w->setMarkers({});
+    w->setSeries({s});
+    w->setBadge({});
     w->commit(true);
 }
 

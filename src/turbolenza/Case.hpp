@@ -8,6 +8,7 @@
 /// BladeSection; plus the number of threads and the sparse direct solver.
 #pragma once
 
+#include "turbolenza/BoundaryLayer.hpp"
 #include "turbolenza/Cascade.hpp"
 #include "turbolenza/Field.hpp"
 #include "turbolenza/Grid.hpp"
@@ -24,6 +25,11 @@ namespace BladeGen::Turbolenza {
 enum class SolverMode { CoupledKutta, FixedExit };          ///< v1 "coupled_kutta", "fixed_exit"
 enum class ExitAngleStart { BladeTeAngle, Manual };         ///< v1 "blade_te_angle", "manual"
 enum class LinearSolverKind { SparseLU, Pardiso };          ///< Eigen SparseLU (serial) or MKL PARDISO (parallel)
+/// Not in v1: the boundary layer's coupling to the potential flow (Viscous.hpp).
+enum class BlCoupling { OneWay, TwoWay };                   ///< "one_way" (Aungier's analysis), "two_way"
+enum class WakeModel { Constant, Marched };                 ///< "constant", "marched"
+[[nodiscard]] const char* bl_coupling_name(BlCoupling c) noexcept;
+[[nodiscard]] const char* wake_model_name(WakeModel w) noexcept;
 
 /// The most cores the solver may use (the user's safety limit).
 inline constexpr int kMaxThreads = 10;
@@ -74,6 +80,17 @@ struct CaseSettings
     int threads = 1;                                 ///< 1 .. min(kMaxThreads, hardware threads)
     LinearSolverKind linear_solver = LinearSolverKind::SparseLU;
     bool measure_runtime = true;
+    // 8. boundary layer (not in v1: Aungier 2003 Sec. 5.6, coupled by transpiration; Viscous.hpp)
+    bool viscous = false;                            ///< off: the inviscid solve of v1, bit for bit
+    BlCoupling bl_coupling = BlCoupling::TwoWay;
+    LaminarCfForm laminar_cf_form = LaminarCfForm::Centrifugal2000;
+    WakeModel wake_model = WakeModel::Constant;
+    double bl_relaxation = 0.5;                      ///< omega_BL, 0 < omega <= 1
+    double bl_tolerance = 1e-4;                      ///< max relative change of m on the blade surfaces
+    int max_bl_iterations = 30;                      ///< coupled iterations after the inviscid one (0: one way)
+    double transition_re_theta = 250.0;              ///< Aungier Eq. 5-126
+    double separation_hk = 2.4;                      ///< Aungier 2003 p. 111
+    SutherlandLaw sutherland;                        ///< mu(T) of the gas (air)
 };
 
 /// v1 CaseError: the settings do not make a case.
@@ -103,6 +120,7 @@ struct PassRecord
     double kutta_normalized = 0.0;      ///< eps_K; NaN if not formed
     double exit_angle_next = 0.0;       ///< rad
     double tan_correction = 0.0;        ///< NaN at a fixed angle
+    int bl_iteration = 0;               ///< not in v1: the boundary-layer iteration k (0: the inviscid solve)
 };
 
 /// v1 monitor.SolveInfo.
@@ -118,6 +136,7 @@ struct SolveInfo
     int n_m = 0, n_eta = 0;
     int threads = 1;
     std::string linear_solver;
+    std::optional<int> bl_iteration;    ///< not in v1: the boundary-layer iteration of this solve (viscous runs)
 };
 
 /// Observer of a solve (v1 monitor.py protocol): observation only, the result is the same with
@@ -168,6 +187,43 @@ struct RuntimeStats
     double wall_time_s = 0.0, process_cpu_time_s = 0.0, effective_cpu_cores = 0.0;
     int logical_cpus_available = 0, threads = 1;
     std::string linear_solver;
+};
+
+/// Not in v1: one boundary-layer iteration of a viscous run.
+struct BlIteration
+{
+    int k = 0;                          ///< 0: the inviscid solve
+    int inviscid_passes = 0;            ///< the passes of its inviscid solve (the final evaluation included)
+    double beta_out = 0.0;              ///< rad, of its inviscid solve
+    double max_change_m = 0.0;          ///< max |m_BL - m_used| / max |m_BL| on the blade surfaces
+    double transition_x_c_ss = 0.0, transition_x_c_ps = 0.0;  ///< NaN: none
+    double separation_x_c_ss = 0.0, separation_x_c_ps = 0.0;  ///< turbulent H_k >= the limit; NaN: none
+    double laminar_separation_x_c_ss = 0.0, laminar_separation_x_c_ps = 0.0;  ///< Lambda = -12; NaN: none
+    double loss = 0.0;                  ///< omega of Eq. 5-139
+};
+
+/// One surface's layer at its stations (plot and file data).
+struct BoundaryLayerSurfaceData
+{
+    std::vector<double> x_c, x, W_e, rho_e, T_e, mu, theta, delta_star, delta, H, H_k, c_f, Lambda, Re_theta;
+    std::vector<double> mass_deficit;
+    std::vector<std::string> regime;
+    double transition_x_c = 0.0, separation_x_c = 0.0, laminar_separation_x_c = 0.0;  ///< NaN: none
+};
+
+/// The viscous part of a run (RunResult::viscous).
+struct ViscousData
+{
+    std::string coupling, laminar_cf_form, wake_model;
+    bool converged = false;
+    std::vector<BlIteration> history;
+    BoundaryLayerSurfaceData suction, pressure_side;
+    std::vector<double> wake_m_c, wake_mass_deficit;   ///< the exit stations' m_wake asked by the reported layers
+    std::vector<double> wake_theta, wake_delta_star, wake_H;  ///< marched model only
+    double loss_omega = 0.0, loss_Theta = 0.0, loss_Delta_star = 0.0;
+    double te_jump_mismatch = 0.0;      ///< |jump(first exit) - (psi_up - psi_low)(last blade)| of the solve's transpiration
+    double inviscid_exit_angle = 0.0;   ///< rad, k = 0
+    SurfaceData inviscid_suction, inviscid_pressure_side;  ///< the loading of k = 0
 };
 
 /// A built case (v1 controller.Case).
@@ -223,6 +279,8 @@ struct RunResult
     std::optional<RunSummary> summary;  ///< the reported evaluation's numbers (empty without a solution
                                         ///< or when its walls cannot be labeled)
     std::string postprocess_error;      ///< why summary / surfaces are empty, if they are
+    std::optional<double> chord_reynolds;  ///< rho1 W1 c / mu(T1) of the inlet state (Sutherland), if any
+    std::optional<ViscousData> viscous;    ///< a viscous run: its layers and the coupling history
 };
 
 /// v1 build_case: cascade, grid (admissibility checked before any solve), inlet state and the
@@ -245,6 +303,17 @@ struct RunResult
 /// and run_summary.json into `directory` (created; an existing file is overwritten only when
 /// `overwrite`).  Returns the names of the files written, relative to `directory`.
 std::vector<std::string> export_run(const RunResult& r, const Case& c, const std::string& directory, bool overwrite = false);
+
+/// The chord Reynolds number rho1 W1 c / mu(T1) of an inlet state at Mach number `mach` with the
+/// totals P0, T0 (stationary perfect gas, isentropic: T1 = T0 / (1 + (gamma - 1)/2 M^2),
+/// p1 = P0 (T1/T0)^(gamma/(gamma - 1))), mu by Sutherland at the inlet static temperature.
+[[nodiscard]] double chord_reynolds_number(double mach, double total_pressure, double total_temperature, double chord,
+                                           double gamma, double gas_constant, const SutherlandLaw& law = {});
+/// The total pressure P0 that gives the chord Reynolds number `reynolds` at Mach `mach` with the
+/// total temperature T0: the same relations solved for P0 (closed form; the tunnel holds P0 and
+/// T0).  CaseError for inputs that do not make a state.
+[[nodiscard]] double total_pressure_for_reynolds(double reynolds, double mach, double total_temperature, double chord,
+                                                 double gamma, double gas_constant, const SutherlandLaw& law = {});
 
 /// Threads the machine offers, capped at kMaxThreads.
 [[nodiscard]] int max_threads();

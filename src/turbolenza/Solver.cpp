@@ -50,6 +50,7 @@ std::string error_type_name(const std::exception& e)
     TL_NAME(CoefficientError, "CoefficientError");
     TL_NAME(MetricsError, "MetricsError");
     TL_NAME(CaseError, "CaseError");
+    TL_NAME(BoundaryLayerError, "BoundaryLayerError");
     TL_NAME(GridTopologyError, "GridTopologyError");
     TL_NAME(GridGenerationError, "GridGenerationError");
     TL_NAME(GridError, "GridError");
@@ -101,6 +102,8 @@ struct Context
     bool stop_at_sonic = true;
     LinearSolverKind linear_solver = LinearSolverKind::SparseLU;
     int threads = 1;
+    std::shared_ptr<const Transpiration> transpiration;  // the equivalent inviscid flow (null: v1)
+    std::optional<int> bl_iteration;
 };
 
 struct Pass
@@ -206,8 +209,10 @@ Context make_context(std::shared_ptr<const Grid> grid, const SolverConfig& confi
     c.stop_at_sonic = config.iteration.stop_at_sonic;
     c.linear_solver = options.linear_solver;
     c.threads = options.threads;
+    c.transpiration = options.transpiration;
+    c.bl_iteration = options.bl_iteration;
     c.metrics = std::make_shared<const GridMetrics>(build_metrics(grid));
-    c.bcs = std::make_shared<const BoundaryConditions>(build_boundary_conditions(grid));
+    c.bcs = std::make_shared<const BoundaryConditions>(build_boundary_conditions(grid, c.transpiration.get()));
     return c;
 }
 
@@ -257,7 +262,7 @@ Context at_angle(const std::shared_ptr<const Grid>& start, double angle, const C
     Context c = base;
     c.grid = grid;
     c.metrics = std::make_shared<const GridMetrics>(build_metrics(grid));
-    c.bcs = std::make_shared<const BoundaryConditions>(build_boundary_conditions(grid));
+    c.bcs = std::make_shared<const BoundaryConditions>(build_boundary_conditions(grid, c.transpiration.get()));
     return c;
 }
 
@@ -282,7 +287,11 @@ Pass density_pass(const Field& rho, const Context& c)
     p.density_next = relax_density(rho, p.density_target, c.relaxation);
     const std::vector<double> mass = station_mass_flow(p.flow, rho, p.coefficients, *c.metrics);
     p.mass_flow_error.resize(mass.size());
-    for (std::size_t k = 0; k < mass.size(); ++k) p.mass_flow_error[k] = std::abs(mass[k] / c.mass_flow_per_depth - 1.0);
+    // against the station's own flow: mdot' (v1), or mdot' (psi_upper - psi_lower) of the equivalent
+    // inviscid flow with transpiration (station_flow is exactly 1 without it)
+    for (std::size_t k = 0; k < mass.size(); ++k)
+        p.mass_flow_error[k] =
+            std::abs(mass[k] / (c.mass_flow_per_depth * c.bcs->station_flow(static_cast<int>(k))) - 1.0);
     return p;
 }
 
@@ -367,6 +376,7 @@ void record(const Pass& p, const Pass* previous, int n, bool final, const Contex
     PassRecord r;
     r.index = n;
     r.final = final;
+    r.bl_iteration = c.bl_iteration.value_or(0);
     r.density_change = change_norm(p.density_next, p.density_resident);
     if (!previous) {
         r.velocity_change = r.psi_change = nan();
@@ -462,6 +472,7 @@ SolveInfo info_of(const char* mode, const IterationSettings& s, int limit, const
     info.n_eta = grid.n_eta();
     info.threads = c.threads;
     info.linear_solver = linear_solver_name(c.linear_solver);
+    info.bl_iteration = c.bl_iteration;
     return info;
 }
 

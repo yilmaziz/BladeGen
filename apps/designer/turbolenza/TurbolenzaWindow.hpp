@@ -13,7 +13,10 @@
 //                              (run_mesh_study), a results table; Run mesh study, Stop, Save
 //   Run                        the log of the passes (also printed to the terminal) and the live
 //                              residual plot
-//   Post-processing  Residuals, Contours (pressure, Mach), Blade loading (Mach, p, Dunavant S):
+//   Post-processing  Residuals, Contours (pressure, Mach), Blade loading (Mach, p, Dunavant S; a
+//                              viscous run also its inviscid k = 0 loading), Boundary layer (H,
+//                              theta/c, delta*/c, c_f, Re_theta with Aungier's Fig. 5-15; the
+//                              coupling history):
 //                              separate windows after a run; "Save results..."; Mesh study:
 //                              beta_out, Mesh study: blade loading (after a mesh study)
 //
@@ -87,7 +90,8 @@ public:
     /// export_run + the PNGs of the post-processing plots into dir; the files written.
     QStringList saveResults(const QString& dir, bool overwrite);
     /// --turbolenza-self-test: Mid layer, very_coarse mesh, a `passes`-pass solve, post-processing
-    /// views and the saved results in dir.  0 when everything worked.
+    /// views and the saved results in dir; then the same case with the one-way boundary layer to
+    /// convergence, its window and files in dir/viscous.  0 when everything worked.
     int selfTest(const QString& dir, int passes);
 
 protected:
@@ -136,6 +140,10 @@ private:
     void showResiduals();
     void showContours();
     void showLoading();
+    void showBoundaryLayer();
+    void redrawBoundaryLayer();
+    void setP0FromReynolds();          ///< Cascade page: Pt from a reference chord Reynolds number
+    [[nodiscard]] bool referenceCase() const;  ///< the case of Aungier's Fig. 5-15 (beta1 45, M1 0.65, sigma 1, stagger 33)
     void saveDialog();
     void redrawContours();
     void redrawLoading();
@@ -195,6 +203,8 @@ private:
     QDoubleSpinBox *chord_ = nullptr, *solidity_ = nullptr, *stagger_ = nullptr, *beta1_ = nullptr, *mach1_ = nullptr;
     QDoubleSpinBox *pt_ = nullptr, *tt_ = nullptr, *gamma_ = nullptr, *gas_r_ = nullptr, *omega_ = nullptr, *mdot_ = nullptr;
     QCheckBox *mach_given_ = nullptr, *mdot_given_ = nullptr;
+    QDoubleSpinBox *re_ref_ = nullptr, *m_ref_ = nullptr;
+    QLabel* re_info_ = nullptr;
     QLabel* derived_ = nullptr;
     PlotWidget* cascade_plot_ = nullptr;
     QTimer* cascade_timer_ = nullptr;
@@ -217,6 +227,12 @@ private:
     QLineEdit *tol_rho_ = nullptr, *tol_w_ = nullptr, *tol_k_ = nullptr;
     QSpinBox *max_rho_ = nullptr, *max_k_ = nullptr, *threads_ = nullptr;
     QPushButton *run_ = nullptr, *stop_ = nullptr, *run2_ = nullptr, *stop2_ = nullptr;
+    QGroupBox* bl_box_ = nullptr;
+    QCheckBox* viscous_ = nullptr;
+    QComboBox *bl_coupling_ = nullptr, *bl_cf_ = nullptr, *bl_wake_ = nullptr;
+    QDoubleSpinBox *bl_omega_ = nullptr, *bl_re_tr_ = nullptr, *bl_hk_ = nullptr;
+    QLineEdit* bl_tol_ = nullptr;
+    QSpinBox* bl_max_ = nullptr;
 
     // run page
     QPlainTextEdit* log_ = nullptr;
@@ -227,9 +243,11 @@ private:
 
     // post-processing
     QLabel* report_ = nullptr;
-    PostWindow *res_win_ = nullptr, *contour_win_ = nullptr, *loading_win_ = nullptr;
+    PostWindow *res_win_ = nullptr, *contour_win_ = nullptr, *loading_win_ = nullptr, *bl_win_ = nullptr;
     PlotWidget *contour_plot_ = nullptr, *loading_plot_ = nullptr;
-    QComboBox *contour_field_ = nullptr, *loading_q_ = nullptr;
+    PlotWidget *bl_plot_ = nullptr, *bl_change_plot_ = nullptr, *bl_beta_plot_ = nullptr;
+    QComboBox *contour_field_ = nullptr, *loading_q_ = nullptr, *bl_q_ = nullptr;
+    QCheckBox *loading_inviscid_ = nullptr, *bl_overlay_ = nullptr;
     QCheckBox* isolines_ = nullptr;
     QSpinBox* bands_ = nullptr;
 

@@ -12,6 +12,8 @@
 //               resolved by its centre value), periodic copies one pitch up and down, the blades on top, a colour bar
 //               with the turbo map
 //   loading     a blade-surface quantity against x/c, suction side blue, pressure side red
+//   boundary    the boundary layer of both surfaces (H, theta/c, delta*/c, c_f, Re_theta) with
+//   layer       Aungier's Fig. 5-15 overlaid; the coupling history (change of m, beta_out per k)
 //   mesh study  beta_out against dm/c (or the node count), one labelled marker per level; the
 //               blade loading of every level on one axes (one colour per level)
 #pragma once
@@ -47,7 +49,19 @@ enum class ContourField { Pressure, Mach };
 void drawContours(PlotWidget* w, const T::SolutionData& s, ContourField f, int bands, bool isolines, const QString& title);
 
 enum class LoadingQuantity { Mach, Pressure, DunavantS };
-void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title);
+/// inviscid: a viscous run's k = 0 loading, drawn dashed beside the reported (coupled) one.
+void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title,
+                 const T::ViscousData* inviscid = nullptr);
+
+/// The boundary layer (Aungier 2003 Sec. 5.6) of both surfaces against x/c, transition (o) and
+/// separation (x) marked; overlay (H only): Aungier (2003) Fig. 5-15, digitized
+/// (tests/turbolenza/validation/aungier2003_fig5_15), as markers.
+enum class BlQuantity { H, ThetaOverC, DeltaStarOverC, Cf, ReTheta };
+void drawBoundaryLayer(PlotWidget* w, const T::ViscousData& v, double chord, BlQuantity q, bool overlay, const QString& title);
+/// The coupling history: max relative change of m per BL iteration (log y) with the tolerance.
+void drawBlChange(PlotWidget* w, const T::ViscousData& v, double tolerance);
+/// The coupling history: beta_out of each BL iteration's inviscid solve.
+void drawBlBetaOut(PlotWidget* w, const T::ViscousData& v);
 
 /// Mesh study: beta_out [deg] of every level with a solution against dm/c (or the total nodes when
 /// x_nodes), labelled with the level; unconverged levels as red crosses, named in the title.

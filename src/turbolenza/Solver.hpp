@@ -20,7 +20,9 @@
 /// (marked final); an observer that throws is switched off, nothing it does reaches the solve.
 /// SolveOptions::cancel is polled between passes: a cancelled solve ends like an unconverged one
 /// (CancelledError, the last completed pass).
-/// v2 additions: the thread count of the per-node loops (and PARDISO), the linear solver kind,
+/// v2 additions: the transpiration of the boundary-layer coupling (SolveOptions::transpiration:
+/// every pass builds its boundary relations with it), the thread count of the per-node loops (and
+/// PARDISO), the linear solver kind,
 /// the grid operations as a seam (tests inject the v1 grids), and the solve starting from a
 /// grid that is already built (Case.cpp passes build_case's grid instead of building it again).
 #pragma once
@@ -173,6 +175,11 @@ struct SolveOptions
     GridOps grid_ops;
     std::function<void(const PassFields&)> inspect;  ///< every pass's fields (diagnostics, tests)
     SolveFailure* failure = nullptr;
+    /// Not in v1: the wall psi and periodic jumps of the equivalent inviscid flow (the two-way
+    /// boundary-layer coupling, Viscous.hpp); null: v1's 0, 1 and 1.
+    std::shared_ptr<const Transpiration> transpiration;
+    /// Not in v1: the boundary-layer iteration this solve belongs to (SolveInfo, PassRecord).
+    std::optional<int> bl_iteration;
 };
 
 /// v1 solve: make_grid (admissible) at the inlet angle and exit_angle_guess_deg, then the coupled loop.

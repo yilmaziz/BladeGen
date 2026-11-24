@@ -55,6 +55,17 @@ correction (Aungier 2000 Eqs. 13-57 and 13-59 in our frame).
    `(n_m, n_eta)`, the v1 C order). Angles are in radians inside the code; a `_deg` name is
    degrees. The style follows BladeGen's `src/` (see `naca/Naca65.cpp`).
 
+## Not a port: the boundary layer
+
+v1 has no boundary layer. `BoundaryLayer.hpp/.cpp` (Aungier 2003 Sec. 5.6 = Aungier 2000 Ch. 15)
+and `Viscous.hpp/.cpp` (its two-way coupling by transpiration) are new. Rules 2 to 6 apply
+unchanged. In place of rule 1, every equation cites Aungier's equation number as read from the
+page images, and every choice Aungier does not make is marked "ours" in the header. With
+`CaseSettings::viscous` off, nothing of it runs: the solve, its records and its files are v1's,
+bit for bit. The only changes to the ported modules are the transpiration values in the boundary
+relations and the periodic continuation (`Transpiration`, `BoundaryConditions::station_jump`) and
+psi_m on the walls in the flow recovery. Without a `Transpiration` both are v1's.
+
 ## Build and test (Windows, the `bladegen` conda env)
 
 ```

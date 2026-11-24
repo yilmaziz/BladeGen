@@ -6,6 +6,7 @@
 #include "turbolenza/Detail.hpp"
 #include "turbolenza/Postprocess.hpp"
 #include "turbolenza/Solver.hpp"
+#include "turbolenza/Viscous.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -39,6 +40,37 @@ int max_threads()
     const unsigned hw = std::thread::hardware_concurrency();
     const int n = hw == 0 ? 1 : static_cast<int>(hw);
     return std::max(1, std::min(kMaxThreads, n));
+}
+
+const char* bl_coupling_name(BlCoupling c) noexcept { return c == BlCoupling::OneWay ? "one_way" : "two_way"; }
+const char* wake_model_name(WakeModel w) noexcept { return w == WakeModel::Constant ? "constant" : "marched"; }
+
+double chord_reynolds_number(double mach, double P0, double T0, double chord, double gamma, double R, const SutherlandLaw& law)
+{
+    if (!(std::isfinite(mach) && mach > 0.0 && std::isfinite(P0) && P0 > 0.0 && std::isfinite(T0) && T0 > 0.0 &&
+          std::isfinite(chord) && chord > 0.0 && std::isfinite(gamma) && gamma > 1.0 && std::isfinite(R) && R > 0.0))
+        throw CaseError("the chord Reynolds number needs M > 0, P0, T0, chord, R > 0 and gamma > 1, all finite");
+    const double ratio = 1.0 + 0.5 * (gamma - 1.0) * mach * mach;  // T0 / T1
+    const double T1 = T0 / ratio;
+    const double p1 = P0 * std::pow(ratio, -gamma / (gamma - 1.0));
+    const double rho1 = p1 / (R * T1);
+    const double W1 = mach * std::sqrt(gamma * R * T1);
+    double mu = 0.0;
+    try {
+        mu = sutherland_viscosity(T1, law);
+    } catch (const BoundaryLayerError& e) {
+        throw CaseError(std::string("the chord Reynolds number: ") + e.what());
+    }
+    return rho1 * W1 * chord / mu;
+}
+
+double total_pressure_for_reynolds(double reynolds, double mach, double T0, double chord, double gamma, double R,
+                                   const SutherlandLaw& law)
+{
+    if (!(std::isfinite(reynolds) && reynolds > 0.0))
+        throw CaseError(std::format("the reference Reynolds number {} must be positive", py_repr(reynolds)));
+    // Re is proportional to P0 at a fixed Mach number and T0: P0 = Re / Re(P0 = 1 Pa)
+    return reynolds / chord_reynolds_number(mach, 1.0, T0, chord, gamma, R, law);
 }
 
 bool pardiso_available() noexcept
@@ -213,6 +245,92 @@ std::string rule(const std::string& title = "")
     return s;
 }
 
+ViscousSettings viscous_settings(const CaseSettings& s)
+{
+    ViscousSettings v;
+    v.coupling = s.bl_coupling;
+    v.wake = s.wake_model;
+    v.layer.laminar_cf_form = s.laminar_cf_form;
+    v.layer.transition_re_theta = s.transition_re_theta;
+    v.layer.separation_hk = s.separation_hk;
+    v.viscosity = s.sutherland;
+    v.relaxation = s.bl_relaxation;
+    v.tolerance = s.bl_tolerance;
+    v.max_iterations = s.max_bl_iterations;
+    return v;
+}
+
+BoundaryLayerSurfaceData layer_data(const WallLayer& w)
+{
+    const BoundaryLayerProfile& p = w.profile;
+    BoundaryLayerSurfaceData d;
+    d.x_c = w.x_c;
+    d.x = p.x;
+    d.W_e = p.W;
+    d.rho_e = p.rho;
+    d.T_e = p.T;
+    d.mu = p.mu;
+    d.theta = p.theta;
+    d.delta_star = p.delta_star;
+    d.delta = p.delta;
+    d.H = p.H;
+    d.H_k = p.Hk;
+    d.c_f = p.cf;
+    d.Lambda = p.Lambda;
+    d.Re_theta = p.Re_theta;
+    d.mass_deficit = p.mass_deficit;
+    for (BlRegime g : p.regime) d.regime.emplace_back(bl_regime_name(g));
+    auto at = [&](int k) { return k < 0 ? detail::nan() : w.x_c[sz(k)]; };
+    d.transition_x_c = at(p.transition_index);
+    d.separation_x_c = at(p.separation_index);
+    d.laminar_separation_x_c = at(p.laminar_separation_index);
+    return d;
+}
+
+ViscousData viscous_data(const ViscousSolve& v, const CaseSettings& s)
+{
+    ViscousData d;
+    d.coupling = bl_coupling_name(s.bl_coupling);
+    d.laminar_cf_form = laminar_cf_form_name(s.laminar_cf_form);
+    d.wake_model = wake_model_name(s.wake_model);
+    d.converged = v.converged;
+    d.history = v.history;
+    d.loss_omega = d.loss_Theta = d.loss_Delta_star = d.te_jump_mismatch = d.inviscid_exit_angle = detail::nan();
+    if (v.analysis && v.solution) {
+        const ViscousAnalysis& a = *v.analysis;
+        const Grid& g = *v.solution->grid;
+        d.suction = layer_data(a.suction());
+        d.pressure_side = layer_data(a.pressure());
+        const int l = g.last_blade_i;
+        for (std::size_t q = 1; q < a.wake.stations.size(); ++q) {
+            const int i = a.wake.stations[q];
+            d.wake_m_c.push_back(a.wake.m_c[q]);
+            d.wake_mass_deficit.push_back(a.deficit.wake[sz(i)]);
+            if (a.wake.marched) {
+                d.wake_theta.push_back(a.wake.profile.theta[q]);
+                d.wake_delta_star.push_back(a.wake.profile.delta_star[q]);
+                d.wake_H.push_back(a.wake.profile.H[q]);
+            }
+        }
+        d.loss_omega = a.loss.omega;
+        d.loss_Theta = a.loss.Theta;
+        d.loss_Delta_star = a.loss.Delta_star;
+        if (!v.used.wake.empty() && l + 1 < g.n_m())
+            d.te_jump_mismatch = std::abs(v.used.wake[sz(l + 1)] - (v.used.lower[sz(l)] + v.used.upper[sz(l)])) /
+                                 v.solution->mass_flow_per_depth;
+    }
+    if (v.inviscid) {
+        d.inviscid_exit_angle = v.inviscid->exit_angle;
+        try {
+            const BladeSurfaces b = blade_surfaces(*v.inviscid);
+            d.inviscid_suction = surface_data(b.x_c_ss, b.m_c, b.mach_ss, b.pressure_ss, v.inviscid->inlet);
+            d.inviscid_pressure_side = surface_data(b.x_c_ps, b.m_c, b.mach_ps, b.pressure_ps, v.inviscid->inlet);
+        } catch (const std::exception&) {
+        }
+    }
+    return d;
+}
+
 }  // namespace
 
 // --- case construction -----------------------------------------------------------------------
@@ -227,6 +345,27 @@ Case build_case(const CaseSettings& settings, const BladeSection& section)
         throw CaseError("linear solver PARDISO: this build has no Intel MKL (pardiso_available() is false)");
     if (!(std::isfinite(s.chord) && s.chord > 0.0))
         throw CaseError(std::format("chord {}: a positive length in metres", py_repr(s.chord)));
+    if (s.viscous) {
+        if (!(s.bl_relaxation > 0.0 && s.bl_relaxation <= 1.0))
+            throw CaseError(std::format("bl_relaxation {}: 0 < omega_BL <= 1", py_repr(s.bl_relaxation)));
+        if (!(std::isfinite(s.bl_tolerance) && s.bl_tolerance > 0.0))
+            throw CaseError(std::format("bl_tolerance {}: a positive number", py_repr(s.bl_tolerance)));
+        if (s.max_bl_iterations < 0)
+            throw CaseError(std::format("max_bl_iterations {}: 0 or more", s.max_bl_iterations));
+        if (!(std::isfinite(s.transition_re_theta) && s.transition_re_theta > 0.0))
+            throw CaseError(std::format("transition_re_theta {}: a positive number", py_repr(s.transition_re_theta)));
+        if (!(std::isfinite(s.separation_hk) && s.separation_hk > 1.0))
+            throw CaseError(std::format("separation_hk {}: a number > 1", py_repr(s.separation_hk)));
+        try {
+            (void)sutherland_viscosity(s.inlet_total_temperature, s.sutherland);
+        } catch (const BoundaryLayerError& e) {
+            throw CaseError(std::string("the viscosity law: ") + e.what());
+        }
+        if (s.edge_nodes == EdgeNodes::Touching)
+            throw CaseError("the boundary layer needs the first and last blade nodes inside the passage (edge nodes "
+                            "'inside'): the touching experiment puts them on the nose tip and the tail end");
+        if (s.omega != 0.0) throw CaseError("the boundary layer is set up for a stationary cascade (omega = 0) only");
+    }
     Case c;
     c.settings = s;
     c.section = section;
@@ -329,6 +468,7 @@ RunResult run_case(const Case& c, RunObserver* observer, const std::atomic<bool>
     options.linear_solver = s.linear_solver;
     options.failure = &failure;
     std::shared_ptr<const Solution> solution;
+    std::optional<ViscousSolve> viscous;
     r.started = iso_now();
     const auto wall0 = std::chrono::steady_clock::now();
     const double cpu0 = process_cpu_seconds();
@@ -336,9 +476,18 @@ RunResult run_case(const Case& c, RunObserver* observer, const std::atomic<bool>
         config.gas = PerfectGas(s.gamma, s.gas_constant);
         auto grid = std::make_shared<const Grid>(c.grid);
         const std::optional<double> override_ = s.mass_flow_per_depth_override;
-        solution = std::make_shared<const Solution>(s.solver_mode == SolverMode::CoupledKutta
-                                                        ? solve_coupled(grid, config, s.chord, override_, options)
-                                                        : solve_at_exit_angle(grid, config, s.chord, override_, options));
+        if (!s.viscous) {
+            solution = std::make_shared<const Solution>(s.solver_mode == SolverMode::CoupledKutta
+                                                            ? solve_coupled(grid, config, s.chord, override_, options)
+                                                            : solve_at_exit_angle(grid, config, s.chord, override_, options));
+        } else {
+            options.failure = nullptr;  // solve_viscous keeps its own per solve
+            viscous = solve_viscous(grid, config, s.chord, override_, options, viscous_settings(s),
+                                    s.solver_mode == SolverMode::CoupledKutta);
+            solution = viscous->solution;
+            r.error = viscous->error;
+            if (viscous->failed_pass) r.failed_pass = viscous->failed_pass;
+        }
     } catch (const DensityIterationError& error) {
         solution = error.solution;
         r.error = error_type_name(error) + ": " + error.what();
@@ -420,6 +569,13 @@ RunResult run_case(const Case& c, RunObserver* observer, const std::atomic<bool>
         }
         r.solution = std::move(d);
     }
+    if (c.inlet) {
+        try {
+            r.chord_reynolds = c.inlet->density * c.inlet->speed * s.chord / sutherland_viscosity(c.inlet->temperature, s.sutherland);
+        } catch (const BoundaryLayerError&) {
+        }
+    }
+    if (viscous) r.viscous = viscous_data(*viscous, s);
     return r;
 }
 
@@ -501,6 +657,32 @@ std::string format_case_summary(const Case& c)
     row("linear solver", linear_solver_name(s.linear_solver));
     row("measure runtime", bool_repr(s.measure_runtime));
     row("logical CPUs available", std::to_string(std::thread::hardware_concurrency()), "[machine]");
+    head("8. boundary layer (Aungier 2003 Sec. 5.6; not in v1)");
+    row("viscous", bool_repr(s.viscous), tag(!s.viscous), s.viscous ? "" : "off: the inviscid solve");
+    if (s.viscous) {
+        row("coupling", bl_coupling_name(s.bl_coupling), "[user]",
+            s.bl_coupling == BlCoupling::OneWay ? "Aungier's analysis: the layer from the inviscid edge state"
+                                                : "transpiration (equivalent inviscid flow, Lighthill 1958)");
+        row("laminar c_f form", laminar_cf_form_name(s.laminar_cf_form), "[user]",
+            s.laminar_cf_form == LaminarCfForm::Centrifugal2000 ? "2 + Lambda/6 (Aungier 2000 Eq. 15-20)"
+                                                               : "1 + Lambda/6 (Aungier 2003 Eq. 5-123 as printed)");
+        row("wake model", wake_model_name(s.wake_model));
+        row("BL relaxation omega_BL", py_repr(s.bl_relaxation));
+        row("BL tolerance (max dm/m)", py_repr(s.bl_tolerance));
+        row("max BL iterations", std::to_string(s.max_bl_iterations));
+        row("transition Re_theta", py_repr(s.transition_re_theta), tag(s.transition_re_theta == 250.0), "Eq. 5-126");
+        row("separation H_k", py_repr(s.separation_hk), tag(s.separation_hk == 2.4), "2003 p. 111");
+        row("Sutherland mu_ref [Pa s]", py_repr(s.sutherland.mu_ref));
+        row("Sutherland T_ref, S [K]", std::format("{}, {}", py_repr(s.sutherland.t_ref), py_repr(s.sutherland.s)));
+    }
+    if (c.inlet) {
+        try {
+            const double re =
+                c.inlet->density * c.inlet->speed * s.chord / sutherland_viscosity(c.inlet->temperature, s.sutherland);
+            row("chord Reynolds number", std::format("{:.6g}", re), "[derived]", "rho1 W1 c / mu(T1), Sutherland");
+        } catch (const BoundaryLayerError&) {
+        }
+    }
     lines.push_back(rule());
     std::string out;
     for (std::size_t k = 0; k < lines.size(); ++k) out += (k ? "\n" : "") + lines[k];
@@ -559,7 +741,11 @@ std::string format_run_report(const RunResult& r)
         for (const auto& [label, value] : rows) out.push_back(std::format("  {:26s}: {}", label, value));
         out.emplace_back("");
     };
-    block("Case", {{"name", r.case_name}, {"mode", r.mode}, {"status", r.status}});
+    {
+        std::vector<std::pair<std::string, std::string>> rows{{"name", r.case_name}, {"mode", r.mode}, {"status", r.status}};
+        if (r.chord_reynolds) rows.emplace_back("chord Reynolds number", std::format("{:.6g}", *r.chord_reynolds));
+        block("Case", rows);
+    }
     const PassRecord* last = r.records.empty() ? nullptr : &r.records.back();
     if (!r.converged) {
         std::vector<std::pair<std::string, std::string>> rows{{"termination reason", r.error}};
@@ -612,6 +798,31 @@ std::string format_run_report(const RunResult& r)
                             {"blade median error", std::format("{:.3e}", last->mass_flow_error_blade_median)}});
     } else if (r.solution && !r.postprocess_error.empty()) {
         block("Postprocess", {{"not available", r.postprocess_error}});
+    }
+    if (r.viscous) {
+        const ViscousData& v = *r.viscous;
+        auto xc = [](double x) { return std::isfinite(x) ? std::format("{:.4f}", x) : std::string("none"); };
+        std::vector<std::pair<std::string, std::string>> rows{
+            {"coupling", v.coupling},
+            {"laminar c_f form", v.laminar_cf_form},
+            {"wake model", v.wake_model},
+            {"BL iterations", std::format("{} ({})", v.history.size(), v.converged ? "converged" : "NOT converged")}};
+        if (!v.history.empty()) {
+            const BlIteration& h = v.history.back();
+            rows.emplace_back("last max change of m", std::format("{:.3e}", h.max_change_m));
+            rows.emplace_back("beta_out inviscid", std::format("{:.6f} deg", degrees(v.inviscid_exit_angle)));
+            rows.emplace_back("beta_out reported", std::format("{:.6f} deg", degrees(h.beta_out)));
+            rows.emplace_back("SS transition x/c", xc(h.transition_x_c_ss));
+            rows.emplace_back("PS transition x/c", xc(h.transition_x_c_ps));
+            rows.emplace_back("SS separation x/c", xc(h.separation_x_c_ss));
+            rows.emplace_back("PS separation x/c", xc(h.separation_x_c_ps));
+            if (std::isfinite(h.laminar_separation_x_c_ss) || std::isfinite(h.laminar_separation_x_c_ps))
+                rows.emplace_back("laminar separation x/c",
+                                  std::format("SS {}, PS {}", xc(h.laminar_separation_x_c_ss), xc(h.laminar_separation_x_c_ps)));
+        }
+        rows.emplace_back("loss omega (Eq. 5-139)", std::format("{:.5f}", v.loss_omega));
+        rows.emplace_back("Theta, Delta*", std::format("{:.5f}, {:.5f}", v.loss_Theta, v.loss_Delta_star));
+        block("Boundary layer (Aungier 2003 Sec. 5.6)", rows);
     }
     const RuntimeStats& rt = r.runtime;
     block("Runtime", {{"solver wall time", std::format("{:.3f} s", rt.wall_time_s)},
@@ -718,6 +929,12 @@ std::vector<std::string> export_run(const RunResult& r, const Case& c, const std
         files.emplace_back("convergence_history.csv");
         files.emplace_back("fields.csv");
     }
+    const bool layers = r.viscous && !r.viscous->suction.x_c.empty();
+    if (layers) {
+        files.emplace_back("bl_suction.csv");
+        files.emplace_back("bl_pressure.csv");
+    }
+    if (r.viscous) files.emplace_back("bl_history.csv");
     files.emplace_back("run_summary.json");
     if (!overwrite)
         for (const std::string& f : files)
@@ -749,10 +966,12 @@ std::vector<std::string> export_run(const RunResult& r, const Case& c, const std
     }
     if (sol) {
         std::ofstream out = open("convergence_history.csv");
-        out << csv_line({"iteration", "final", "density_change", "velocity_change", "psi_change", "kutta_error",
-                         "kutta_residual", "exit_angle_deg", "exit_angle_next_deg", "tan_correction", "linear_residual",
-                         "peak_mach", "target_mismatch", "density_min", "density_max", "speed_min", "speed_max",
-                         "mass_flow_error_max", "mass_flow_error_blade_median"});
+        std::vector<std::string> head{"iteration", "final", "density_change", "velocity_change", "psi_change", "kutta_error",
+                                      "kutta_residual", "exit_angle_deg", "exit_angle_next_deg", "tan_correction",
+                                      "linear_residual", "peak_mach", "target_mismatch", "density_min", "density_max",
+                                      "speed_min", "speed_max", "mass_flow_error_max", "mass_flow_error_blade_median"};
+        if (r.viscous) head.emplace_back("bl_iteration");  // viscous runs only: the inviscid layout is v1's
+        out << csv_line(head);
         for (const PassRecord& p : r.records) {
             std::vector<std::string> cells{std::to_string(p.index), p.final ? "1" : "0"};
             for (double v : {p.density_change, p.velocity_change, p.psi_change, p.kutta_normalized, p.kutta_residual,
@@ -760,6 +979,7 @@ std::vector<std::string> export_run(const RunResult& r, const Case& c, const std
                              p.mach_max, p.target_mismatch, p.density_min, p.density_max, p.speed_min, p.speed_max,
                              p.mass_flow_error_max, p.mass_flow_error_blade_median})
                 cells.push_back(py_repr(v));
+            if (r.viscous) cells.push_back(std::to_string(p.bl_iteration));
             out << csv_line(cells);
         }
         // every node of the reported evaluation; m and y in metres (c_ref times the chord-normalized grid)
@@ -772,6 +992,39 @@ std::vector<std::string> export_run(const RunResult& r, const Case& c, const std
                                py_repr(d.c_ref * d.grid.node_y(i, j)), py_repr(d.psi(i, j)), py_repr(d.density(i, j)),
                                py_repr(d.pressure(i, j)), py_repr(d.temperature(i, j)), py_repr(d.mach(i, j)),
                                py_repr(d.W(i, j)), py_repr(d.W_m(i, j)), py_repr(d.W_theta(i, j))});
+    }
+    if (layers) {
+        const ViscousData& v = *r.viscous;
+        for (const auto& [name, d] : {std::pair<const char*, const BoundaryLayerSurfaceData*>{"bl_suction.csv", &v.suction},
+                                      std::pair<const char*, const BoundaryLayerSurfaceData*>{"bl_pressure.csv", &v.pressure_side}}) {
+            std::ofstream out = open(name);
+            out << csv_line({"x_c", "x", "W_e", "rho_e", "T_e", "mu", "theta", "delta_star", "delta", "H", "H_k", "c_f",
+                             "Lambda", "Re_theta", "regime", "mass_deficit"});
+            for (std::size_t k = 0; k < d->x_c.size(); ++k) {
+                std::vector<std::string> cells;
+                for (const std::vector<double>* col : {&d->x_c, &d->x, &d->W_e, &d->rho_e, &d->T_e, &d->mu, &d->theta,
+                                                       &d->delta_star, &d->delta, &d->H, &d->H_k, &d->c_f, &d->Lambda,
+                                                       &d->Re_theta})
+                    cells.push_back(py_repr((*col)[k]));
+                cells.push_back(d->regime[k]);
+                cells.push_back(py_repr(d->mass_deficit[k]));
+                out << csv_line(cells);
+            }
+        }
+    }
+    if (r.viscous) {
+        std::ofstream out = open("bl_history.csv");
+        out << csv_line({"k", "inviscid_passes", "beta_out_deg", "max_change_m", "transition_x_c_ss", "transition_x_c_ps",
+                         "separation_x_c_ss", "separation_x_c_ps", "laminar_separation_x_c_ss", "laminar_separation_x_c_ps",
+                         "loss_omega"});
+        for (const BlIteration& h : r.viscous->history) {
+            std::vector<std::string> cells{std::to_string(h.k), std::to_string(h.inviscid_passes)};
+            for (double x : {degrees(h.beta_out), h.max_change_m, h.transition_x_c_ss, h.transition_x_c_ps,
+                             h.separation_x_c_ss, h.separation_x_c_ps, h.laminar_separation_x_c_ss,
+                             h.laminar_separation_x_c_ps, h.loss})
+                cells.push_back(py_repr(x));
+            out << csv_line(cells);
+        }
     }
     // run_summary.json (v1 controller.run_summary)
     const CaseSettings& s = c.settings;
@@ -877,7 +1130,8 @@ std::vector<std::string> export_run(const RunResult& r, const Case& c, const std
           {"mass_flow_per_depth_kg_m_s", num(c.mass_flow_per_depth)},
           {"mass_flow_source", c.mass_flow_source},
           {"pass_limit", pass_limit(s)},
-          {"inlet_state", inlet}}},
+          {"inlet_state", inlet},
+          {"chord_reynolds_number", num(r.chord_reynolds)}}},
         {"grid",
          {{"grid_level", s.grid_level ? json(*s.grid_level) : json(nullptr)},
           {"standard_grid", standard},
@@ -923,6 +1177,40 @@ std::vector<std::string> export_run(const RunResult& r, const Case& c, const std
 #endif
           }}},
     };
+    if (s.viscous) {
+        data["inputs"]["boundary_layer"] = {{"viscous", true},
+                                            {"bl_coupling", bl_coupling_name(s.bl_coupling)},
+                                            {"laminar_cf_form", laminar_cf_form_name(s.laminar_cf_form)},
+                                            {"wake_model", wake_model_name(s.wake_model)},
+                                            {"bl_relaxation", num(s.bl_relaxation)},
+                                            {"bl_tolerance", num(s.bl_tolerance)},
+                                            {"max_bl_iterations", s.max_bl_iterations},
+                                            {"transition_re_theta", num(s.transition_re_theta)},
+                                            {"separation_hk", num(s.separation_hk)},
+                                            {"sutherland_mu_ref", num(s.sutherland.mu_ref)},
+                                            {"sutherland_t_ref", num(s.sutherland.t_ref)},
+                                            {"sutherland_s", num(s.sutherland.s)}};
+    }
+    if (r.viscous) {
+        const ViscousData& v = *r.viscous;
+        json bl = {{"converged", v.converged},
+                   {"iterations", v.history.size()},
+                   {"loss_omega", num(v.loss_omega)},
+                   {"loss_Theta", num(v.loss_Theta)},
+                   {"loss_Delta_star", num(v.loss_Delta_star)},
+                   {"beta_out_inviscid_deg", num(degrees(v.inviscid_exit_angle))},
+                   {"te_jump_mismatch", num(v.te_jump_mismatch)}};
+        if (!v.history.empty()) {
+            const BlIteration& h = v.history.back();
+            bl["beta_out_deg"] = num(degrees(h.beta_out));
+            bl["max_change_m"] = num(h.max_change_m);
+            bl["transition_x_c"] = {{"suction", num(h.transition_x_c_ss)}, {"pressure", num(h.transition_x_c_ps)}};
+            bl["separation_x_c"] = {{"suction", num(h.separation_x_c_ss)}, {"pressure", num(h.separation_x_c_ps)}};
+            bl["laminar_separation_x_c"] = {{"suction", num(h.laminar_separation_x_c_ss)},
+                                            {"pressure", num(h.laminar_separation_x_c_ps)}};
+        }
+        data["boundary_layer"] = bl;
+    }
     json listed = json::array();
     for (const std::string& f : files) listed.push_back(f);
     data["files"] = listed;

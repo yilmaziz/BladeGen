@@ -290,7 +290,9 @@ std::vector<PeriodicPDERow> build_periodic_pde_rows(const CoefficientFields& coe
     return periodic_pde_rows(coefficients.A, coefficients.B, coefficients.C, coefficients.D, coefficients.E,
                              coefficients.length_scale() * grid.dm(), grid.deta(), grid.first_blade_i,
                              grid.last_blade_i,
-                             [&](int k) { return boundary_conditions.periodic_ghost(k, n_eta); });
+                             [&](int k) {  // the station's jump: 1 (v1), or the wake's with transpiration
+                                 return boundary_conditions.periodic_ghost(k, n_eta, boundary_conditions.station_jump(k));
+                             });
 }
 
 }  // namespace BladeGen::Turbolenza

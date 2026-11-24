@@ -135,14 +135,12 @@ about 1.7 per halving.
   - A target that would need reverse flow is refused, and so is W_m ≤ 0 on a converged quasi-normal.
   - Non-finite coefficients of Eq. 7-34, or a solution of Eq. 7-35 that is not finite, are refused (e.g.
     the limit of Eq. 7-30 set near 0).
-- **The flow-field iteration** (the linking loop).
-  - The new profile is under-relaxed: the factor is halved when the change grows (down to 1/64) and
-    raised by 1.5 after three contracting steps.
-  - Near the choke the target iteration can alternate between met and choke-limited profiles. After 4
-    alternations, or half the iteration budget once a limit has been hit, the profile is converged at the
-    choke limit itself.
-  - Its mass flow is then the choke mass flow. A target above it is reported as choked; a target at or
-    below it as not converged.
+- **The flow-field iteration** (the linking loop). Plain substitution: the profile of an iteration
+  feeds the coefficients of the next. When W_m(0) is held at the choke limit, the iteration continues
+  until that profile converges as well.
+  - Under-relaxation and a switch to a choke-limit-only iteration were tried. Neither is needed in any
+    case tested, so neither is kept.
+  - An iteration that does not settle within the budget is reported as not converged.
 - **Repositioning (Eq. 7-54, "by interpolation from this function").** The three-point series of
   Eqs. 7-72 and 7-73 is integrated inside the segment, and the position found by bisection.
 - **Novak's Δm.** The smaller meridional spacing to the two neighbouring quasi-normals.
@@ -338,6 +336,8 @@ The code's φ agrees with it to 2.2e-16. On 41 surfaces:
   | ṁ input | full | approximate | simple (both) |
   |---|---|---|---|
   | 70, 72, 74 | converged | converged | converged |
+  | 75.0 … 77.0 (full), 75.0 … 76.0 (approximate) | converged | converged | converged |
+  | 76.5, 77.0 | (converged) | choked at 74.9029 | converged |
   | 78, 82, 85 | choked at 75.7744 (QN 0 converged, 21 iterations) | choked at 74.9029 | converged (QN 0 mean M_m 0.69, 0.78, 0.90) |
   | 90, 100, 150, 200 | choked at 75.7744 | choked at 74.9029 | choked at 85.7440 |
   | choke / normal-section 1-D | 1.0100 | 0.9984 | 1.1429 |
@@ -347,6 +347,15 @@ The code's φ agrees with it to 2.2e-16. On 41 surfaces:
     at every node.
   - The full and approximate choke profiles have max M_m 1.80 and 3.66 at the hub. That lies outside the
     validity of Eq. 7-29, which the limit of Eq. 7-30 bounds but does not make valid.
+  - **The ambiguity of Eq. 7-39 for non-uniform profiles (open).** Between the 7-39 choke (75.77 full,
+    74.90 approximate) and about 77.5 (full) / 76.0 (approximate), converged target profiles also exist.
+    - At 77 kg/s the full model's profile has mean M_m 0.75 and max M_m 1.48. Its mass exceeds the 7-39
+      choke and the normal-section bound 75.03, with supersonic hub nodes.
+    - Ch. 12's Eq. 12-37 (d ṁ/d W_m(0) ≤ 0) is no remedy here: it gives chokes between 70.3 and 78.5
+      (full) and nodes at M_m = 5000 (approximate).
+    - A stricter test, for example "a node reaching M_m = 1", is not Aungier's and is not implemented.
+  - Every mass flow is reported as converged or as a choke on a converged profile; never as not
+    converged.
 - **Other chokes.**
   - ṁ = 500 in the straight annulus chokes at 121.2603 kg/s (by Eq. 7-39 and by Eq. 12-37).
   - With swirl it chokes at 107.4274 kg/s with mean M_m = 1.000000 (trapezoid 1.000045) and max M 1.064.

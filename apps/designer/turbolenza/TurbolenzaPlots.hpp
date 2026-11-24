@@ -38,6 +38,11 @@ inline const QColor kPressure(214, 39, 40);   // v1 PRESSURE_COLOR
 void drawProfile(PlotWidget* w, const BladeGen::Design::Section2D& s, const QString& title);
 void drawCascade(PlotWidget* w, const T::Cascade& c, double inlet_angle_deg);
 void drawGrid(PlotWidget* w, const T::Grid& g);
+/// Not in v1: the stream sheet of a blade on its stream surface, r(m) / r_LE and b(m) / b(m_lo) against
+/// m / c on [m_lo, m_hi] (chords), the blade's LE (m = 0) and TE (m = m_te) marked.
+void drawStreamSheet(PlotWidget* w, const T::StreamSheet& sheet, double m_lo, double m_hi, double m_te);
+/// Not in v1: the inlet velocity triangle (TURBOlenza's frame: m to the right, +theta up), C = W + U.
+void drawVelocityTriangle(PlotWidget* w, const T::VelocityTriangle& t);
 
 /// The residual history (the same records the run printed).  tol: density, velocity, Kutta
 /// tolerances (a NaN skips the line).

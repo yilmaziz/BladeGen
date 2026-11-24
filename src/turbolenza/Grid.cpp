@@ -88,15 +88,16 @@ std::vector<double> sample_fraction(std::size_t n_samples, bool junction_last)
     return out;
 }
 
-/// The side line sampled at m: beta and the lower boundary points.
+/// The side line sampled at m: beta and the lower boundary points (on the stream sheet, when given).
 void side_samples(const std::vector<double>& m, bool junction_last, const Point& junction, double junction_angle,
-                  double far_angle, std::vector<double>& beta, std::vector<Point>& lower)
+                  double far_angle, std::vector<double>& beta, std::vector<Point>& lower, const StreamSheet* sheet)
 {
     const auto fraction = sample_fraction(m.size(), junction_last);
+    const double m_far = junction_last ? m.front() : m.back();
     beta.resize(m.size());
     lower.resize(m.size());
     for (std::size_t k = 0; k < m.size(); ++k) {
-        const auto by = detail::side_line(m[k], fraction[k], junction, junction_angle, far_angle);
+        const auto by = detail::side_line(m[k], fraction[k], junction, junction_angle, far_angle, sheet, m_far);
         beta[k] = by[0];
         lower[k] = {m[k], by[1]};
     }
@@ -117,14 +118,14 @@ double inlet_side(const PassageBoundaries& b, double m)
 {
     const Point& junction = b.upstream_lower_boundary.back();
     const double fraction = (m - junction.m) / (b.m_in - junction.m);
-    return detail::side_line(m, fraction, junction, b.upstream_beta.back(), b.inlet_angle)[1];
+    return detail::side_line(m, fraction, junction, b.upstream_beta.back(), b.inlet_angle, b.sheet.get(), b.m_in)[1];
 }
 
 double exit_side(const PassageBoundaries& b, double m)
 {
     const Point& junction = b.downstream_lower_boundary.front();
     const double fraction = (m - junction.m) / (b.m_out - junction.m);
-    return detail::side_line(m, fraction, junction, b.downstream_beta.front(), b.exit_angle)[1];
+    return detail::side_line(m, fraction, junction, b.downstream_beta.front(), b.exit_angle, b.sheet.get(), b.m_out)[1];
 }
 
 /// The touching stations' assigned edge direction (not in v1; GridData.hpp, Grid::wall_d): order
@@ -367,6 +368,19 @@ std::array<double, 2> side_line(double m, double fraction, const Point& junction
     const double turn = far_angle - junction_angle;
     const double beta = fraction <= 0.5 ? junction_angle + fraction * turn : far_angle - (1.0 - fraction) * turn;
     return {beta, junction.y + (m - junction.m) * mean_tan(beta, junction_angle)};
+}
+
+std::array<double, 2> side_line(double m, double fraction, const Point& junction, double junction_angle, double far_angle,
+                                const StreamSheet* sheet, double m_far)
+{
+    // v1's closed form for the planar cascade and for a cylinder whose r_ref is its radius (sigma = 1
+    // exactly, the same bits); on a stream sheet r d theta / dm = tan(beta) [Eq. 5-3] integrated
+    // numerically, dy/dm = tan(beta) / sigma (StreamSheet.hpp; ours), with the same beta law
+    if (!sheet || sheet->unit_scale())
+        return side_line(m, fraction, junction, junction_angle, far_angle);
+    const double turn = far_angle - junction_angle;
+    const double beta = fraction <= 0.5 ? junction_angle + fraction * turn : far_angle - (1.0 - fraction) * turn;
+    return {beta, junction.y + sheet->side_line_rise(junction.m, m, junction_angle, far_angle, m_far)};
 }
 
 std::vector<double> stations(const PassageBoundaries& b, int n_passage)
@@ -660,10 +674,19 @@ PassageBoundaries make_passage_boundaries(const Cascade& cascade, const GridSett
     b.lower_blade_boundary = a.suction_surface;
     b.upper_blade_boundary = translated(a.pressure_surface, a.periodic_translation);
     b.blade_curves = cascade.active_curves;
+    b.sheet = cascade.sheet;
+    if (b.sheet && !(b.sheet->m_front() <= b.m_in && b.m_out <= b.sheet->m_back()))
+        throw std::invalid_argument("the extensions (m_in " + repr(b.m_in) + ", m_out " + repr(b.m_out) +
+                                    ") leave the stream sheet (m " + repr(b.sheet->m_front()) + " .. " +
+                                    repr(b.sheet->m_back()) + "): shorten them");
     // the side lines' junctions: v1 the LE / TE point; Touching (not in v1) the nose tip / tail end
     // (the side lines end at the touching nodes, Aungier 2003 Fig. 5-5), with the same blade angles
     Point j_in = le, j_out = te;
     if (settings.edge_nodes == EdgeNodes::Touching) {
+        // the touching stations' assigned edge direction is the planar side line's (sigma = 1)
+        if (b.sheet && !b.sheet->unit_scale())
+            throw std::invalid_argument("the touching edge-node experiment is defined for the planar cascade only, not "
+                                        "on a stream sheet with r(m) or b(m): use edge nodes 'inside'");
         const CurveRow row(b);
         j_in = row.tip_point;
         j_out = row.tail_point;
@@ -673,10 +696,12 @@ PassageBoundaries make_passage_boundaries(const Cascade& cascade, const GridSett
                                         repr(b.m_out) + "): the touching side lines need m_in < m_tip and m_tail < m_out");
     }
     b.upstream_m = samples(b.m_in, j_in.m, n_passage, m_te - m_le);
-    side_samples(b.upstream_m, true, j_in, cascade.kappa_le, inlet_angle, b.upstream_beta, b.upstream_lower_boundary);
+    side_samples(b.upstream_m, true, j_in, cascade.kappa_le, inlet_angle, b.upstream_beta, b.upstream_lower_boundary,
+                 b.sheet.get());
     b.upstream_upper_boundary = translated(b.upstream_lower_boundary, a.periodic_translation);
     b.downstream_m = samples(j_out.m, b.m_out, n_passage, m_te - m_le);
-    side_samples(b.downstream_m, false, j_out, cascade.kappa_te, exit, b.downstream_beta, b.downstream_lower_boundary);
+    side_samples(b.downstream_m, false, j_out, cascade.kappa_te, exit, b.downstream_beta, b.downstream_lower_boundary,
+                 b.sheet.get());
     b.downstream_upper_boundary = translated(b.downstream_lower_boundary, a.periodic_translation);
     return b;
 }
@@ -743,7 +768,7 @@ PassageBoundaries rebuild_exit(const PassageBoundaries& item, double exit_angle)
     std::vector<double> beta;
     std::vector<Point> lower;
     side_samples(item.downstream_m, false, item.downstream_lower_boundary.front(), item.downstream_beta.front(), exit_angle,
-                 beta, lower);
+                 beta, lower, item.sheet.get());
     b.exit_angle = exit_angle;
     b.downstream_beta = std::move(beta);
     b.downstream_upper_boundary = translated(lower, item.periodic_translation);
@@ -887,6 +912,19 @@ std::optional<int> n_passage_ceiling(const Cascade& cascade, const GridSettings&
     const PassageBoundaries b = boundaries_for(cascade, settings, inlet_angle);
     if (settings.edge_nodes == EdgeNodes::Touching) return touching_ceiling(b, CurveRow(b));
     return ceiling_of(b, CurveRow(b));
+}
+
+double inlet_passage_width(const Grid& grid)
+{
+    const StreamSheet* sheet = grid.boundaries.sheet.get();
+    if (!sheet) return grid.pitch();
+    return (sheet->radius(grid.m.front()) / sheet->r_ref()) * grid.pitch();
+}
+
+std::optional<double> inlet_radius(const Grid& grid)
+{
+    if (!grid.boundaries.sheet) return std::nullopt;
+    return grid.boundaries.sheet->radius(grid.m.front());
 }
 
 }  // namespace BladeGen::Turbolenza

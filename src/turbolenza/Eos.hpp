@@ -14,12 +14,16 @@
 ///  * relax_density: rho_next = (1 - lambda) rho + lambda rho_target, 0 < lambda <= 1
 ///    (lambda = 1 Aungier's direct replacement, 0.5 the v1 project baseline).
 /// The per-node maps run on the threads of the current solve (Detail.hpp).
+/// Not in v1: on a rotating stream sheet r varies along m, so H' = I + (r_i omega)^2 / 2 varies by
+/// station (Aungier 2003 Eq. 5-51, p. 89: "Since rothalpy is constant on the stream sheet");
+/// BladeRowReference::station_blade_speed carries U_i.  Entropy stays the inlet's (isentropic).
 #pragma once
 
 #include "turbolenza/Field.hpp"
 
 #include <optional>
 #include <stdexcept>
+#include <vector>
 
 namespace BladeGen::Turbolenza {
 
@@ -68,6 +72,16 @@ struct BladeRowReference
     [[nodiscard]] double relative_total_enthalpy() const noexcept
     {
         const double U = blade_speed();
+        return rothalpy + 0.5 * (U * U);
+    }
+    /// Not in v1: the blade speed U_i = omega r_i of every station i of a rotating row on a stream
+    /// sheet; static_state_from_velocity then takes H'_i = I + U_i^2 / 2 [Eq. 5-51] per station.
+    /// Empty: one H' (v1).
+    std::vector<double> station_blade_speed;
+    [[nodiscard]] double relative_total_enthalpy_at(int i) const noexcept
+    {
+        if (station_blade_speed.empty()) return relative_total_enthalpy();
+        const double U = station_blade_speed[static_cast<std::size_t>(i)];
         return rothalpy + 0.5 * (U * U);
     }
 };

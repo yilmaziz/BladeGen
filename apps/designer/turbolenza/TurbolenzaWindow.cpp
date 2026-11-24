@@ -291,6 +291,8 @@ void TurbolenzaWindow::takeLayer(int k)
     setCascadeDefaults(layer_.stagger_deg, layer_.solidity);
     section_.reset();
     section_error_.clear();
+    stream_.reset();
+    stream_error_.clear();
     cascade_.reset();
     mesh_case_.reset();
     refreshProfile();
@@ -317,9 +319,10 @@ const T::BladeSection* TurbolenzaWindow::section()
 void TurbolenzaWindow::startRun()
 {
     if (running() || studyRunning()) return;
-    const auto* sec = section();
-    if (!sec) {
-        run_status_->setText("the section cannot be built: " + section_error_);
+    QString input_error;
+    const auto input = caseInput(input_error);
+    if (!input) {
+        run_status_->setText(input_error);
         showPage(kRun);
         return;
     }
@@ -334,10 +337,10 @@ void TurbolenzaWindow::startRun()
                                                                                : std::numeric_limits<double>::quiet_NaN();
     Tl::drawResiduals(residuals_, {}, run_settings_.density_tolerance, run_settings_.velocity_tolerance.value_or(run_settings_.density_tolerance), tk,
                       "running");
-    worker_ = std::thread([ch = ch_.get(), st = run_settings_, b = *sec] {
+    worker_ = std::thread([ch = ch_.get(), st = run_settings_, in = *input] {
         Observer obs(*ch);
         try {
-            T::Case c = T::build_case(st, b);
+            T::Case c = in.stream ? T::build_case(st, *in.stream) : T::build_case(st, in.section);
             obs.say(T::format_case_summary(c));
             obs.say(T::format_grid_summary(c));
             {
@@ -459,9 +462,10 @@ void TurbolenzaWindow::startStudy()
         study_status_->setText("check at least one grid level");
         return;
     }
-    const auto* sec = section();
-    if (!sec) {
-        study_status_->setText("the section cannot be built: " + section_error_);
+    QString input_error;
+    const auto input = caseInput(input_error);
+    if (!input) {
+        study_status_->setText(input_error);
         return;
     }
     study_settings_ = settings();
@@ -472,7 +476,7 @@ void TurbolenzaWindow::startStudy()
     log_->clear();
     sch_ = std::make_unique<StudyChannel>();
     redrawStudyResiduals("running");
-    study_worker_ = std::thread([ch = sch_.get(), st = study_settings_, b = *sec, levels] {
+    study_worker_ = std::thread([ch = sch_.get(), st = study_settings_, in = *input, levels] {
         auto say = [ch](const std::string& line) {
             std::cout << line << std::endl;
             std::lock_guard<std::mutex> g(ch->mu);
@@ -505,7 +509,8 @@ void TurbolenzaWindow::startStudy()
             ch->finished.push_back(e);
         };
         try {
-            T::MeshStudyResult r = T::run_mesh_study(st, b, levels, cb, &ch->cancel);
+            T::MeshStudyResult r =
+                T::run_mesh_study(st, in.section, levels, cb, &ch->cancel, in.stream ? &*in.stream : nullptr);
             say(r.cancelled ? "mesh study stopped: the remaining levels were skipped" : "mesh study finished");
             std::lock_guard<std::mutex> g(ch->mu);
             ch->result = std::move(r);
@@ -1131,6 +1136,34 @@ int TurbolenzaWindow::selfTest(const QString& dir, int passes)
     for (const char* name : {"bl_suction.csv", "bl_pressure.csv", "bl_history.csv", "bl_H.png", "bl_history_change.png"})
         if (!QFileInfo(QDir(vdir).filePath(name)).exists()) return fail((std::string("missing: ") + name).c_str(), 41);
     viscous_->setChecked(false);
+    // 6. not in v1: the Mid layer on its stream surface, a rotating row (rpm for beta1 about kappa_LE), its mesh
+    showPage(kCascade);
+    surface_->setCurrentIndex(1);
+    row_->setCurrentIndex(1);
+    mach_abs_->setValue(0.3);
+    alpha1_->setValue(0.0);
+    const auto* blade = streamBlade();
+    if (!blade) return fail(("the layer gives no stream-surface blade: " + stream_error_.toStdString()).c_str(), 42);
+    {
+        const T::Cascade c = T::make_cascade(*blade);
+        const double r_in = blade->chord * blade->sheet->radius(-ext_up_->value());
+        const T::VelocityTriangle t0 = T::velocity_triangle(1000.0, 0.0, 0.3, pt_->value(), tt_->value(),
+                                                            T::PerfectGas(gamma_->value(), gas_r_->value()), r_in);
+        rpm_->setValue(std::round(t0.C_m * std::tan(c.kappa_le) / r_in * 60.0 / (2.0 * std::numbers::pi)));
+    }
+    refreshCascade();
+    QApplication::processEvents();
+    stack_->widget(kCascade)->grab().save(dir + "/tl_cascade_rotor.png");
+    showPage(kMesh);
+    if (!generateMesh(true)) return fail(("the rotor mesh failed: " + mesh_error_->text().toStdString()).c_str(), 43);
+    if (!mesh_case_ || !mesh_case_->triangle) return fail("the rotor case has no velocity triangle", 44);
+    std::printf("turbolenza self-test: rotor %s at %.0f rpm, beta1 %.4f deg, M1_rel %.4f, %d x %d nodes\n",
+                blade->source.c_str(), rpm_->value(), mesh_case_->triangle->beta * kDeg, mesh_case_->triangle->mach_relative,
+                mesh_case_->grid.n_m(), mesh_case_->grid.n_eta());
+    QApplication::processEvents();
+    stack_->widget(kMesh)->grab().save(dir + "/tl_mesh_rotor.png");
+    surface_->setCurrentIndex(0);
+    row_->setCurrentIndex(0);
     std::printf("turbolenza self-test OK: %lld + %lld files in %s\n", static_cast<long long>(files.size()),
                 static_cast<long long>(vfiles.size()), qPrintable(dir));
     return 0;

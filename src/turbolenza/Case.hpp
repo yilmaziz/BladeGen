@@ -6,11 +6,22 @@
 /// The settings and their defaults are those of v1 scripts/run_full_solver.py (the user's
 /// current values, 2026-11-24) minus the blade inputs, which come from BladeGen as a
 /// BladeSection; plus the number of threads and the sparse direct solver.
+///
+/// Not in v1: the stream surface and the row (CaseSettings section 9).  StreamSurfaceKind::Planar is
+/// v1's planar cascade (chord, solidity, stagger; r = b = 1).  StreamSurfaceKind::Layer takes the
+/// blade on its stream surface (a StreamSurfaceBlade, built from a BladeGen layer by
+/// BladeGenSource.hpp): its chord, solidity and stagger in the (m, r_LE theta) plane replace the
+/// settings' (build_case writes them into Case::settings), and the sheet's r(m), b(m) enter the
+/// equations (StreamSheet.hpp).  RowMotion::Rotating (Layer only) takes rpm and the absolute inlet
+/// state P0, T0, alpha1, M1 and derives the relative inlet (velocity_triangle, Flow.hpp, at the radius
+/// of the grid's far inlet): Case::settings then carries the derived omega, inlet_mach = M1_rel and
+/// inlet_flow_angle_deg = beta1.  A stationary row keeps v1's relative inputs (beta1, M1) and omega = 0.
 #pragma once
 
 #include "turbolenza/BoundaryLayer.hpp"
 #include "turbolenza/Cascade.hpp"
 #include "turbolenza/Field.hpp"
+#include "turbolenza/Flow.hpp"
 #include "turbolenza/Grid.hpp"
 #include "turbolenza/GridData.hpp"
 
@@ -30,6 +41,11 @@ enum class BlCoupling { OneWay, TwoWay };                   ///< "one_way" (Aung
 enum class WakeModel { Constant, Marched };                 ///< "constant", "marched"
 [[nodiscard]] const char* bl_coupling_name(BlCoupling c) noexcept;
 [[nodiscard]] const char* wake_model_name(WakeModel w) noexcept;
+/// Not in v1: the surface the blade lies on, and the row's motion.
+enum class StreamSurfaceKind { Planar, Layer };             ///< "planar" (v1), "layer" (a BladeGen layer's stream surface)
+enum class RowMotion { Stationary, Rotating };              ///< "stationary", "rotating"
+[[nodiscard]] const char* stream_surface_name(StreamSurfaceKind k) noexcept;
+[[nodiscard]] const char* row_motion_name(RowMotion r) noexcept;
 
 /// The most cores the solver may use (the user's safety limit).
 inline constexpr int kMaxThreads = 10;
@@ -46,7 +62,7 @@ struct CaseSettings
     double gas_constant = 287.05;                    ///< J/(kg K)
     double inlet_total_pressure = 101325.0;          ///< Pa, absolute frame
     double inlet_total_temperature = 288.15;         ///< K, absolute frame
-    double omega = 0.0;                              ///< rad/s; only 0 is solved (a rotating row is refused)
+    double omega = 0.0;                              ///< rad/s: 0 stationary; a rotating row's is derived from rpm
     // 2. cascade (the blade is the BladeSection)
     double chord = 0.5;                              ///< m: the true chord, the solver's c_ref
     double solidity = 1.0;                           ///< chord / pitch
@@ -91,6 +107,12 @@ struct CaseSettings
     double transition_re_theta = 250.0;              ///< Aungier Eq. 5-126
     double separation_hk = 2.4;                      ///< Aungier 2003 p. 111
     SutherlandLaw sutherland;                        ///< mu(T) of the gas (air)
+    // 9. stream surface and row (not in v1; see the file comment)
+    StreamSurfaceKind stream_surface = StreamSurfaceKind::Planar;
+    RowMotion row = RowMotion::Stationary;
+    double rpm = 0.0;                                ///< rotating: > 0 moves the blades toward -theta (Flow.hpp)
+    double inlet_absolute_mach = 0.5;                ///< rotating: M1 in the absolute frame
+    double inlet_absolute_flow_angle_deg = 0.0;      ///< rotating: alpha1, toward +theta (0: axial, no swirl)
 };
 
 /// v1 CaseError: the settings do not make a case.
@@ -153,6 +175,12 @@ public:
 /// v1 console line of one pass (monitor.format_record).
 [[nodiscard]] std::string format_record(const PassRecord& r);
 
+/// Not in v1: the absolute frame of a rotating row (C = W + U, U = omega r at each station).
+struct AbsoluteFrameData
+{
+    Field C_theta, C, alpha, mach, total_pressure, total_temperature;  ///< alpha [rad]; P0, T0 absolute
+};
+
 /// One blade surface's values at the wall nodes of the blade stations (v1 postprocess.BladeSurfaces).
 struct SurfaceData
 {
@@ -180,6 +208,11 @@ struct SolutionData
     double kutta_residual = 0.0, normalized_kutta_residual = 0.0;
     double mass_flow_per_depth = 0.0;
     std::string limitation;
+    // not in v1: the stream sheet at the stations (empty planar) and the rotating row
+    std::vector<double> station_radius;     ///< r [m]
+    std::vector<double> station_thickness;  ///< b / b(m_in)
+    double omega = 0.0;                     ///< rad/s (Aungier's, toward +theta)
+    std::optional<AbsoluteFrameData> absolute;  ///< rotating rows only
 };
 
 struct RuntimeStats
@@ -243,6 +276,21 @@ struct Case
     std::optional<InletData> inlet;
     double mass_flow_per_depth = 0.0;
     std::string mass_flow_source;
+    // not in v1
+    std::optional<StreamSurfaceBlade> stream;   ///< StreamSurfaceKind::Layer: the blade on its stream surface
+    std::optional<VelocityTriangle> triangle;   ///< RowMotion::Rotating: the inlet triangle at the far-inlet radius
+};
+
+/// Not in v1: the far exit of a rotating row in the absolute frame (mass averages over eta at the
+/// last station, weights rho W_m; ours), against the absolute inlet.
+struct RotorSummary
+{
+    double rpm = 0.0, omega = 0.0, U_in = 0.0, U_out = 0.0;
+    double C_m_out = 0.0, C_theta_out = 0.0, alpha_out_deg = 0.0, mach_out = 0.0;
+    double total_pressure_out = 0.0, total_temperature_out = 0.0;
+    double total_pressure_ratio = 0.0, total_temperature_ratio = 0.0;
+    double euler_work = 0.0;          ///< U2 C_theta2 - U1 C_theta1 [J/kg] (mass averages)
+    double total_enthalpy_rise = 0.0; ///< cp (T0_2 - T0_1) [J/kg]: equals the Euler work (rothalpy)
 };
 
 /// The numbers of v1 postprocess.SolutionSummary for the report and the run summary (v2
@@ -263,6 +311,7 @@ struct RunSummary
     double temperature_min = 0.0, temperature_max = 0.0;
     double mass_flow_per_depth = 0.0;
     std::string mass_flow_source;
+    std::optional<RotorSummary> rotor;  ///< not in v1: rotating rows only
 };
 
 /// v1 controller.RunResult.
@@ -292,6 +341,11 @@ struct RunResult
 /// derived values.  Throws CaseError (with the production message) when the settings do not make
 /// a case.
 [[nodiscard]] Case build_case(const CaseSettings& settings, const BladeSection& section);
+/// Not in v1: the case of a blade on its stream surface (settings.stream_surface = Layer; see the
+/// file comment).  CaseError as above, and for a planar setting, the boundary layer on a sheet that
+/// is not a cylinder (Aungier's Eq. 5-106 carries b(x); the march here has b = 1), or a rotating row
+/// with the boundary layer.
+[[nodiscard]] Case build_case(const CaseSettings& settings, const StreamSurfaceBlade& blade);
 
 /// v1 run_case: the timed solve; failures are returned in RunResult::error, never swallowed.
 /// `cancel` (may be null) is polled between passes: a cancelled solve ends like an unconverged one

@@ -91,6 +91,12 @@ ExitAngleCorrection exit_angle_correction(const KuttaResidual& residual, const F
     c.cos_beta1 = 1.0 / std::sqrt(1.0 + tan1 * tan1);
     c.wall_difference = residual.wall_difference;
     c.delta_c_theta = 2.0 * residual.wall_difference * dm / (width * (c.cos_beta0 + c.cos_beta1));  // Eq. 13-57 over r
+    if (metrics.on_sheet) {
+        // not in v1: Eq. 13-57 carries r at the TE station, Delta(r C_U) = 2 (W0 - W1) r_te dm / (S (cos beta0 +
+        // cos beta1)), and Eq. 13-59 divides by r at the far exit: delta_c_theta = Delta(r C_U) / r_out
+        c.radius_ratio = metrics.radius_at(i) / metrics.radius_at(grid.n_m() - 1);
+        c.delta_c_theta = c.delta_c_theta * c.radius_ratio;
+    }
     c.exit_meridional_integral = integral;
     c.passage_width = width;
     c.dm = dm;

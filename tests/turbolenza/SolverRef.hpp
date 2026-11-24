@@ -55,7 +55,7 @@ inline T::GridMetrics metrics(const json& m, std::shared_ptr<const T::Grid> g)
 inline T::CoefficientFields coefficients(const json& c)
 {
     T::CoefficientFields out{ref::field(c.at("A")), ref::field(c.at("B")), ref::field(c.at("C")), ref::field(c.at("D")),
-                             ref::field(c.at("E")), ref::num(c.at("mass_flow_per_depth")), std::nullopt};
+                             ref::field(c.at("E")), ref::num(c.at("mass_flow_per_depth")), std::nullopt, T::Field(), 0.0};
     if (!c.at("c_ref").is_null()) out.c_ref = ref::num(c.at("c_ref"));
     return out;
 }

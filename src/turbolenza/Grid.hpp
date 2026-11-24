@@ -261,4 +261,10 @@ void validate_uniform_grid_topology(const Grid& grid, std::optional<int> n_passa
 /// metrics.py and is not run by the grid module (the metrics come after the grid in v2).
 [[nodiscard]] std::vector<std::string> validate_standard_grid(const Grid& grid);
 
+/// Not in v1: the passage width S at the far inlet station, r_in (theta1 - theta0) = sigma(m_in)
+/// pitch on a stream sheet (Eq. 5-9); the pitch of the planar cascade (v1's S1).
+[[nodiscard]] double inlet_passage_width(const Grid& grid);
+/// Not in v1: the radius of the far inlet station [chords]; empty for the planar cascade.
+[[nodiscard]] std::optional<double> inlet_radius(const Grid& grid);
+
 }  // namespace BladeGen::Turbolenza

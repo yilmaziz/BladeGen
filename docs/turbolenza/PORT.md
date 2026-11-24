@@ -66,6 +66,28 @@ bit for bit. The only changes to the ported modules are the transpiration values
 relations and the periodic continuation (`Transpiration`, `BoundaryConditions::station_jump`) and
 psi_m on the walls in the flow recovery. Without a `Transpiration` both are v1's.
 
+## Not a port: the stream sheet and rotating rows
+
+v1 solves the planar, stationary cascade (r = b = 1, omega = 0). v2 adds Aungier's full Eqs. 5-3,
+5-9, 5-15 to 5-26 and 5-51 (2003, printed pp. 82-89, read from the page images) on an axisymmetric
+stream sheet r(m), b(m), and rotating rows, plus Aungier 2000 Eqs. 13-57 and 13-59 with their r
+(p. 245). Rules 2 to 6 apply; every equation cites its number, every choice of ours is marked.
+
+- `StreamSheet.hpp` holds r(m), b(m) as tables (cubic spline). The grid stays planar in
+  (m, y = r_LE theta); the sheet enters through sigma = r / r_LE: S = sigma (y1 - y0),
+  tan(beta) = sigma dy/dm, rho b in A, B, C, the source Q = 2 S omega sin(phi), mu = mdot' / (rho b),
+  H' = I + (r_i omega)^2 / 2 per station, the Kutta step times r_te / r_out.
+- The side lines integrate r d theta / dm = tan(beta) numerically (Gauss-Legendre).
+- Without a sheet (and omega = 0) nothing of this runs: the solve is v1's, bit for bit. A cylinder
+  whose radius is r_LE is the planar cascade bit for bit (tested).
+- The sign convention: TURBOlenza's +theta is Aungier's, omega = -2 pi rpm / 60. Positive rpm moves
+  the blades toward -theta, so with axial inflow beta1 > 0 (a compressor rotor). `Flow.hpp`
+  velocity_triangle states it.
+- `BladeGenSource.hpp` stream_surface_blade places a BladeGen layer on its stream surface. b(m) is
+  the normal spacing of BladeGen's streamline family (our model).
+- The boundary layer is refused on a sheet that is not a cylinder (Eq. 5-106 carries b(x); the
+  march has b = 1) and on rotating rows.
+
 ## Build and test (Windows, the `bladegen` conda env)
 
 ```

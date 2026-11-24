@@ -13,6 +13,11 @@
 ///  * next angle: atan(tan(beta_out) + lambda_K Delta), 0 < lambda_K <= 1; a zero step returns the
 ///    angle exactly.
 /// The v1 study options (kutta_eval "fixed_m", kutta_method "aungier_13_57*") are not ported.
+/// Not in v1: on a stream sheet the radii of the two equations (read from the page images, Aungier
+/// 2000 p. 245): Delta(r C_U) = 2 [(W0)_te - (W1)_te] r Delta m / (S (cos beta0 + cos beta1)) [13-57]
+/// with r = r_te, and Delta(cot beta) = Delta(r C_U) / (r int_0^1 W_m d eta) [13-59] with r = r_out
+/// (the far exit, where the angle is applied; cot of his angle from the tangent = tan of ours).
+/// So Delta is v1's times r_te / r_out; S and tan(beta) are the sheet's own (Metrics.hpp).
 #pragma once
 
 #include "turbolenza/Flow.hpp"
@@ -54,6 +59,7 @@ struct ExitAngleCorrection
     double wall_difference = 0.0, delta_c_theta = 0.0, exit_meridional_integral = 0.0;
     double passage_width = 0.0, dm = 0.0, cos_beta0 = 0.0, cos_beta1 = 0.0;
     double delta_tan = 0.0;
+    double radius_ratio = 1.0;      ///< not in v1: r_te / r_out on a stream sheet (1 planar)
 };
 
 [[nodiscard]] TrailingEdgeStation trailing_edge_station(const Grid& grid);

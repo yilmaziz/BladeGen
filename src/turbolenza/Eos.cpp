@@ -63,7 +63,7 @@ BladeRowReference blade_row_reference(const TotalState& total, const PerfectGas&
                 throw ThermodynamicStateError(
                     std::format("the stream-surface radius is {}: it must be positive", py_repr(r)));
         }
-        return BladeRowReference{total, H_in, 0.0, radius};
+        return BladeRowReference{total, H_in, 0.0, radius, {}};
     }
     if (!radius || !inlet_c_theta)
         throw ThermodynamicStateError("a rotating row (omega != 0) needs radius and inlet_c_theta (the inlet absolute "
@@ -72,7 +72,7 @@ BladeRowReference blade_row_reference(const TotalState& total, const PerfectGas&
     const double c_theta = real(*inlet_c_theta, "the inlet absolute tangential velocity");
     if (!(r > 0.0))
         throw ThermodynamicStateError(std::format("the stream-surface radius is {}: it must be positive", py_repr(r)));
-    return BladeRowReference{total, H_in - omega * r * c_theta, omega, r};
+    return BladeRowReference{total, H_in - omega * r * c_theta, omega, r, {}};
 }
 
 ScalarState static_state_at(double W, const PerfectGas& gas, const BladeRowReference& reference)
@@ -115,11 +115,18 @@ StaticState static_state_from_velocity(const Field& W, const PerfectGas& gas, co
     StaticState s{Field(W.n_m, W.n_eta), Field(W.n_m, W.n_eta), Field(W.n_m, W.n_eta), Field(W.n_m, W.n_eta),
                   Field(W.n_m, W.n_eta)};
     const int n = static_cast<int>(W.size());
+    const bool stations = !reference.station_blade_speed.empty();
+    if (stations && static_cast<int>(reference.station_blade_speed.size()) != W.n_m)
+        throw ThermodynamicStateError(std::format("the reference has {} station blade speeds, the field {} stations",
+                                                  reference.station_blade_speed.size(), W.n_m));
+    const int n_eta = W.n_eta;
     TURBOLENZA_PARALLEL_FOR
     for (int k = 0; k < n; ++k) {
         const std::size_t q = static_cast<std::size_t>(k);
         const double w = W.v[q];
-        const double h = H_rel - 0.5 * (w * w);
+        // Eq. 5-51: h = I + (r omega)^2 / 2 - W^2 / 2, at the node's station on a rotating stream sheet
+        const double H = stations ? reference.relative_total_enthalpy_at(k / n_eta) : H_rel;
+        const double h = H - 0.5 * (w * w);
         s.enthalpy.v[q] = h;
         s.temperature.v[q] = h / cp;
     }

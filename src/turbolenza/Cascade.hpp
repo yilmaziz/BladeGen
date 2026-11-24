@@ -20,6 +20,7 @@
 #pragma once
 
 #include "turbolenza/Curve.hpp"
+#include "turbolenza/StreamSheet.hpp"
 
 #include <memory>
 #include <stdexcept>
@@ -84,12 +85,43 @@ struct Cascade
     double throat_over_chord = 0.0;
     CascadeCoordinates active;
     std::shared_ptr<const SurfaceCurves> active_curves;  ///< the authoritative curves (cascade + blade frame)
+    /// Not in v1: the stream sheet of a blade placed on a surface of revolution (make_cascade of a
+    /// StreamSurfaceBlade); null: the planar cascade.
+    std::shared_ptr<const StreamSheet> sheet;
 };
 
 /// The checked cascade of `section` at `solidity` (chord / pitch) and `stagger_deg` (from the
 /// axial direction; the one degree-to-radian conversion).  Throws std::invalid_argument for an
 /// invalid input and GeometryError when neighbouring blades overlap or an invariant breaks.
 [[nodiscard]] Cascade make_cascade(const BladeSection& section, double solidity, double stagger_deg);
+
+/// Not in v1: a blade placed on an axisymmetric stream sheet, in the solver's planar frame
+/// (m, y = r_ref theta) divided by `chord` (StreamSheet.hpp).  Built from a BladeGen layer by
+/// BladeGenSource.hpp's stream_surface_blade, or by hand (tests).  Its section is the placed blade
+/// turned back by stagger_deg about its LE point, so that make_cascade(section, solidity,
+/// stagger_deg) places it exactly where it lies; its chi_le, chi_te are the TRUE blade angles on
+/// the stream surface (the conformal plane's, Vos et al. 2025: angle preserving) minus that
+/// stagger, so kappa_le, kappa_te are the true angles the side lines meet (Aungier p. 86).
+struct StreamSurfaceBlade
+{
+    BladeSection section;          ///< LE (0, 0), TE (1, 0) in the turned-back (m, y) / chord frame
+    double stagger_deg = 0.0;      ///< the chord line's angle in the (m, y) plane
+    double solidity = 1.0;         ///< chord / pitch in the (m, y) plane, pitch = r_ref 2 pi / N
+    double chord = 1.0;            ///< the normalizing length [m]: the LE-TE distance in (m, r_ref theta)
+    int n_blades = 0;
+    std::shared_ptr<const StreamSheet> sheet;  ///< r(m), b(m), m from the LE point, lengths in chords
+    // where it came from (reports)
+    std::string source;            ///< e.g. "BladeGen layer Mid (span 0.5)"
+    double layer_stagger_deg = 0.0;  ///< BladeGen's stagger gamma in the conformal plane (m', theta)
+    double conformal_chord = 0.0;  ///< BladeGen's c' [rad]
+    double theta_le_deg = 0.0;     ///< the placed LE point's theta
+    double r_le = 0.0, r_te = 0.0; ///< radius at the LE and TE points [m]
+    double max_fit_residual = 0.0; ///< of the two side fits, in chords
+};
+
+/// The cascade of a StreamSurfaceBlade: make_cascade(section, solidity, stagger_deg) with its sheet,
+/// checked (the sheet covers the blade; the pitch 1 / solidity is r_ref 2 pi / n_blades).
+[[nodiscard]] Cascade make_cascade(const StreamSurfaceBlade& blade);
 
 /// Shortest distance between two polylines treated as smooth curves (cubic splines through the
 /// points), with its two end points (v1 closest_points).

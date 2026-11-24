@@ -31,6 +31,7 @@
 namespace BladeGen::Turbolenza {
 
 struct SurfaceCurves;  // Curve.hpp: the authoritative C2 blade surfaces
+class StreamSheet;    // StreamSheet.hpp: r(m), b(m) of an axisymmetric stream sheet (not in v1)
 
 enum class Region : int { Inlet = 0, Passage = 1, Exit = 2 };   // v1 grid.INLET, PASSAGE, EXIT
 enum class Surface : int { Suction = 0, Pressure = 1 };
@@ -69,6 +70,9 @@ struct PassageBoundaries
     std::vector<Point> upstream_lower_boundary, upstream_upper_boundary;
     std::vector<double> downstream_m, downstream_beta;  ///< m_te .. m_out; kappa_te .. exit_angle
     std::vector<Point> downstream_lower_boundary, downstream_upper_boundary;
+    /// Not in v1: the axisymmetric stream sheet the passage lies on (y = r_ref theta; the side lines
+    /// integrate r d theta / dm = tan(beta), StreamSheet.hpp).  Null: the planar cascade (v1).
+    std::shared_ptr<const StreamSheet> sheet;
 };
 
 /// v1 WallSide: one wall's nodes at the blade stations, in station order.

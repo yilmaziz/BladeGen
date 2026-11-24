@@ -118,7 +118,7 @@ std::vector<double> pressure_coefficient_values(const std::vector<double>& p, co
                                            detail::py_repr(q1)));
     std::vector<double> out(p.size());
     for (std::size_t k = 0; k < p.size(); ++k)
-        out[k] = convention == PressureConvention::Dunavant ? (inlet->total_pressure - p[k]) / q1
+        out[k] = convention == PressureConvention::Dunavant ? (inlet->reference_total_pressure() - p[k]) / q1
                                                             : (p[k] - inlet->static_pressure) / q1;
     return out;
 }

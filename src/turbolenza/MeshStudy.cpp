@@ -50,7 +50,8 @@ std::string quoted(const std::string& s)
 }  // namespace
 
 MeshStudyResult run_mesh_study(const CaseSettings& base, const BladeSection& section, const std::vector<std::string>& levels,
-                               const MeshStudyCallbacks& callbacks, const std::atomic<bool>* cancel)
+                               const MeshStudyCallbacks& callbacks, const std::atomic<bool>* cancel,
+                               const StreamSurfaceBlade* stream)
 {
     MeshStudyResult out;
     for (std::size_t k = 0; k < levels.size(); ++k) {
@@ -66,7 +67,7 @@ MeshStudyResult run_mesh_study(const CaseSettings& base, const BladeSection& sec
         st.n_passage.reset();
         st.n_eta.reset();
         try {
-            Case c = build_case(st, section);
+            Case c = stream ? build_case(st, *stream) : build_case(st, section);
             e.n_m = c.grid.n_m();
             e.n_eta = c.grid.n_eta();
             e.total_nodes = e.n_m * e.n_eta;

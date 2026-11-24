@@ -86,6 +86,17 @@ void check_fields(const Field& A, const Field& B, const Field& C, const Field& D
             "{} x {} nodes hold no interior node: the nine-point stencil needs three a side", A.n_m, A.n_eta));
 }
 
+// Not in v1: the source of Eq. 5-21 must be a finite field of the coefficients' shape.
+void check_source(const Field* Q, const Field& A)
+{
+    if (!Q) return;
+    if (!Q->same_shape(A))
+        throw DiscretizationError(std::format("the source Q has shape ({}, {}), the coefficients ({}, {})", Q->n_m,
+                                              Q->n_eta, A.n_m, A.n_eta));
+    for (double q : Q->v)
+        if (!std::isfinite(q)) throw DiscretizationError("the source Q = 2 S omega sin(phi) is not finite");
+}
+
 Weights checked_weights(const Field& A, const Field& B, const Field& C, const Field& D, const Field& E, int i, int j,
                         double dm, double deta)
 {
@@ -146,11 +157,12 @@ void check_shape(const CoefficientFields& co, const Grid& grid)
 }  // namespace
 
 InteriorStencil interior_stencil(const Field& A, const Field& B, const Field& C, const Field& D, const Field& E,
-                                 double dm, double deta)
+                                 double dm, double deta, const Field* Q)
 {
     dm = spacing(dm, "dm");
     deta = spacing(deta, "deta");
     check_fields(A, B, C, D, E);
+    check_source(Q, A);
     const int n_m = A.n_m, n_eta = A.n_eta;
     InteriorStencil s;
     for (Field* f : {&s.center, &s.west, &s.east, &s.south, &s.north, &s.mixed, &s.rhs, &s.H})
@@ -168,6 +180,7 @@ InteriorStencil interior_stencil(const Field& A, const Field& B, const Field& C,
             s.mixed(i, j) = w.mixed;
             s.center(i, j) = 1.0;
             s.rhs(i, j) = 0.0;  // Eq. 5-50: -Q / H with Q = 0
+            if (Q) s.rhs(i, j) = -(*Q)(i, j) / w.H;  // Eq. 5-50, Q = 2 S omega sin(phi) (not in v1)
         }
     return s;
 }
@@ -179,16 +192,19 @@ InteriorStencil build_interior_stencil(const CoefficientFields& coefficients, co
     check_shape(coefficients, grid);
     check_belongs(coefficients, metrics);
     return interior_stencil(coefficients.A, coefficients.B, coefficients.C, coefficients.D, coefficients.E,
-                            coefficients.length_scale() * grid.dm(), grid.deta());
+                            coefficients.length_scale() * grid.dm(), grid.deta(),
+                            coefficients.has_source() ? &coefficients.Q : nullptr);
 }
 
 std::vector<PeriodicPDERow> periodic_pde_rows(const Field& A, const Field& B, const Field& C, const Field& D,
                                               const Field& E, double dm, double deta, int first_blade_i,
-                                              int last_blade_i, const std::function<Elimination(int)>& ghost)
+                                              int last_blade_i, const std::function<Elimination(int)>& ghost,
+                                              const Field* Q)
 {
     dm = spacing(dm, "dm");
     deta = spacing(deta, "deta");
     check_fields(A, B, C, D, E);
+    check_source(Q, A);
     const int n_m = A.n_m, n_eta = A.n_eta;
     const int J = n_eta - 1;
     const int f = first_blade_i, l = last_blade_i;
@@ -216,6 +232,7 @@ std::vector<PeriodicPDERow> periodic_pde_rows(const Field& A, const Field& B, co
         const double mixed = w.mixed;
         std::vector<PDETerm> terms;  // insertion order of v1's dict
         double rhs = 0.0;            // -Q / H, Q = 0
+        if (Q) rhs = -(*Q)(i, J) / w.H;  // not in v1: Q = 2 S omega sin(phi) [Eqs. 5-21, 5-50]
         auto add = [&](Node node, double weight) {
             for (PDETerm& t : terms)
                 if (t.node == node) {
@@ -292,7 +309,8 @@ std::vector<PeriodicPDERow> build_periodic_pde_rows(const CoefficientFields& coe
                              grid.last_blade_i,
                              [&](int k) {  // the station's jump: 1 (v1), or the wake's with transpiration
                                  return boundary_conditions.periodic_ghost(k, n_eta, boundary_conditions.station_jump(k));
-                             });
+                             },
+                             coefficients.has_source() ? &coefficients.Q : nullptr);
 }
 
 }  // namespace BladeGen::Turbolenza

@@ -38,15 +38,22 @@ struct CoefficientFields
     Field A, B, C, D, E;
     double mass_flow_per_depth = 0.0;   ///< mdot' (kg/(m s), or reference units without c_ref)
     std::optional<double> c_ref;        ///< physical chord [m]; empty: normalized mode
+    /// Not in v1: the right-hand side of Eq. 5-21, Q = 2 S omega sin(phi) (S = L_ref S*), at every
+    /// node; empty (no source) for omega = 0 or a planar grid.
+    Field Q;
+    double omega = 0.0;                 ///< Aungier's omega [rad/s], positive toward +theta
 
     [[nodiscard]] double length_scale() const noexcept { return c_ref ? *c_ref : 1.0; }
     [[nodiscard]] bool physical_scale_defined() const noexcept { return c_ref.has_value(); }
+    [[nodiscard]] bool has_source() const noexcept { return Q.size() > 0; }
 };
 
 /// v1 build_coefficients.  rho: finite, > 0, (n_m, n_eta), periodic (to ROUND_OFF max rho) on
 /// the periodic stations; mdot' finite > 0; c_ref empty or finite > 0.  CoefficientError otherwise.
+/// Not in v1: on a stream sheet (GridMetrics::on_sheet) b(m) enters as rho b (Eqs. 5-22 to 5-24);
+/// omega != 0 (a rotating row: on a stream sheet only, CoefficientError otherwise) fills Q.
 [[nodiscard]] CoefficientFields build_coefficients(const GridMetrics& metrics, const Field& rho,
                                                    double mass_flow_per_depth,
-                                                   std::optional<double> c_ref = std::nullopt);
+                                                   std::optional<double> c_ref = std::nullopt, double omega = 0.0);
 
 }  // namespace BladeGen::Turbolenza

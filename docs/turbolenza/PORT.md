@@ -91,3 +91,38 @@ python tools\turbolenza_reference\dump_v1.py <path-to-turbolenza-v1>
   node on each surface (2003 pp. 89-90, Fig. 5-5; 2000 pp. 247-249, Figs. 13-3 and 13-4). No
   distance is prescribed. v2 enforces this on every grid the solver gets (`require_ss_ps`).
 - Constant dm and deta (2003 p. 87). Neither book gives an extension length.
+
+## Not a port: the general curvilinear operator
+
+v1 and Aungier solve the expanded equation (Eq. 5-21) on Aungier's sheared H-grid only.
+`GeneralMesh`, `GeneralOperator`, `GeneralSolver`, `GeneralAdapter` and `MeshFormat` are new: the same
+physics, in conservative (flux) form, on any structured multi-block mesh of one stream sheet in the
+conformal plane (m' = ∫dm/r, θ), with blade walls, periodic and interface connections, inlet and outlet
+flow-angle conditions and the Kutta condition by trailing-edge tags. The derivation and the scheme are in
+`GeneralOperator.hpp`, the solve and the rotation sign in `GeneralSolver.hpp`, the file format in
+`docs/turbolenza/mesh_format.md`. Rules 2 to 6 apply unchanged; the density loop reuses Eos, Convergence,
+Kutta (`next_exit_angle`) and LinearSolver. `solve_general` is a separate entry point: nothing of the
+Aungier solve changes. Choices that are ours are marked in the headers (the run rule of the nodal differences
+along a boundary, the cell-vertex control volumes and their closure face at H-grid transition stations,
+the general form of the exit-angle correction).
+
+At an H-grid transition station (the last inlet and the first exit station) the two periodic images of a
+node meet the suction and the pressure wall, a blade thickness h_f apart; the control volume is closed by
+one face across that gap (GeneralOperator.hpp).  Without it (0ede48c) the discrete metric identities failed
+there by h_f / 2 and the scheme was first order (sharp edge) or about half order (round edge); with it they
+hold to round-off and the manufactured H-grid test is second order with a sharp edge and first order with a
+round one.  Aungier's own transition rows are of the same low order (independent review of 0ede48c): on a
+manufactured problem both converge to the exact solution with different error constants.
+
+Open items of the general operator (independent review of 407b811, not settled):
+
+1. On the NACA 65 cascade at fixed angle the inlet-corner psi(0,0) of the two solvers differs by a steady
+   0.0195 (M1 0.3: Aungier -0.0421, -0.0444, -0.0450; general -0.0631, -0.0644, -0.0644 at very_coarse,
+   coarse, medium), each changing by less than 1e-3 over the last level.  The manufactured tests point at
+   Aungier's transition rows (order 0.2 to 0.5 with a round edge, nearly stalling for one edge position,
+   against order 1 for the general operator); not proven for the cascade.  Needs fine / very_fine levels
+   or a leading-edge topology without transition cells (an O- or C-grid).
+2. beta_out depends by about 0.9 deg on how the trailing-edge node speeds are differenced (the run rule;
+   M1 0.3 medium: 24.91 with it, 24.02 without): the Kutta condition reads speeds that do not converge next
+   to a round edge on this layout.  Both solvers share this limitation of Aungier's grid.
+3. The synthetic Kutta cascade test bounds beta_out only to about 1.5 deg.

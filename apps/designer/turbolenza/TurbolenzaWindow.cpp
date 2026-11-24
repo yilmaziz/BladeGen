@@ -523,7 +523,9 @@ QStringList TurbolenzaWindow::saveResults(const QString& dir, bool overwrite)
 {
     QStringList out;
     if (!result_ || !run_case_) throw std::runtime_error("no run to save");
-    for (const auto& f : T::export_run(*result_, *run_case_, dir.toStdString(), overwrite)) out << QString::fromStdString(f);
+    // export_run returns the names of the files it wrote, relative to dir
+    for (const auto& f : T::export_run(*result_, *run_case_, dir.toStdString(), overwrite))
+        out << QDir(dir).filePath(QString::fromStdString(f));
     // the plots (each window laid out at its size even when it is hidden)
     showResiduals();
     showContours();

@@ -240,7 +240,7 @@ struct RunResult
 /// v1 export_run without the figures: surface_mach.csv, surface_pressure.csv,
 /// convergence_history.csv, fields.csv (every node: m, y, psi, rho, p, T, M, W, W_m, W_theta)
 /// and run_summary.json into `directory` (created; an existing file is overwritten only when
-/// `overwrite`).  Returns the files written.
+/// `overwrite`).  Returns the names of the files written, relative to `directory`.
 std::vector<std::string> export_run(const RunResult& r, const Case& c, const std::string& directory, bool overwrite = false);
 
 /// Threads the machine offers, capped at kMaxThreads.

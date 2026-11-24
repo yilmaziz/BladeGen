@@ -223,6 +223,12 @@ def grid_family(out_dir: Path) -> None:
 
 
 def main() -> int:
+    if len(sys.argv) > 2 and sys.argv[2] == "--medium":
+        v1 = Path(sys.argv[1]).resolve()
+        sys.path.insert(0, str(v1 / "src"))
+        warnings.simplefilter("ignore")
+        medium_case(Path(__file__).resolve().parents[2] / "tests" / "turbolenza" / "data")
+        return 0
     if len(sys.argv) < 2:
         print(__doc__)
         return 1
@@ -246,6 +252,14 @@ def main() -> int:
                                                    inlet_mach=0.5, max_density_iterations=60, density_tolerance=1e-9),
              keep=1, out_dir=out_dir)
     return 0
+
+
+def medium_case(out_dir: Path) -> None:
+    """The user's case of scripts/run_full_solver.py (2026-11-24): NACA 65-(12A10)10, M1 0.65, beta1 45 deg,
+    medium level, lambda_rho = lambda_K = 0.3, tolerances 1e-5, chord 0.5 m: converged (end-to-end check)."""
+    run_case("m065_medium_user", settings(grid_level="medium", chord=0.5, density_tolerance=1e-5, kutta_tolerance=1e-5,
+                                          density_relaxation=0.3, kutta_relaxation=0.3, max_density_iterations=5000,
+                                          max_kutta_iterations=6000), keep=0, out_dir=out_dir)
 
 
 if __name__ == "__main__":

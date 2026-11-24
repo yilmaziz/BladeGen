@@ -192,6 +192,7 @@ GeneralMesh read_mesh_json(const std::string& source)
     json root;
     // a key twice in one object is refused (the parser itself would keep the last)
     std::vector<std::set<std::string>> keys;
+    const std::string file = "the file";  // named: need() returns a reference into its first argument only
     std::string duplicate;
     const json::parser_callback_t check = [&](int, json::parse_event_t event, json& parsed) {
         if (event == json::parse_event_t::object_start) keys.emplace_back();
@@ -214,7 +215,7 @@ GeneralMesh read_mesh_json(const std::string& source)
     const int version = integer(root, "version", "the file");
     if (version != kMeshFormatVersion)
         fail(std::format("version {} is not supported (this reader reads version {})", version, kMeshFormatVersion));
-    const json& units = need(root, "units", "the file");
+    const json& units = need(root, "units", file);
     only_keys(units, {"m_prime", "theta", "m", "r", "b"}, "units");
     const std::pair<const char*, const char*> expected[] = {{"m_prime", "1"}, {"theta", "rad"}, {"m", "m"}, {"r", "m"}, {"b", "1"}};
     for (const auto& [key, unit] : expected)
@@ -222,8 +223,8 @@ GeneralMesh read_mesh_json(const std::string& source)
             fail(std::format("units: '{}' is '{}', version 1 needs '{}'", key, units.at(key).get<std::string>(), unit));
     GeneralMesh mesh;
     if (root.contains("description")) mesh.description = text(root, "description", "the file");
-    mesh.pitch = real(need(root, "pitch", "the file"), "pitch");
-    const json& blocks = need(root, "blocks", "the file");
+    mesh.pitch = real(need(root, "pitch", file), "pitch");
+    const json& blocks = need(root, "blocks", file);
     if (!blocks.is_array()) fail("'blocks' must be an array");
     for (std::size_t k = 0; k < blocks.size(); ++k) {
         const std::string where = std::format("block {}", k);
@@ -240,7 +241,7 @@ GeneralMesh read_mesh_json(const std::string& source)
         B.b = reals(b, "b", where);
         mesh.blocks.push_back(std::move(B));
     }
-    const json& segments = need(root, "segments", "the file");
+    const json& segments = need(root, "segments", file);
     if (!segments.is_array()) fail("'segments' must be an array");
     for (std::size_t k = 0; k < segments.size(); ++k) {
         const std::string where = std::format("segment {}", k);
@@ -269,7 +270,7 @@ GeneralMesh read_mesh_json(const std::string& source)
         }
         mesh.segments.push_back(g);
     }
-    const json& connections = need(root, "connections", "the file");
+    const json& connections = need(root, "connections", file);
     if (!connections.is_array()) fail("'connections' must be an array");
     for (std::size_t k = 0; k < connections.size(); ++k) {
         const std::string where = std::format("connection {}", k);
@@ -299,7 +300,7 @@ GeneralMesh read_mesh_json(const std::string& source)
                                  segment_kind_name(mesh.segments[static_cast<std::size_t>(s)].kind)));
         mesh.connections.push_back(cn);
     }
-    const json& tags = need(root, "tags", "the file");
+    const json& tags = need(root, "tags", file);
     if (!tags.is_array()) fail("'tags' must be an array");
     for (std::size_t k = 0; k < tags.size(); ++k) {
         const std::string where = std::format("tag {}", k);

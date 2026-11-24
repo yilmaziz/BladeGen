@@ -282,11 +282,12 @@ TEST_CASE("end wall terms: xi is Eq. 8-53 on a row with changing radius", "[turb
 
 TEST_CASE("end wall terms: the layer is continuous through V_theta_e = 0", "[turbolenza][endwall]")
 {
-    // a hub rotating at 100 rad/s, r = 0.3: V_theta_e = C_theta - 30 at station b; q12 != 0 there
+    // a hub rotating at 120 rad/s, r = 0.25: V_theta_e = C_theta - 30 at station b; q12 != 0 there
+    // (r omega = 30 exactly, so V_theta_e = 0 exactly also where the compiler fuses the multiply-add)
     auto run = [](double Ct1) {
-        const EndwallWallStation a = wall(0.0, 0.3, 100.0, 60.0, 1.2, 1e5, 1.8e-5, 100.0);
-        const EndwallWallStation b = wall(0.01, 0.3, 100.0, Ct1, 1.2, 1e5, 1.8e-5, 100.0, 0.3);
-        const EndwallWallStation c = wall(0.02, 0.3 + 0.01 * std::sin(0.3), 100.0, 30.0, 1.2, 1e5, 1.8e-5, 100.0, 0.3);
+        const EndwallWallStation a = wall(0.0, 0.25, 100.0, 60.0, 1.2, 1e5, 1.8e-5, 120.0);
+        const EndwallWallStation b = wall(0.01, 0.25, 100.0, Ct1, 1.2, 1e5, 1.8e-5, 120.0, 0.3);
+        const EndwallWallStation c = wall(0.02, 0.25 + 0.01 * std::sin(0.3), 100.0, 30.0, 1.2, 1e5, 1.8e-5, 120.0, 0.3);
         const EndwallLayer L0 = endwall_inlet(a, {}, 20.0, {});
         const EndwallStepResult s1 = endwall_step(L0, a, b, nullptr, 0.0, {});
         const EndwallStepResult s2 = endwall_step(s1.layer, b, c, nullptr, 0.0, {});

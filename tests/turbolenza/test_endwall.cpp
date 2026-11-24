@@ -8,6 +8,7 @@
 #include "turbolenza/BoundaryLayer.hpp"
 #include "turbolenza/Endwall.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -337,7 +338,7 @@ TEST_CASE("end wall: the jump conditions 8-67 .. 8-71", "[turbolenza][endwall]")
     CHECK(w.delta1 == c.delta1);
     CHECK(w.q12 == c.q12);
     CHECK(rel(c.Vtheta_e * c.theta12, w.Vtheta_e * w.theta12) < 1e-14);  // [8-68]
-    CHECK(w.Vtheta_e == 80.0 - 0.3 * 400.0);
+    CHECK(w.Vtheta_e == Catch::Approx(80.0 - 0.3 * 400.0).margin(1e-12));  // [8-4]; not bitwise: fused multiply-add
     CHECK(w.theta12 < 0.0);  // W_theta and C_theta of opposite sign: theta12' < 0 (p. 183)
     CHECK(w.m < 0.05);       // the extended profile 8-28
     // the profile family does not carry 8-69 and 8-71 exactly (measured, not imposed)

@@ -59,6 +59,8 @@ public:
     [[nodiscard]] double scale(double m) const { return radius(m) / r_ref_; }  ///< sigma = r / r_ref
     [[nodiscard]] double r_ref() const noexcept { return r_ref_; }
     [[nodiscard]] bool cylinder() const noexcept { return cylinder_; }  ///< r and b constant
+    /// A cylinder whose radius is r_ref: sigma = 1 and b / b_in = 1 exactly, the planar cascade itself.
+    [[nodiscard]] bool unit_scale() const noexcept { return cylinder_ && r_.front() == r_ref_; }
     [[nodiscard]] double m_front() const noexcept { return m_.front(); }
     [[nodiscard]] double m_back() const noexcept { return m_.back(); }
     [[nodiscard]] const std::vector<double>& m() const noexcept { return m_; }

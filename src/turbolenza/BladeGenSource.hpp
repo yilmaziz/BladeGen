@@ -143,6 +143,7 @@ struct StreamSurfaceOptions
     double coverage_chords = 6.0;     ///< the sheet's table reaches this far beyond the LE and the TE
     double table_step_chords = 0.0025; ///< its station spacing (the spline meets the streamline r to 2e-10: test)
     SideFitOptions fit;
+    bool keep_samples = false;        ///< keep the mapped side samples in the report (tests)
 };
 
 struct StreamSurfaceReport
@@ -150,7 +151,18 @@ struct StreamSurfaceReport
     SectionFitReport fit;
     double map_max_difference = 0.0;  ///< max |m(m') - BladeGen's StreamSurface::m_of_mprime| over the blade [chords]
     double b_le = 0.0, b_te = 0.0;    ///< b / b(LE point) at the TE (b_le = 1)
+    /// keep_samples: the mapped sides as fitted (turned back, / L) with their chain-rule curvature
+    SideSample suction_sample, pressure_sample;
 };
+
+/// The curvature of a chord-frame curve mapped into the solver's frame (see above), by the chain rule: at a
+/// point with the chord-frame unit tangent t and signed curvature kappa, placed by the similarity of stagger gamma
+/// and conformal chord c' (m' = c' (x cos g - y sin g) + m0, theta = c' (x sin g + y cos g) + t0), on the sheet's
+/// radius r with dr/dm' = r sin(phi) there, M = m(m'), Y = r_LE theta, all divided by L:
+///   M' = r m'_s, M'' = r m'_ss + (dr/dm') m'_s^2, Y' = r_LE theta_s, Y'' = r_LE theta_ss,
+///   kappa_mapped = L (M' Y'' - Y' M'') / (M'^2 + Y'^2)^(3/2).
+[[nodiscard]] double mapped_curvature(const Point& t, double kappa, double gamma, double c, double r, double dr_dmprime,
+                                      double r_le, double L);
 
 /// The (window's copy of) layer k of `design` on its stream surface (see above).  Throws
 /// std::invalid_argument for a mirrored design, a layer BladeGen cannot place, or a section that

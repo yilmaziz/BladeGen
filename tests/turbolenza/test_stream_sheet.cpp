@@ -154,6 +154,11 @@ TEST_CASE("metrics and coefficients on a cone: hand-derived (Eqs. 5-3, 5-9, 5-15
             CHECK(std::abs(mt.sin_phi[sz(i)] - sphi) <= 1e-12);
             CHECK(mt.thickness[sz(i)] == 1.0);
             CHECK(std::abs(mt.dS_dm[sz(i)] - sphi * pitch / r0) <= 1e-12);  // sin(phi) Theta
+            // d tan(beta)/dm = d(sigma t)/dm = t sin(phi) / r_ref: the blade walls by d sigma (Metrics.cpp), the
+            // side lines by the run differences of a linear function
+            for (int j = 0; j < g->n_eta(); ++j) CHECK(std::abs(mt.dtan_beta_dm(i, j) - t * sphi / r0) <= 1e-12);
+            // d tan(beta)/d eta = tan(beta1) - tan(beta0) = 0 here, while dS/dm = sin(phi) Theta != 0
+            CHECK(std::abs(mt.dtan_beta_deta()[sz(i)]) <= 1e-14);  // round-off of tan1 - tan0, both about 0.31 sigma
         }
         const Field rho(g->n_m(), g->n_eta(), rho0);
         const CoefficientFields co = build_coefficients(mt, rho, mdot, c_ref);
@@ -416,21 +421,56 @@ SolverConfig rotating_config(const Grid& g, double c_ref, double omega)
 
 }  // namespace
 
+namespace {
+
+/// Kelvin on the unbladed stations: Gamma_i = r_i int C_theta d eta, C_theta = W_theta + omega r_i (the
+/// circulation round one pitch over Theta, constant where the absolute flow is irrotational and no blade is
+/// crossed: Aungier Eq. 5-11).  The largest relative change of Gamma over stations [from, to), against its
+/// value at `from`, and that value.
+std::pair<double, double> circulation_drift(const Grid& g, const Field& W_theta, const std::vector<double>& r, double omega,
+                                            int from, int to)
+{
+    std::vector<double> ct(sz(g.n_eta()));
+    auto gamma = [&](int i) {
+        for (int j = 0; j < g.n_eta(); ++j) ct[sz(j)] = W_theta(i, j) + omega * r[sz(i)];
+        return r[sz(i)] * detail::trapezoid(ct.data(), g.eta);
+    };
+    const double ref = gamma(from);
+    double drift = 0.0;
+    for (int i = from; i < to; ++i) drift = std::max(drift, std::abs(gamma(i) - ref));
+    return {drift / std::abs(ref), ref};
+}
+
+}  // namespace
+
 TEST_CASE("a rotating row on a cone: converges, mass conserved, 1 and 4 threads bit-identical (SparseLU)", "[turbolenza][sheet][rotation][threads]")
 {
-    const double c_ref = 0.1, mdot = 6.0, omega = -1500.0;
+    // omega = -200 rad/s: U up to 50 m/s against W_m about 60 m/s, no recirculation (the reviewer measured the
+    // recirculating flow of omega = -1500: converged in eta, not in m)
+    const double c_ref = 0.1, mdot = 6.0, omega = -200.0;
     const auto g = channel_on(cone(2.0, 0.25, 2.0, 0.3, 0.1), 0.3, 0.8);
     SolveOptions one;
     const Solution a = solve_at_exit_angle(g, rotating_config(*g, c_ref, omega), c_ref, mdot, one);
     REQUIRE(a.converged);
     CHECK(sref::measure("rotating cone channel: Eq. 5-17 node by node", mass_check(a, mdot).pointwise) <= 1e-13);
-    {  // the station diagnostic: second order in deta, as without rotation
+    {  // the station diagnostic: second order in deta at fixed dm (the ratio tends to 4 from below), as without rotation
         const auto g17 = channel_on(cone(2.0, 0.25, 2.0, 0.3, 0.1), 0.3, 0.8, 17);
         const Solution a17 = solve_at_exit_angle(g17, rotating_config(*g17, c_ref, omega), c_ref, mdot, one);
         REQUIRE(a17.converged);
         const double e9 = sref::measure("rotating cone channel, n_eta 9: station error", mass_check(a, mdot).station);
         const double e17 = sref::measure("rotating cone channel, n_eta 17: station error", mass_check(a17, mdot).station);
-        CHECK(sref::measure("rotating cone channel: station error ratio 9 / 17", e9 / e17) > 2.2);  // measured 2026-11-24: 2.50
+        CHECK(sref::measure("rotating cone channel: station error ratio 9 / 17", e9 / e17) > 2.2);
+    }
+    {  // Kelvin: r C_theta constant on the unbladed stations (the source 2 S omega sin(phi) makes it so)
+        const std::vector<double> r = [&] {
+            std::vector<double> v;
+            for (int i = 0; i < g->n_m(); ++i) v.push_back(c_ref * g->boundaries.sheet->radius(g->m[sz(i)]));
+            return v;
+        }();
+        const auto in = circulation_drift(*g, a.flow.W_theta, r, omega, 0, g->first_blade_i);
+        const auto out = circulation_drift(*g, a.flow.W_theta, r, omega, g->last_blade_i + 1, g->n_m());
+        CHECK(sref::measure("rotating cone channel: r C_theta drift, inlet stations", in.first) <= 2e-3);
+        CHECK(sref::measure("rotating cone channel: r C_theta drift, exit stations", out.first) <= 2e-3);
     }
     CHECK(a.coefficients.has_source());
     // H' varies with r: on the cone r grows, so h = I + U^2/2 - W^2/2 at equal W grows downstream
@@ -583,6 +623,171 @@ TEST_CASE("case: stream surface and row refusals; the rotating case's derived in
     CHECK(c.triangle->beta > 0.0);
     CHECK(std::abs(c.inlet->angle - c.triangle->beta) <= 1e-15);
     CHECK(std::abs(c.inlet->mach - c.triangle->mach_relative) <= 1e-15);
+    // the mass flow per passage: mdot' = rho1 C_m S_in, S_in = r_in Theta = sigma(m_in) pitch (Eq. 5-9; Grid.cpp
+    // inlet_passage_width), by hand from the triangle's static state
+    {
+        const double S_in = rot.chord * (coned.sheet->radius(c.grid.m.front()) / coned.sheet->r_ref()) / coned.solidity;
+        const double hand = c.triangle->static_density * c.triangle->C_m * S_in;
+        CHECK(sref::measure("rotating cone: mdot' vs rho1 C_m S_in by hand", std::abs(c.mass_flow_per_depth / hand - 1.0)) <=
+              1e-12);
+    }
+    // the same for the stationary row on the cone: isentropic inlet state by hand (M1 0.5, beta1 45 deg)
+    {
+        const Case st = build_case(ls, coned);
+        const double T0 = ls.inlet_total_temperature, P0 = ls.inlet_total_pressure, M = *ls.inlet_mach;
+        const double T1 = T0 / (1.0 + 0.2 * M * M), p1 = P0 * std::pow(T1 / T0, 3.5), rho1 = p1 / (287.05 * T1);
+        const double W1 = M * std::sqrt(1.4 * 287.05 * T1);
+        const double S_in = ls.chord * (coned.sheet->radius(st.grid.m.front()) / coned.sheet->r_ref()) / coned.solidity;
+        const double hand = rho1 * W1 * std::cos(detail::radians(ls.inlet_flow_angle_deg)) * S_in;
+        CHECK(sref::measure("stationary cone: mdot' vs rho1 W1 cos(beta1) S_in by hand",
+                            std::abs(st.mass_flow_per_depth / hand - 1.0)) <= 1e-12);
+        CHECK(std::abs(coned.sheet->radius(st.grid.m.front()) / coned.sheet->r_ref() - 1.0) > 0.01);  // sigma_in != 1
+    }
     rot.viscous = true;
     CHECK_THROWS_AS(build_case(rot, coned), CaseError);
+    // the touching edge-node experiment is planar only
+    CaseSettings tch = ls;
+    tch.edge_nodes = EdgeNodes::Touching;
+    CHECK_THROWS_AS(build_case(tch, coned), CaseError);
+    CHECK_NOTHROW(build_case(tch, on_cylinder(s, 30)));  // sigma = 1: the planar cascade
+    // extensions beyond the sheet (it ends 6 chords ahead of the LE): stationary in the grid, rotating at the triangle
+    CaseSettings far = ls;
+    far.upstream_extension_chords = 8.0;
+    CHECK_THROWS_AS(build_case(far, coned), CaseError);
+    CaseSettings far_rot = rot;
+    far_rot.viscous = false;
+    far_rot.upstream_extension_chords = 8.0;
+    try {
+        (void)build_case(far_rot, coned);
+        FAIL("an inlet beyond the sheet must be refused");
+    } catch (const CaseError& e) {
+        CHECK(std::string(e.what()).find("leaves the stream sheet") != std::string::npos);
+    }
+    // the boundary layer on a cylinder whose radius is not r_ref (sigma != 1): refused, the march's arc length is wrong
+    {
+        StreamSurfaceBlade sig = on_cylinder(s, 30);
+        const double rr = sig.sheet->r_ref();
+        sig.sheet = std::make_shared<const StreamSheet>(std::vector<double>{-6.0, 0.0, 7.0}, std::vector<double>(3, 1.1 * rr),
+                                                        std::vector<double>(3, 0.25), rr);
+        REQUIRE(sig.sheet->cylinder());
+        CHECK_FALSE(sig.sheet->unit_scale());
+        CHECK_NOTHROW(build_case(ls, sig));
+        CHECK_THROWS_AS(build_case(v, sig), CaseError);
+    }
 }
+
+TEST_CASE("make_cascade of a stream-surface blade and the metrics refuse what does not fit", "[turbolenza][sheet][case]")
+{
+    const CaseSettings s = synthetic_settings();
+    StreamSurfaceBlade b = on_cylinder(s, 30);
+    const double r = b.sheet->r_ref();
+    b.sheet = cone(r, 0.1, r, 0.3, 0.0, -6.0, 7.0);
+    CHECK_NOTHROW(make_cascade(b));
+    StreamSurfaceBlade pitch = b;
+    pitch.solidity = 1.01 * b.solidity;  // 1 / solidity is not r_ref 2 pi / N
+    CHECK_THROWS_AS(make_cascade(pitch), GeometryError);
+    StreamSurfaceBlade cover = b;
+    cover.sheet = cone(r, 0.1, r, 0.3, 0.0, 0.5, 7.0);  // starts behind the LE
+    CHECK_THROWS_AS(make_cascade(cover), GeometryError);
+    StreamSurfaceBlade none = b;
+    none.sheet.reset();
+    CHECK_THROWS_AS(make_cascade(none), std::invalid_argument);
+    StreamSurfaceBlade zero = b;
+    zero.n_blades = 0;
+    CHECK_THROWS_AS(make_cascade(zero), std::invalid_argument);
+    StreamSurfaceBlade chord = b;
+    chord.chord = 0.0;
+    CHECK_THROWS_AS(make_cascade(chord), std::invalid_argument);
+    // a grid longer than its sheet (m -1 .. 2 against -0.5 .. 5)
+    CHECK_THROWS_AS(build_metrics(channel_on(cone(2.0, 0.25, 2.0, 0.3, 0.0, -0.5, 5.0), 0.3)), MetricsError);
+}
+
+TEST_CASE("a rotating cascade on a cone: Kelvin, the absolute frame, the rotor summary (hand values)", "[turbolenza][sheet][rotation][case]")
+{
+    // the synthetic blade on a cone with sin(phi) = 0.3 (r grows 6 % per chord), N = 30, very coarse grid, rpm for
+    // beta1 = kappa_LE at the nominal far inlet, alpha1 = 0, M1 0.3 absolute
+    CaseSettings s = synthetic_settings();
+    s.stream_surface = StreamSurfaceKind::Layer;
+    s.row = RowMotion::Rotating;
+    s.inlet_absolute_mach = 0.3;
+    s.inlet_absolute_flow_angle_deg = 0.0;
+    StreamSurfaceBlade b = on_cylinder(s, 30);
+    const double rr = b.sheet->r_ref(), sphi = 0.3;
+    b.sheet = cone(rr, sphi, rr, 0.25, 0.0, -6.0, 7.0);
+    const Cascade cc = make_cascade(b);
+    const double T0 = s.inlet_total_temperature, P0 = s.inlet_total_pressure;
+    const double T1 = T0 / (1.0 + 0.2 * 0.09), C1 = 0.3 * std::sqrt(1.4 * 287.05 * T1);
+    const double r_in_nominal = s.chord * b.sheet->radius(-s.upstream_extension_chords);
+    s.rpm = std::round(C1 * std::tan(cc.kappa_le) / r_in_nominal * 60.0 / (2.0 * kPi));
+    const Case c = build_case(s, b);
+    REQUIRE(c.triangle);
+    const RunResult r = run_case(c);
+    REQUIRE(r.converged);
+    sref::measure("rotating cone cascade: passes", r.iterations);
+    sref::measure("rotating cone cascade: beta_out [deg]", detail::degrees(r.solution->exit_angle));
+    const SolutionData& d = *r.solution;
+    REQUIRE(d.absolute);
+    REQUIRE(r.summary);
+    REQUIRE(r.summary->rotor);
+    const AbsoluteFrameData& a = *d.absolute;
+    const PerfectGas gas(1.4, 287.05);
+    const double omega = c.triangle->omega, cp = gas.cp(), ex = 3.5;
+    CHECK(std::abs(omega - (-2.0 * kPi * s.rpm / 60.0)) <= 1e-12 * std::abs(omega));
+    // every node: r from the sheet, C_theta = W_theta + omega r, P0 = p (1 + C^2 / (2 cp T))^(g / (g - 1)), and the
+    // isentropic identity of the inviscid solve P0 / P0_in = (T0 / T0_in)^(g / (g - 1))
+    double worst_ct = 0.0, worst_p0 = 0.0, worst_iso = 0.0;
+    for (int i = 0; i < d.grid.n_m(); ++i) {
+        const double ri = s.chord * b.sheet->radius(d.grid.m[sz(i)]);
+        CHECK(std::abs(d.station_radius[sz(i)] - ri) <= 1e-14 * ri);
+        for (int j = 0; j < d.grid.n_eta(); ++j) {
+            const double ct = d.W_theta(i, j) + omega * ri, C2 = d.W_m(i, j) * d.W_m(i, j) + ct * ct;
+            const double T = d.temperature(i, j);
+            worst_ct = std::max(worst_ct, std::abs(a.C_theta(i, j) - ct) / std::sqrt(C2));
+            worst_p0 = std::max(worst_p0, std::abs(a.total_pressure(i, j) / (d.pressure(i, j) * std::pow(1.0 + C2 / (2.0 * cp * T), ex)) - 1.0));
+            worst_iso = std::max(worst_iso, std::abs(a.total_pressure(i, j) / (P0 * std::pow(a.total_temperature(i, j) / T0, ex)) - 1.0));
+        }
+    }
+    CHECK(sref::measure("rotating cone cascade: C_theta vs W_theta + omega r", worst_ct) <= 1e-13);
+    CHECK(sref::measure("rotating cone cascade: P0 vs p (1 + C^2/(2 cp T))^3.5", worst_p0) <= 1e-12);
+    CHECK(sref::measure("rotating cone cascade: P0/P0_in vs (T0/T0_in)^3.5 (isentropic)", worst_iso) <= 1e-12);
+    // the rotor summary against mass averages formed here (weights rho W_m at the far exit)
+    const int ie = d.grid.n_m() - 1, ne = d.grid.n_eta();
+    std::vector<double> w(sz(ne)), x(sz(ne));
+    for (int j = 0; j < ne; ++j) w[sz(j)] = d.density(ie, j) * d.W_m(ie, j);
+    const double wsum = detail::trapezoid(w.data(), d.grid.eta);
+    auto avg = [&](auto f) {
+        for (int j = 0; j < ne; ++j) x[sz(j)] = w[sz(j)] * f(j);
+        return detail::trapezoid(x.data(), d.grid.eta) / wsum;
+    };
+    const double r_out = d.station_radius.back(), U_out = omega * r_out;
+    const double P0_out = avg([&](int j) {
+        const double ct = d.W_theta(ie, j) + U_out, T = d.temperature(ie, j);
+        return d.pressure(ie, j) * std::pow(1.0 + (d.W_m(ie, j) * d.W_m(ie, j) + ct * ct) / (2.0 * cp * T), ex);
+    });
+    const double ct_out = avg([&](int j) { return d.W_theta(ie, j) + U_out; });
+    const double T0_out = avg([&](int j) {
+        const double ct = d.W_theta(ie, j) + U_out;
+        return d.temperature(ie, j) + (d.W_m(ie, j) * d.W_m(ie, j) + ct * ct) / (2.0 * cp);
+    });
+    const RotorSummary& o = *r.summary->rotor;
+    CHECK(std::abs(o.total_pressure_ratio / (P0_out / P0) - 1.0) <= 1e-12);
+    CHECK(std::abs(o.total_temperature_ratio / (T0_out / T0) - 1.0) <= 1e-12);
+    CHECK(std::abs(o.C_theta_out / ct_out - 1.0) <= 1e-12);
+    const double euler = U_out * ct_out - c.triangle->U * c.triangle->C_theta;
+    CHECK(std::abs(o.euler_work / euler - 1.0) <= 1e-12);
+    CHECK(std::abs(o.total_enthalpy_rise - cp * (T0_out - T0)) <= 1e-9 * std::abs(o.total_enthalpy_rise));
+    CHECK(sref::measure("rotating cone cascade: Euler work vs cp dT0 (relative)", std::abs(o.euler_work / o.total_enthalpy_rise - 1.0)) <=
+          1e-10);  // rothalpy: cp T0 = I + U C_theta at every node
+    CHECK(o.total_pressure_ratio > 1.0);
+    CHECK(o.C_theta_out < 0.0);  // swirl in the direction of rotation (toward -theta for rpm > 0)
+    // Kelvin on the unbladed stations of the cascade: r C_theta constant ahead of the blade (zero: alpha1 = 0) and
+    // behind it (the work done); the rotation source 2 S omega sin(phi) makes it so on the cone
+    const auto in = circulation_drift(d.grid, d.W_theta, d.station_radius, omega, 0, d.grid.first_blade_i);
+    const auto out = circulation_drift(d.grid, d.W_theta, d.station_radius, omega, d.grid.last_blade_i + 1, d.grid.n_m());
+    CHECK(sref::measure("rotating cone cascade: |r C_theta| at the far inlet / (r U)", std::abs(in.second) / (r_in_nominal * std::abs(c.triangle->U))) <=
+          1e-3);
+    CHECK(sref::measure("rotating cone cascade: r C_theta drift, exit stations", out.first) <= 2e-3);
+    // and at the far inlet its Delta to the exit is the Euler work over omega: U2 C2 - U1 C1 = omega (r2 C2 - r1 C1)
+    CHECK(std::abs(omega * (r_out * ct_out) - euler) <= 1e-9 * std::abs(euler));
+}
+

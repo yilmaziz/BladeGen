@@ -129,6 +129,107 @@ TEST_CASE("a cylindrical channel: the layer on its stream surface = the planar c
     CHECK(sref::measure("cylinder layer vs planar cascade: SS Mach", dm) <= 1e-7);
 }
 
+TEST_CASE("a conical channel: r(m), sin(phi), b(m) in closed form; the mapped curvature by the chain rule", "[turbolenza][bladegen][sheet]")
+{
+    // straight walls: the hub a cylinder r = 40, the casing a cone 100 -> 120 mm over the same axial length 30 mm
+    // (Linear law, continued straight).  BladeGen's family X(u, s) = (1 - s) hub(u) + s casing(u) is then, with
+    // tau = u - 1 (the LE line at tau = 0): z = -15 + 30 tau, r = 40 + s (60 + 20 tau), so
+    //   X_u = (30, 20 s), m = tau |X_u|, sin(phi) = 20 s / |X_u|, dX/ds = (0, 60 + 20 tau),
+    //   b = |dX/ds . n| = 30 (60 + 20 tau) / |X_u|   (n = (-20 s, 30) / |X_u|; |dX/ds| would be 60 + 20 tau)
+    D::BladeDesign design = D::BladeDesign::naca65_defaults();
+    design.meridional.hub = {-15.0, 40.0, 15.0, 40.0};
+    design.meridional.casing = {-15.0, 100.0, 15.0, 120.0};
+    design.meridional.hub_law = design.meridional.casing_law = BladeGen::Blade::WallLaw::Linear;
+    design.n_blades = 30;
+    D::Evaluator ev;
+    const D::Layer& layer = design.layers[2];
+    const double s = layer.span, speed = std::sqrt(900.0 + 400.0 * s * s);
+    T::StreamSurfaceOptions opt;
+    opt.keep_samples = true;
+    opt.coverage_chords = 2.0;  // the hub line r = 70 + 10 tau of mid span reaches r = 0 about 5 chords upstream
+    T::StreamSurfaceReport rep;
+    const T::StreamSurfaceBlade b = T::stream_surface_blade(design, 2, layer, ev, opt, &rep);
+    const double L = b.chord / 1e-3;  // the normalizing length [mm]
+    double wr = 0.0, wb = 0.0, wp = 0.0;
+    for (double mc : {-1.9, -1.5, -0.3, 0.0, 0.4, 0.8, 1.7, 2.6}) {
+        const double tau = mc * L / speed;
+        wr = std::max(wr, std::abs(b.sheet->radius(mc) * L / (40.0 + s * (60.0 + 20.0 * tau)) - 1.0));
+        wb = std::max(wb, std::abs(b.sheet->thickness(mc) / (30.0 * (60.0 + 20.0 * tau) / speed) - 1.0));
+        wp = std::max(wp, std::abs(b.sheet->sin_phi(mc) * L / L - 20.0 * s / speed));
+    }
+    CHECK(sref::measure("conical channel: r(m) vs closed form (relative)", wr) <= 1e-10);
+    CHECK(sref::measure("conical channel: b(m) vs 30 (60 + 20 tau) / |X_u| (relative)", wb) <= 1e-10);
+    CHECK(sref::measure("conical channel: sin(phi) vs 20 s / |X_u|", wp) <= 1e-10);
+    // the mapped sides' curvature (the chain rule of the map, d2M/ds2 = r d2m'/ds2 + r sin(phi) (dm'/ds)^2) against
+    // the curvature of the circle through three mapped points (independent: the positions only), on the body
+    for (const T::SideSample* side : {&rep.suction_sample, &rep.pressure_sample}) {
+        REQUIRE(side->xy.size() > 1000);
+        const std::size_t n = side->xy.size(), k = 8;
+        double worst = 0.0, kmax = 0.0;
+        int used = 0;
+        for (std::size_t q = n / 10; q < n - n / 10; q += 37) {
+            // where BladeGen's curvature is smooth over the three points (not at a fair's join, where a circle
+            // through three points straddles a jump in d kappa / ds)
+            const double scale = std::max(std::abs(side->kappa[q]), 1.0);
+            if (std::abs(side->kappa[q + k] - side->kappa[q - k]) > 1e-3 * scale) continue;
+            const T::Point A = side->xy[q - k], B = side->xy[q], C = side->xy[q + k];
+            const double ux = B.m - A.m, uy = B.y - A.y, vx = C.m - B.m, vy = C.y - B.y;
+            const double cross = ux * vy - uy * vx;
+            const double kfd = 2.0 * cross / (std::hypot(ux, uy) * std::hypot(vx, vy) * std::hypot(C.m - A.m, C.y - A.y));
+            worst = std::max(worst, std::abs(kfd - side->kappa[q]) / scale);
+            ++used;
+            kmax = std::max(kmax, std::abs(side->kappa[q]));
+        }
+        // measured 2026-11-24: 3.7e-3 / 5.2e-4 here and 3.9e-3 / 1.8e-3 on the cylinder (dr/dm' = 0): the floor of
+        // the three-point circle against BladeGen's own sample curvature, not the map (mapped_curvature is tested
+        // against closed forms below)
+        CHECK(sref::measure("conical channel: chain-rule curvature vs three-point circle", worst) <= 1e-2);
+        CHECK(kmax > 0.0);
+        CHECK(used > 200);
+    }
+}
+
+TEST_CASE("mapped_curvature: the chain rule of the map against closed forms", "[turbolenza][bladegen][sheet]")
+{
+    const double g = 0.5, c = 0.4, r = 70.0, sphi = 0.3, r_le = 65.0, L = 30.0;
+    // a straight chord-frame line along x (kappa = 0): in (m', theta) the line theta - t0 = tan(g) (m' - m0); mapped,
+    // M(m') = m(m'), Y = r_LE tan(g) (m' - m0), so with M' = r, M'' = dr/dm' = r sin(phi), Y'' = 0 per unit m',
+    // kappa = -L Y' M'' / (M'^2 + Y'^2)^(3/2), Y' = r_LE tan(g).  Without the dr/dm' term it would be 0.
+    {
+        const double Yp = r_le * std::tan(g), Mp = r, Mpp = r * sphi;
+        const double exact = -L * Yp * Mpp / std::pow(Mp * Mp + Yp * Yp, 1.5);
+        const double got = T::mapped_curvature({1.0, 0.0}, 0.0, g, c, r, r * sphi, r_le, L);
+        CHECK(std::abs(got / exact - 1.0) <= 1e-13);
+        CHECK(exact < 0.0);  // r grows along m: the mapped line bends toward -Y
+    }
+    // a circle of curvature k0 on a cylinder at r = r_LE (dr/dm' = 0): the map is the similarity of scale c' r / L,
+    // so kappa = k0 L / (c' r), whatever the tangent
+    for (double ang : {0.0, 0.7, 2.0, -1.2}) {
+        const T::Point t{std::cos(ang), std::sin(ang)};
+        const double got = T::mapped_curvature(t, 3.0, g, c, r_le, 0.0, r_le, L);
+        CHECK(std::abs(got / (3.0 * L / (c * r_le)) - 1.0) <= 1e-13);
+    }
+    // a general point by finite differences of the map of the osculating circle, on a cone r(m') = r0 exp(sin(phi) m')
+    // (dr/dm' = r sin(phi): dm = r dm', dr = sin(phi) dm), m(m') = (r(m') - r0) / sin(phi)
+    {
+        const double r0 = 60.0, k0 = 2.5, ang = 0.4, m0p = 0.3;
+        auto rad = [&](double mp) { return r0 * std::exp(sphi * mp); };
+        auto mapped = [&](double s) {  // the circle through the chord-frame origin with tangent ang, curvature k0
+            const double x = (std::sin(ang + k0 * s) - std::sin(ang)) / k0, y = (std::cos(ang) - std::cos(ang + k0 * s)) / k0;
+            const double mp = m0p + c * (x * std::cos(g) - y * std::sin(g)), th = c * (x * std::sin(g) + y * std::cos(g));
+            return T::Point{(rad(mp) - r0) / sphi / L, r_le * th / L};
+        };
+        const double h = 1e-4;
+        const T::Point A = mapped(-h), B = mapped(0.0), C = mapped(h);
+        const double d1m = (C.m - A.m) / (2 * h), d1y = (C.y - A.y) / (2 * h);
+        const double d2m = (C.m - 2 * B.m + A.m) / (h * h), d2y = (C.y - 2 * B.y + A.y) / (h * h);
+        const double fd = (d1m * d2y - d1y * d2m) / std::pow(d1m * d1m + d1y * d1y, 1.5);
+        const double rr = rad(m0p);
+        const double got = T::mapped_curvature({std::cos(ang), std::sin(ang)}, k0, g, c, rr, rr * sphi, r_le, L);
+        CHECK(sref::measure("mapped_curvature vs finite differences of the mapped circle", std::abs(got / fd - 1.0)) <= 1e-6);
+    }
+}
+
 TEST_CASE("a rotating row on the default design's Mid layer (report)", "[.rotor][turbolenza][bladegen][sheet]")
 {
     D::BladeDesign design = D::BladeDesign::defaults();

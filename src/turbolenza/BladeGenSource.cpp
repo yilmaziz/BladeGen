@@ -484,6 +484,20 @@ private:
 
 }  // namespace
 
+double mapped_curvature(const Point& t, double kappa, double gamma, double c, double r, double dr_dmprime, double r_le,
+                        double L)
+{
+    const double cg = std::cos(gamma), sg = std::sin(gamma);
+    const Point n{-t.y, t.m};  // the chord-frame unit normal (left of t)
+    // d(m', theta)/ds and d2(m', theta)/ds2 of the similarity (s the chord-frame arc length)
+    const double a1 = c * (t.m * cg - t.y * sg), a2 = c * (t.m * sg + t.y * cg);
+    const double kc = kappa * c;
+    const double b1 = kc * (n.m * cg - n.y * sg), b2 = kc * (n.m * sg + n.y * cg);
+    const double M1 = r * a1, M2 = r * b1 + dr_dmprime * a1 * a1;
+    const double Y1 = r_le * a2, Y2 = r_le * b2;
+    return L * (M1 * Y2 - Y1 * M2) / std::pow(M1 * M1 + Y1 * Y1, 1.5);
+}
+
 StreamSurfaceBlade stream_surface_blade(const Design::BladeDesign& design, int k, const Design::Layer& layer,
                                         Design::Evaluator& ev, const StreamSurfaceOptions& opt, StreamSurfaceReport* report)
 {
@@ -527,7 +541,6 @@ StreamSurfaceBlade stream_surface_blade(const Design::BladeDesign& design, int k
     auto turn_back = [&](const Math::Vec2& p) {
         return Point{(p.x() * cg + p.y() * sg) / L, (-p.x() * sg + p.y() * cg) / L};
     };
-    const double cgb = std::cos(conf.gamma), sgb = std::sin(conf.gamma);
     const double m_le_bg = placed.surface.m_of_mprime(conf.m0);
 
     StreamSurfaceReport rep;
@@ -544,21 +557,13 @@ StreamSurfaceBlade stream_surface_blade(const Design::BladeDesign& design, int k
             const std::size_t a = q == 0 ? 0 : q - 1, b = q + 1 == n ? q : q + 1;
             Math::Vec2 t(s.xy[b].m - s.xy[a].m, s.xy[b].y - s.xy[a].y);
             t /= t.norm();
-            const Math::Vec2 nrm(-t.y(), t.x());
             double u = 0.0;
             const Math::Vec2 P = map(s.xy[q].m, s.xy[q].y, u);
             M_lo = std::min(M_lo, P.x());
             M_hi = std::max(M_hi, P.x());
             out.xy[q] = turn_back(P);
-            // d(m', theta)/ds and d2(m', theta)/ds2 of the similarity (s the chord-frame arc length)
-            const double a1 = conf.c * (t.x() * cgb - t.y() * sgb), a2 = conf.c * (t.x() * sgb + t.y() * cgb);
-            const double kc = s.kappa[q] * conf.c;
-            const double b1 = kc * (nrm.x() * cgb - nrm.y() * sgb), b2 = kc * (nrm.x() * sgb + nrm.y() * cgb);
             const double r = line.xr(u).y();
-            const double dr = r * line.sin_phi(u);  // dr/dm' = r dr/dm
-            const double M1 = r * a1, M2 = r * b1 + dr * a1 * a1;
-            const double Y1 = r_le * a2, Y2 = r_le * b2;
-            out.kappa[q] = L * (M1 * Y2 - Y1 * M2) / std::pow(M1 * M1 + Y1 * Y1, 1.5);
+            out.kappa[q] = mapped_curvature({t.x(), t.y()}, s.kappa[q], conf.gamma, conf.c, r, r * line.sin_phi(u), r_le, L);
             // the same point by BladeGen's own conformal map (its StreamSurface table)
             const double bg = placed.surface.m_of_mprime(conf(Math::Vec2(s.xy[q].m, s.xy[q].y)).x()) - m_le_bg;
             rep.map_max_difference = std::max(rep.map_max_difference, std::abs(bg - P.x()) / L);
@@ -568,10 +573,15 @@ StreamSurfaceBlade stream_surface_blade(const Design::BladeDesign& design, int k
     StreamSurfaceBlade blade;
     BladeSection& b = blade.section;
     auto fit = [&](Profile::Side side, SideFitReport& r) {
+        SideSample& kept = side == Profile::Side::Suction ? rep.suction_sample : rep.pressure_sample;
         try {
-            return fit_side(mapped_side(side, opt.fit.n_edge, opt.fit.n_body), opt.fit, &r);
+            SideSample s = mapped_side(side, opt.fit.n_edge, opt.fit.n_body);
+            if (opt.keep_samples) kept = s;
+            return fit_side(s, opt.fit, &r);
         } catch (const std::runtime_error&) {
-            return fit_side(mapped_side(side, 3 * opt.fit.n_edge, 3 * opt.fit.n_body), opt.fit, &r);
+            SideSample s = mapped_side(side, 3 * opt.fit.n_edge, 3 * opt.fit.n_body);
+            if (opt.keep_samples) kept = s;
+            return fit_side(s, opt.fit, &r);
         }
     };
     b.suction = fit(Profile::Side::Suction, rep.fit.suction);

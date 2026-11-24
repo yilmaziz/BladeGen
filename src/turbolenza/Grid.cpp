@@ -376,7 +376,7 @@ std::array<double, 2> side_line(double m, double fraction, const Point& junction
     // v1's closed form for the planar cascade and for a cylinder whose r_ref is its radius (sigma = 1
     // exactly, the same bits); on a stream sheet r d theta / dm = tan(beta) [Eq. 5-3] integrated
     // numerically, dy/dm = tan(beta) / sigma (StreamSheet.hpp; ours), with the same beta law
-    if (!sheet || (sheet->cylinder() && sheet->radius(sheet->m_front()) == sheet->r_ref()))
+    if (!sheet || sheet->unit_scale())
         return side_line(m, fraction, junction, junction_angle, far_angle);
     const double turn = far_angle - junction_angle;
     const double beta = fraction <= 0.5 ? junction_angle + fraction * turn : far_angle - (1.0 - fraction) * turn;
@@ -684,7 +684,7 @@ PassageBoundaries make_passage_boundaries(const Cascade& cascade, const GridSett
     Point j_in = le, j_out = te;
     if (settings.edge_nodes == EdgeNodes::Touching) {
         // the touching stations' assigned edge direction is the planar side line's (sigma = 1)
-        if (b.sheet && !(b.sheet->cylinder() && b.sheet->radius(b.sheet->m_front()) == b.sheet->r_ref()))
+        if (b.sheet && !b.sheet->unit_scale())
             throw std::invalid_argument("the touching edge-node experiment is defined for the planar cascade only, not "
                                         "on a stream sheet with r(m) or b(m): use edge nodes 'inside'");
         const CurveRow row(b);

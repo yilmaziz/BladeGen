@@ -456,12 +456,14 @@ Case build_case_on(const CaseSettings& settings, const BladeSection& section, co
         if (s.omega != 0.0 || rotating)
             throw CaseError("the boundary layer is set up for a stationary cascade (omega = 0) only");
         // not in v1 (ours): the march of BoundaryLayer.cpp has b = 1 and no r; Aungier's Eq. 5-106,
-        // (1/b) d(b rho_e W_e^2 theta)/dx + ..., carries b(x).  On a cylinder (r and b constant) the
-        // sheet is the planar cascade and the layer applies unchanged; otherwise it is refused
-        if (stream && !stream->sheet->cylinder())
+        // (1/b) d(b rho_e W_e^2 theta)/dx + ..., carries b(x), and marches along the (m, y) arc length,
+        // which is the surface's only where sigma = 1.  On a cylinder whose radius is r_ref the sheet is the
+        // planar cascade and the layer applies unchanged; otherwise it is refused
+        if (stream && !stream->sheet->unit_scale())
             throw CaseError("the boundary layer (Aungier 2003 Sec. 5.6) is implemented with b = 1 and no radius: its "
                             "momentum integral Eq. 5-106 carries b(x), which this march does not have. On a stream "
-                            "sheet with r(m) or b(m) it is refused; it runs on the planar cascade and on a cylinder");
+                            "sheet with r(m) or b(m) (or sigma = r / r_LE != 1) it is refused; it runs on the planar cascade and on a "
+                            "cylinder of radius r_LE");
     }
     Case c;
     c.settings = s;
@@ -487,8 +489,13 @@ Case build_case_on(const CaseSettings& settings, const BladeSection& section, co
     // The far inlet lies upstream_extension_chords ahead of the LE (a standard level rounds it to whole
     // cells): the triangle is taken there first and again at the grid's own m_in (below)
     auto triangle_at = [&](double m_in) {
+        const StreamSheet& sheet = *c.cascade.sheet;
+        if (!(sheet.m_front() <= m_in && m_in <= sheet.m_back()))
+            throw CaseError(std::format("the far inlet m = {:.6g} chords leaves the stream sheet (m {:.6g} .. {:.6g}): "
+                                        "shorten the upstream extension",
+                                        m_in, sheet.m_front(), sheet.m_back()));
         try {
-            const double r_in = chord * c.cascade.sheet->radius(m_in);
+            const double r_in = chord * sheet.radius(m_in);
             VelocityTriangle t = velocity_triangle(s.rpm, s.inlet_absolute_flow_angle_deg, s.inlet_absolute_mach,
                                                    s.inlet_total_pressure, s.inlet_total_temperature, gas, r_in);
             if (!(std::abs(t.beta) < radians(89.0)))
@@ -503,7 +510,9 @@ Case build_case_on(const CaseSettings& settings, const BladeSection& section, co
             throw CaseError(std::string("the inlet velocity triangle: ") + error.what());
         }
     };
-    if (rotating) triangle_at(c.cascade.active.leading_edge_point.m - s.upstream_extension_chords * c.cascade.active.chord);
+    const double m_in_nominal =
+        c.cascade.active.leading_edge_point.m - s.upstream_extension_chords * c.cascade.active.chord;
+    if (rotating) triangle_at(m_in_nominal);
     const double kappa_te = degrees(c.cascade.kappa_te);
     const auto [angle, source] = exit_angle_of(s, kappa_te);
     (void)source;
@@ -542,7 +551,7 @@ Case build_case_on(const CaseSettings& settings, const BladeSection& section, co
         }
     };
     build_grid_now();
-    if (rotating && c.grid.m.front() != c.cascade.active.leading_edge_point.m - s.upstream_extension_chords) {
+    if (rotating && c.grid.m.front() != m_in_nominal) {
         // the grid's own far inlet (a standard level's whole cells): the triangle there, the grid again at its
         // beta1 (only the side lines' angles change, not the stations)
         const double m_in = c.grid.m.front();
@@ -782,8 +791,11 @@ std::string format_case_summary(const Case& c)
     row("kappa_le, kappa_te [deg]", std::format("{:.4f}, {:.4f}", degrees(c.cascade.kappa_le), degrees(c.cascade.kappa_te)),
         "[derived]");
     head("3. inlet flow");
-    row("inlet Mach number M1", opt_repr(s.inlet_mach));
-    row("inlet flow angle beta1 [deg]", py_repr(s.inlet_flow_angle_deg), "[user]", "from the axial direction");
+    row(rotating ? "inlet relative Mach number M1" : "inlet Mach number M1", opt_repr(s.inlet_mach),
+        rotating ? "[derived]" : "[user]", rotating ? "the velocity triangle (section 9)" : "");
+    row(rotating ? "inlet relative angle beta1 [deg]" : "inlet flow angle beta1 [deg]", py_repr(s.inlet_flow_angle_deg),
+        rotating ? "[derived]" : "[user]",
+        rotating ? "the velocity triangle (section 9), from the meridional direction" : "from the axial direction");
     row("mass-flow override [kg/(m s)]", opt_repr(s.mass_flow_per_depth_override));
     row("mass flow per depth [kg/(m s)]", std::format("{:.9g}", c.mass_flow_per_depth), "[derived]", c.mass_flow_source);
     head("4. grid");

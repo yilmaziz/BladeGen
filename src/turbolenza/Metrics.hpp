@@ -75,7 +75,14 @@ struct GridMetrics
     [[nodiscard]] double sin_phi_at(int i) const noexcept { return at(sin_phi, i, 0.0); }
 
     [[nodiscard]] const std::vector<double>& jacobian_det() const noexcept { return S; }
-    [[nodiscard]] const std::vector<double>& dtan_beta_deta() const noexcept { return dS_dm; }
+    /// d tan(beta) / d eta = tan(beta1) - tan(beta0) (Eq. 5-3 is linear in eta).  v1's alias of dS_dm, which
+    /// it equals only for the planar cascade: on a sheet dS/dm = sin(phi) Theta + tan(beta1) - tan(beta0).
+    [[nodiscard]] std::vector<double> dtan_beta_deta() const
+    {
+        std::vector<double> d(tan_beta0.size());
+        for (std::size_t i = 0; i < d.size(); ++i) d[i] = tan_beta1[i] - tan_beta0[i];
+        return d;
+    }
     [[nodiscard]] static double at(const std::vector<double>& v, int i, double neutral) noexcept
     {
         return v.empty() ? neutral : v[static_cast<std::size_t>(i)];

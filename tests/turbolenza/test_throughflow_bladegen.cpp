@@ -2,6 +2,8 @@
 // Ch. 7): the automatic quasi-normals, the exact wall slope and curvature, the four model levels on the
 // curved channel (where full normal equilibrium and the linear approximation differ), and a rotating
 // SpecifiedBladeRow case converging.  Every measured number is printed ("[throughflow-bg] ...").
+#include "turbolenza/BladeGenSource.hpp"
+#include "turbolenza/Cascade.hpp"
 #include "turbolenza/ThroughflowBladeGen.hpp"
 
 #include "blade/FlowPath.hpp"
@@ -215,4 +217,30 @@ TEST_CASE("throughflow bladegen: a rotating SpecifiedBladeRow on the default des
             std::printf("\n");
         }
     }
+}
+
+TEST_CASE("throughflow bladegen: the throat o of every section against the cascade module (make_cascade)",
+          "[turbolenza][throughflow]")
+{
+    // the adapter's o / (r_LE c') must be the cascade module's geometric throat of the same section
+    // (BladeGenSource's fitted section, make_cascade at the conformal solidity c' Z / (2 pi) and the stagger)
+    D::Evaluator ev;
+    const auto d = D::BladeDesign::defaults();
+    TF::BladeGenThroughflowOptions opt;
+    const auto g = TF::throughflow_geometry(d, ev, opt);
+    const auto res = ev.evaluate(d);
+    double emax = 0.0;
+    for (std::size_t k = 0; k < d.layers.size(); ++k) {
+        const auto& lr = res.layers[k];
+        const auto section = BladeGen::Turbolenza::section_from_layer(d.layers[k], ev);
+        const double solidity = lr.chord_mprime * static_cast<double>(d.n_blades) / (2.0 * std::numbers::pi);
+        const auto cas = BladeGen::Turbolenza::make_cascade(section, solidity, lr.gamma * 180.0 / std::numbers::pi);
+        const double ours = g.row.sections[k].throat / (1e-3 * lr.r_le * lr.chord_mprime);
+        const double e = std::abs(ours / cas.active.throat_opening - 1.0);
+        emax = std::max(emax, e);
+        std::printf("[throughflow-bg] layer %zu: throat o = %.4f mm, o / (r_LE c') = %.6f, make_cascade %.6f (rel. diff %.2e)\n", k,
+                    1e3 * g.row.sections[k].throat, ours, cas.active.throat_opening, e);
+        CHECK(g.row.sections[k].throat > 0.0);
+    }
+    CHECK(emax <= 1e-3);  // measured: see the report (the dense side samples against the quintic fit)
 }

@@ -38,8 +38,9 @@
 /// rotates at omega, all other wall segments are at rest (QuasiNormal::hub_wall_omega of the discharge
 /// quasi-normal; for the end-wall model only, ours).  compressor_omega = omega (Eq. 8-61's omega_c) is
 /// returned for ThroughflowCase::compressor_omega.  The throat o of every section (Eq. 6-53) is the
-/// smallest distance from the neighbouring blade's LE to the section in the conformal plane at the LE
-/// radius (ours, approximate).
+/// cascade module's geometric throat (Cascade.hpp closest_points: suction side against the neighbour's
+/// pressure side) of the placed section in the conformal plane, times r_LE c' (ours, approximate where r
+/// varies across the passage).
 #pragma once
 
 #include "turbolenza/Throughflow.hpp"

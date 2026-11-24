@@ -2,6 +2,8 @@
 /// @brief A BladeGen design -> the through-flow's quasi-normals and blade row (see the header).
 #include "turbolenza/ThroughflowBladeGen.hpp"
 
+#include "turbolenza/Cascade.hpp"
+
 #include "blade/FlowPath.hpp"
 
 #include <algorithm>
@@ -32,19 +34,27 @@ double u_at_z(const Math::BSpline2& w, double z)
     return 0.5 * (a + b);
 }
 
-/// The throat o (Eq. 6-53) of a placed section (ours, approximate): the smallest distance from the
-/// LE point of the neighbouring blade (theta_LE +- 2 pi / Z) to the section's loop in the conformal
-/// plane, ds = r sqrt(dm'^2 + dtheta^2) with r = r_LE (exact only where r is constant), in BladeGen's
-/// length unit.
-double throat(const Design::LayerResult& lr, int n_blades)
+/// The throat o (Eq. 6-53) of a placed section, normalized by its conformal chord c': the geometric
+/// throat of the cascade module (closest_points of Cascade.hpp, as make_cascade: the suction side
+/// against the neighbour's pressure side) on BladeGen's own side samples, placed as the design places
+/// them (stagger gamma, the mirror sign) at the conformal pitch (2 pi / Z) / c'; the neighbour on
+/// either side, the smaller distance (ours).
+double throat_over_chord(const Design::LayerResult& lr, int n_blades, bool mirror)
 {
-    const double pitch = 2.0 * std::numbers::pi / static_cast<double>(n_blades);
+    const auto& q = lr.section->quality;
+    const double g = lr.gamma, sgn = mirror ? -1.0 : 1.0;
+    auto placed = [&](const std::vector<Math::Vec2>& side, double shift) {
+        std::vector<Point> out;
+        out.reserve(side.size());
+        for (const auto& p : side)
+            out.push_back({p.x() * std::cos(g) - sgn * p.y() * std::sin(g), p.x() * std::sin(g) + sgn * p.y() * std::cos(g) + shift});
+        return out;
+    };
+    const double pitch = 2.0 * std::numbers::pi / static_cast<double>(n_blades) / lr.chord_mprime;
+    const auto ss = placed(q.ss.xy, 0.0);
     double best = std::numeric_limits<double>::infinity();
-    for (double sgn : {1.0, -1.0}) {
-        const double mle = lr.mprime_le, tle = lr.theta_le + sgn * pitch;
-        for (const auto& q : lr.conformal) best = std::min(best, std::hypot(q.x() - mle, q.y() - tle));
-    }
-    return lr.r_le * best;
+    for (double side : {1.0, -1.0}) best = std::min(best, closest_points(ss, placed(q.ps.xy, side * pitch)).distance);
+    return best;
 }
 
 /// The chordwise position of the largest camber-line ordinate (ours: a / c).
@@ -179,7 +189,7 @@ BladeGenThroughflowGeometry throughflow_geometry(const Design::BladeDesign& d, D
         g.thickness_ratio = cam.max_thickness;
         g.max_thickness_position = cam.max_thickness_x;
         g.max_camber_position = max_camber_position(cam);
-        g.throat = L * throat(lr, d.n_blades);
+        g.throat = L * lr.r_le * lr.chord_mprime * throat_over_chord(lr, d.n_blades, d.mirror);  // at the LE radius
         row.sections.push_back(g);
     }
     return out;

@@ -517,8 +517,11 @@ private:
     Vec mass_integrand(const Geo& ge, const Spec& sp, const std::vector<NodeState>& st) const;
     MassEval mass_at(const Geo& ge, const Spec& sp, const LinearOdeSolution& ode, double w0, double KB,
                      std::vector<NodeState>& st) const;
-    double solve_w0(const Geo& ge, const Spec& sp, const LinearOdeSolution& ode, double KB, double guess,
-                    bool& choked, std::vector<NodeState>& st) const;
+    /// limit: 0 the target mass flow was met, 1 the choke limit (Eq. 7-39 or 12-37) stopped W_m(0), 2 the
+    /// last valid state (h > 0) stopped it below the choke test (not a choke, ours).
+    /// target: the mass flow sought (infinity: the choke limit itself).
+    double solve_w0(const Geo& ge, const Spec& sp, const LinearOdeSolution& ode, double KB, double guess, double target,
+                    int& limit, std::vector<NodeState>& st) const;
     void fill_station(int i, const Geo& ge, const Spec& sp, const std::vector<NodeState>& st, double KB,
                       int iterations, bool converged, bool choked, bool mach_limit);
     EndwallStation endwall_station(int i, int pass, const Geo& ge, const Spec& sp, const std::vector<NodeState>& st) const;
@@ -847,14 +850,13 @@ MassEval Solver::mass_at(const Geo& ge, const Spec& sp, const LinearOdeSolution&
 }
 
 double Solver::solve_w0(const Geo& ge, const Spec& sp, const LinearOdeSolution& ode, double KB, double guess,
-                        bool& choked, std::vector<NodeState>& st) const
+                        double target, int& limit, std::vector<NodeState>& st) const
 {
     // W_m(0), the constant of integration of Eq. 7-35, from Eq. 7-5 (p. 161), limited by the choke
     // criterion Eq. 7-39 (p. 161: "easily employed to limit the value of W_m(0)") or Eq. 12-37.  Ours: the
     // search starts where the smallest W_m is 0 (the stream-tube form Eq. 7-33 allows W_m = 0, a
     // reverse flow is refused), brackets the target upward, and bisects (Illinois).
-    choked = false;
-    const double target = c_.mass_flow;
+    limit = 0;
     const std::size_t n = ge.y.size();
     double lo = -std::numeric_limits<double>::infinity();
     for (std::size_t j = 0; j < n; ++j) lo = std::max(lo, -ode.G[j] / ode.F[j]);
@@ -899,7 +901,9 @@ double Solver::solve_w0(const Geo& ge, const Spec& sp, const LinearOdeSolution& 
             } else b = mid;
         }
         if (ea.mdot < target * (1.0 - o_.mass_tolerance)) {
-            choked = true;
+            // the limit is a choke only where the state beyond it is valid and fails the choke test;
+            // an invalid state beyond it (h <= 0 before the choke test fails) is not a choke
+            limit = mass_at(ge, sp, ode, b, KB, probe).valid ? 1 : 2;
             (void)mass_at(ge, sp, ode, a, KB, st);
             return a;
         }
@@ -1199,6 +1203,9 @@ bool Solver::solve_qn(int i, int pass, int& iterations, bool& converged)
     std::vector<NodeState> st(n);
     bool choked = false;
     converged = false;
+    double relax = 1.0, last_change = std::numeric_limits<double>::infinity();
+    int shrinking = 0, flips = 0, last_limit = 0;
+    bool choke_mode = false;
     Vec f1(n), f4(n);
     for (iterations = 1; iterations <= o_.max_flow_iterations; ++iterations) {
         // Link To Upstream Quasi-Normal (Sec. 7.3), at the current discharge estimate
@@ -1257,10 +1264,25 @@ bool Solver::solve_qn(int i, int pass, int& iterations, bool& converged)
             // Eq. 7-33 (Aungier's choice, p. 160), or Eq. 7-15 as it stands: f3 / W_m
             f4[j] = o_.stream_tube_form ? f2 + f3 * g_tube[j] : f2 + f3 / x.Wm;
         }
-        const LinearOdeSolution ode = solve_linear_ode(ge.y, f1, f4);  // Eqs. 7-35, 7-36
-        bool ch = false;
-        const double w0 = solve_w0(ge, sp, ode, KB, Wm.front(), ch, st);
-        choked = ch;
+        for (std::size_t j = 0; j < n; ++j)
+            if (!finite(f1[j]) || !finite(f4[j]))
+                fail("quasi-normal " + std::to_string(i) + ": the coefficients of Eq. 7-34 are not finite (Eq. 7-29 at "
+                     "M_m -> 1: the limit of Eq. 7-30 is too small)");
+        LinearOdeSolution ode;
+        try {
+            ode = solve_linear_ode(ge.y, f1, f4);  // Eqs. 7-35, 7-36
+        } catch (const std::invalid_argument&) {  // F of Eq. 7-36 under- or overflows
+            fail("quasi-normal " + std::to_string(i) + ": Eq. 7-35 has no finite solution (Eq. 7-29 at M_m -> 1: the limit "
+                 "of Eq. 7-30 is too small)");
+        }
+        for (std::size_t j = 0; j < n; ++j)
+            if (!finite(ode.F[j]) || !finite(ode.G[j]) || !(ode.F[j] > 0.0))
+                fail("quasi-normal " + std::to_string(i) + ": Eq. 7-35 has no finite solution");
+        int limit = 0;
+        const double target = choke_mode ? std::numeric_limits<double>::infinity() : c_.mass_flow;
+        const double w0 = solve_w0(ge, sp, ode, KB, Wm.front(), target, limit, st);
+        if (iterations > 1 && (limit != 0) != (last_limit != 0)) ++flips;
+        last_limit = limit;
         const Vec Wn = ode.evaluate(w0);
         double change = 0.0, scale = 0.0;
         for (std::size_t j = 0; j < n; ++j) {
@@ -1268,7 +1290,20 @@ bool Solver::solve_qn(int i, int pass, int& iterations, bool& converged)
             scale = std::max(scale, std::abs(Wn[j]));
         }
         change /= scale;
-        Wm = Wn;
+        // the coefficients of Eq. 7-15 depend on W_m (rho, M_m in Eq. 7-29): the iteration goes on at the
+        // limited W_m(0) too, until the profile is converged (p. 161: "until mass is conserved and the
+        // normal momentum equation is satisfied"; p. 162: the choke is the maximum flow of that profile).
+        // Ours: the new profile is under-relaxed, the factor halved whenever the change grows (down to
+        // 1/64); a convex combination of valid profiles stays valid (h is concave in W_m)
+        if (change > last_change && iterations > 1) {
+            relax = std::max(0.5 * relax, 1.0 / 64.0);
+            shrinking = 0;
+        } else if (++shrinking >= 3) {
+            relax = std::min(1.0, 1.5 * relax);  // ours: recover after three contracting steps
+            shrinking = 0;
+        }
+        last_change = change;
+        for (std::size_t j = 0; j < n; ++j) Wm[j] += relax * (Wn[j] - Wm[j]);
         for (std::size_t j = 0; j < n; ++j) rho[j] = st[j].g.rho;
         // simplified models: reposition inside the quasi-normal loop, undamped (p. 168)
         double dpos = 0.0;
@@ -1283,17 +1318,44 @@ bool Solver::solve_qn(int i, int pass, int& iterations, bool& converged)
         const double dkb = std::abs(ew.blockage_factor - KB);
         KB = ew.blockage_factor;
         const bool done = change <= o_.flow_tolerance && dpos <= o_.position_tolerance && dkb <= o_.flow_tolerance;
-        if (done || choked) {
-            // the reported solution is the one of this iteration, on the positions it was solved on
-            // (the simplified models' last move is below the position tolerance)
-            converged = done;
+        if (done) {
+            // the reported solution is the one of this iteration (Wn, its states st), on the positions
+            // it was solved on (the simplified models' last move is below the position tolerance).  A
+            // choke is declared only on a converged profile; a converged profile still stopped by an
+            // invalid state is refused (ours)
+            if (limit == 2)
+                fail("quasi-normal " + std::to_string(i) +
+                     ": the converged profile reaches h <= 0 below the choke test (no valid state carries the mass flow)");
+            choked = limit == 1;
             d.y = ge.y;
-            fill_station(i, ge, sp, st, KB, iterations, converged, choked, mach_limit);
+            fill_station(i, ge, sp, st, KB, iterations, true, choked, mach_limit);
+            if (choke_mode && !(d.out.mass_flow < c_.mass_flow * (1.0 - o_.mass_tolerance))) {
+                // the converged choke profile carries the target: the target is below the choke, but its
+                // own iteration did not settle (ours: reported as not converged, nothing is chosen)
+                d.out.converged = false;
+                d.out.choked = false;
+                converged = false;
+                return true;
+            }
+            converged = true;
             return !choked;
+        }
+        // near the choke the target iteration can alternate between met and choke-limited profiles:
+        // after 4 such alternations, or half the budget without convergence once a limit has been hit,
+        // the profile is converged at the choke limit itself (W_m(0) at Eq. 7-39 / 12-37) to find the
+        // choke mass flow of a converged profile (ours)
+        if (!choke_mode && (flips >= 4 || (iterations >= o_.max_flow_iterations / 2 && flips > 0))) {
+            choke_mode = true;
+            relax = 1.0;
+            last_change = std::numeric_limits<double>::infinity();
+            shrinking = 0;
+            iterations = 0;
+            if (!full()) ge = geometry(i, y);
+            continue;
         }
         if (iterations == o_.max_flow_iterations) {
             d.y = ge.y;
-            fill_station(i, ge, sp, st, KB, iterations, false, choked, mach_limit);
+            fill_station(i, ge, sp, st, KB, iterations, false, false, mach_limit);
             return true;
         }
         if (!full()) ge = geometry(i, y);

@@ -50,17 +50,51 @@ double bump_h(double z) { return 0.3 + 0.15 * std::sin(kPi * z); }
 double bump_s(double z) { return 0.5 + 0.15 * std::sin(kPi * z); }
 double diffuser_s(double z) { return 0.5 + z * std::tan(20.0 * kPi / 180.0); }
 
-/// mdot through a quasi-normal from the node data by the trapezoid rule, with the test's own lambda
-/// (Eq. 7-1) and epsilon = phi - lambda (Eq. 7-3): 2 pi K_B int K_W r rho W_m cos(eps) dy (Eq. 7-5).
-double independent_mass(const TF::ThroughflowStation& st, const TF::QuasiNormal& q)
+/// The geometric phi of node (i, j) recomputed by the test from the reported positions, by the rule
+/// of the model level (straight walls of angles phi_h, phi_s): the simple models Eq. 7-2 by Eq. 7-70
+/// on the marching pair (i - 1, i), wall-interpolated on quasi-normal 0; the approximate model linear
+/// in y between the walls; the full model Eq. 7-2 with dr/dm by Eq. 7-67 inside and Eq. 7-70 at the
+/// ends along the stream surface (m by Eq. 7-58 from the result).
+double own_phi(const TF::ThroughflowResult& r, TF::ThroughflowModel model, std::size_t i, std::size_t j, double phi_h,
+               double phi_s)
 {
+    const auto& st = r.stations[i];
+    const auto& nd = st.nodes[j];
+    const double t = nd.y / st.y_s;
+    const auto& sf = r.stream_surfaces[j];
+    const std::size_t n = sf.r.size();
+    switch (model) {
+    case TF::ThroughflowModel::Approximate: return phi_h + t * (phi_s - phi_h);
+    case TF::ThroughflowModel::SimpleNonIsentropic:
+    case TF::ThroughflowModel::SimpleIsentropic:
+        if (i == 0) return phi_h + t * (phi_s - phi_h);
+        return std::atan2(sf.r[i] - sf.r[i - 1], sf.z[i] - sf.z[i - 1]);
+    case TF::ThroughflowModel::FullNormalEquilibrium: break;
+    }
+    double drdm = 0.0;
+    if (i == 0) drdm = (sf.r[1] - sf.r[0]) / (sf.m[1] - sf.m[0]);
+    else if (i + 1 == n) drdm = (sf.r[i] - sf.r[i - 1]) / (sf.m[i] - sf.m[i - 1]);
+    else {
+        const double m1 = sf.m[i - 1], m2 = sf.m[i], m3 = sf.m[i + 1], f1 = sf.r[i - 1], f2 = sf.r[i], f3 = sf.r[i + 1];
+        drdm = ((m3 - m2) * (f2 - f1) / (m2 - m1) + (m2 - m1) * (f3 - f2) / (m3 - m2)) / (m3 - m1);
+    }
+    return std::asin(drdm);
+}
+
+/// mdot through quasi-normal i from the node data by the trapezoid rule, with the test's own lambda
+/// (Eq. 7-1) and epsilon = phi - lambda (Eq. 7-3), phi by own_phi: 2 pi K_B int K_W r rho W_m cos(eps) dy
+/// (Eq. 7-5).
+double independent_mass(const TF::ThroughflowResult& r, std::size_t i, const TF::QuasiNormal& q, TF::ThroughflowModel model,
+                        double phi_h, double phi_s)
+{
+    const auto& st = r.stations[i];
     const double lambda = std::atan2(q.z_hub - q.z_shroud, q.r_shroud - q.r_hub);
     double m = 0.0;
     for (std::size_t j = 0; j + 1 < st.nodes.size(); ++j) {
         const auto& a = st.nodes[j];
         const auto& b = st.nodes[j + 1];
-        const double fa = a.K_W * a.r * a.rho * a.Wm * std::cos(a.phi - lambda);
-        const double fb = b.K_W * b.r * b.rho * b.Wm * std::cos(b.phi - lambda);
+        const double fa = a.K_W * a.r * a.rho * a.Wm * std::cos(own_phi(r, model, i, j, phi_h, phi_s) - lambda);
+        const double fb = b.K_W * b.r * b.rho * b.Wm * std::cos(own_phi(r, model, i, j + 1, phi_h, phi_s) - lambda);
         m += 0.5 * (fa + fb) * (b.y - a.y);
     }
     return 2.0 * kPi * st.K_B_endwall * m;
@@ -168,21 +202,30 @@ TEST_CASE("throughflow-eq: every model keeps the geometric epsilon in Eq. 7-5 (c
             c.options.n_stream_surfaces = 41;
             const auto r = TF::solve_throughflow(c);
             REQUIRE(r.status == TF::ThroughflowResult::Status::Converged);
-            double e = 0.0;
-            for (std::size_t i = 0; i < r.stations.size(); ++i)
-                e = std::max(e, std::abs(independent_mass(r.stations[i], c.quasi_normals[i]) / c.mass_flow - 1.0));
+            // the test's own phi (own_phi), not the code's
+            const double phi_true = gm.rh == flat_h ? 0.0 : kPi / 4.0;
+            double e = 0.0, eown = 0.0;
+            for (std::size_t i = 0; i < r.stations.size(); ++i) {
+                e = std::max(e, std::abs(independent_mass(r, i, c.quasi_normals[i], model, phi_true, phi_true) / c.mass_flow - 1.0));
+                for (std::size_t j = 0; j < r.stations[i].nodes.size(); ++j)
+                    eown = std::max(eown, std::abs(r.stations[i].nodes[j].phi - own_phi(r, model, i, j, phi_true, phi_true)));
+            }
+            CHECK(eown <= 1e-9);  // the code's phi is the model's rule (measured: see the report)
             const auto& st = r.stations[3];
             double wm = 0.0;
             for (const auto& nd : st.nodes) wm += nd.Wm / static_cast<double>(st.nodes.size());
             mean_wm.push_back(wm);
-            // the geometric phi of every node: 45 deg on the cones (straight walls, nearly straight
-            // surfaces), 0 in the straight annulus, on every quasi-normal (the first included)
-            const double phi_true = gm.rh == flat_h ? 0.0 : kPi / 4.0;
-            double ephi = 0.0;
-            for (const auto& s : r.stations)
+            // the geometric phi: exact on the straight walls of every quasi-normal (the first included),
+            // and the interior surfaces within the measured deviation of the channel's angle
+            double ephi = 0.0, ewall = 0.0;
+            for (const auto& s : r.stations) {
                 for (const auto& nd : s.nodes) ephi = std::max(ephi, std::abs(nd.phi - phi_true));
+                ewall = std::max({ewall, std::abs(s.nodes.front().phi - phi_true), std::abs(s.nodes.back().phi - phi_true)});
+            }
+            CHECK(ewall <= 1e-12);
             std::printf("[throughflow-eq] %s, %s: max |mdot(trapezoid, own eps) / mdot - 1| = %.3e, mean W_m(QN 3) = %.4f, "
-                        "max |phi - phi_wall| %.2e\n", gm.name, TF::to_string(model).c_str(), e, wm, ephi);
+                        "max |phi - phi_wall| %.2e, max |phi - own phi| %.2e\n", gm.name, TF::to_string(model).c_str(), e, wm,
+                        ephi, eown);
             CHECK(ephi <= 2e-2);  // measured: see the report
             CHECK(e <= 2e-3);  // the trapezoid rule on 41 surfaces (measured: see the report)
             CHECK(max_mass_error(r) <= 1e-11);
@@ -451,35 +494,118 @@ TEST_CASE("throughflow-eq: Eq. 7-20's cos(lambda): the constant-beta' rotor clos
     CHECK(e <= 1e-5);  // measured: see the report (the radial case: 2.8e-7 at 41 surfaces)
 }
 
-TEST_CASE("throughflow-eq: the limit of Eq. 7-30 enters Eq. 7-29 (approximate model, 10-degree cone)", "[turbolenza][throughflow]")
+TEST_CASE("throughflow-eq: near and beyond choke on a 45-degree cone, all four models (Eq. 7-39 on a converged profile)",
+          "[turbolenza][throughflow]")
 {
-    static const double t10 = std::tan(10.0 * kPi / 180.0);
-    auto base = channel(TF::ThroughflowModel::Approximate, 7, 0.1, 0.0, [](double z) { return 0.3 + t10 * z; },
-                        [](double z) { return 0.5 + t10 * z; });
-    // the limit of Eq. 7-30, max(1 - M_m^2, L), is applied with L = 0.97 (active wherever M_m > 0.17, so
-    // everywhere at M_m ~ 0.25 here) and compared with the default L = 0.1 (inactive): they must differ,
-    // and the flag must say so (a near-choke case is not used: its W_m(0) search is not robust)
-    auto c = base;
-    c.options.min_one_minus_mm2 = 0.97;
-    const auto r1 = TF::solve_throughflow(c);
-    REQUIRE(r1.status == TF::ThroughflowResult::Status::Converged);
-    auto c2 = base;
-    const auto r2 = TF::solve_throughflow(c2);
-    for (const auto& st : r2.stations) CHECK_FALSE(st.mach_limit_active);
-    bool active = false;
-    double d = 0.0, mmax = 0.0;
-    for (std::size_t i = 0; i < r1.stations.size(); ++i) {
-        active = active || r1.stations[i].mach_limit_active;
-        for (std::size_t j = 0; j < r1.stations[i].nodes.size(); ++j) {
-            mmax = std::max(mmax, r1.stations[i].nodes[j].mach_m);
-            if (r2.status == TF::ThroughflowResult::Status::Converged)
-                d = std::max(d, std::abs(r2.stations[i].nodes[j].Wm / r1.stations[i].nodes[j].Wm - 1.0));
+    // Radial quasi-normals through 45-degree flow.  Two 1-D chokes of quasi-normal 0:
+    //  * through the radial line itself, uniform flow: rho* a* pi (rs^2 - rh^2) cos(45 deg);
+    //  * through the cross-section normal to the walls at the hub point of quasi-normal 0 (the
+    //    narrowest section the flow at that quasi-normal has passed): rho* a* 2 pi int r dn, n from
+    //    (0, 0.3) along (-sin 45, cos 45) to the shroud wall, 0.875 of the first.
+    // The simple models (epsilon = kappa_m = 0 in the momentum equation: W_m uniform along the radial
+    // line) must choke at the first; the full and approximate ones (W_m falls along the radial line
+    // with the sin(eps) dW_m/dm term of Eqs. 7-16, 7-29) near the second.  Every choke must be the one
+    // of a converged profile, at mean M_m = 1 (Eq. 7-39), with valid states (never h <= 0), and the
+    // same for every mdot beyond it.
+    const TF::ThroughflowGas gas;
+    const double g = gas.gamma, Tst = kTt * 2.0 / (g + 1.0);
+    const double rho_st = kPt / (gas.gas_constant * kTt) * std::pow(2.0 / (g + 1.0), 1.0 / (g - 1.0));
+    const double flux = rho_st * std::sqrt(g * gas.gas_constant * Tst);
+    const double mdot_radial = flux * kPi * (0.25 - 0.09) * std::cos(kPi / 4.0);
+    const double tn = 0.2 / (std::cos(kPi / 4.0) + std::sin(kPi / 4.0));  // the normal's length to the shroud wall
+    const double mdot_normal = flux * 2.0 * kPi * (0.3 * tn + std::cos(kPi / 4.0) * tn * tn / 2.0);
+    std::printf("[throughflow-eq] 45-degree cone: 1-D choke through the radial QN 0 %.4f kg/s, through the normal "
+                "section at its hub point %.4f kg/s (ratio %.4f)\n", mdot_radial, mdot_normal, mdot_normal / mdot_radial);
+    const bool simple_model[] = {false, false, true, true};
+    for (std::size_t k = 0; k < 4; ++k) {
+        const auto model = kModels[k];
+        // below every choke: converged, the target mass
+        for (double mdot : {70.0, 72.0, 74.0}) {
+            auto c = channel(model, 7, 0.1, 0.0, cone_h, cone_s);
+            c.mass_flow = mdot;
+            const auto r = TF::solve_throughflow(c);
+            INFO(r.message);
+            REQUIRE(r.status == TF::ThroughflowResult::Status::Converged);
+            CHECK(max_mass_error(r) <= 1e-11);
+            std::printf("[throughflow-eq] cone mdot %.0f, %s: converged, QN 0 mean M_m %.4f, %d flow iterations on QN 0\n",
+                        mdot, TF::to_string(model).c_str(), r.stations[0].mean_mach_m, r.stations[0].iterations);
         }
+        // the simple models converge up to their (radial) choke
+        if (simple_model[k])
+            for (double mdot : {78.0, 82.0, 85.0}) {
+                auto c = channel(model, 7, 0.1, 0.0, cone_h, cone_s);
+                c.mass_flow = mdot;
+                const auto r = TF::solve_throughflow(c);
+                REQUIRE(r.status == TF::ThroughflowResult::Status::Converged);
+                CHECK(max_mass_error(r) <= 1e-11);
+                std::printf("[throughflow-eq] cone mdot %.0f, %s: converged, QN 0 mean M_m %.4f\n", mdot,
+                            TF::to_string(model).c_str(), r.stations[0].mean_mach_m);
+            }
+        // beyond the choke
+        std::vector<double> mc;
+        const std::vector<double> beyond = simple_model[k] ? std::vector<double>{90.0, 100.0, 150.0, 200.0}
+                                                           : std::vector<double>{78.0, 82.0, 85.0, 90.0, 100.0, 150.0, 200.0};
+        for (double mdot : beyond) {
+            auto c = channel(model, 7, 0.1, 0.0, cone_h, cone_s);
+            c.mass_flow = mdot;
+            const auto r = TF::solve_throughflow(c);
+            INFO(r.message);
+            REQUIRE(r.status == TF::ThroughflowResult::Status::Choked);
+            const auto& st = r.stations.back();
+            CHECK(r.choked_station == 0);
+            CHECK(st.converged);                            // a choke only on a converged profile
+            CHECK(std::abs(st.mean_mach_m - 1.0) <= 1e-6);  // Eq. 7-39 holds at the choke
+            for (const auto& nd : st.nodes) CHECK(nd.h > 0.0);  // never an invalid state
+            double mmax = 0.0;
+            for (const auto& nd : st.nodes) mmax = std::max(mmax, nd.mach_m);
+            mc.push_back(st.mass_flow);
+            std::printf("[throughflow-eq] cone mdot %.0f, %s: choked, choke mdot %.4f (%.4f of the radial, %.4f of the normal "
+                        "1-D), max M_m %.4f, %d iterations, %zu passes\n", mdot, TF::to_string(model).c_str(), st.mass_flow,
+                        st.mass_flow / mdot_radial, st.mass_flow / mdot_normal, mmax, st.iterations, r.history.size());
+        }
+        const auto [lo, hi] = std::minmax_element(mc.begin(), mc.end());
+        CHECK((*hi - *lo) / *hi <= 1e-6);  // the same choke for every mdot input
+        if (simple_model[k]) CHECK(std::abs(*lo / mdot_radial - 1.0) <= 1e-4);  // measured 1e-6
+        else CHECK(std::abs(*lo / mdot_normal - 1.0) <= 0.02);                  // measured +1.0 % (full), -0.2 % (approx.)
     }
-    std::printf("[throughflow-eq] 10-degree cone: max M_m %.4f, Eq. 7-30 limit 0.97 active %d; against limit 0.1: "
-                "max |dW_m| / W_m %.3e\n", mmax, active ? 1 : 0, d);
-    CHECK(active);
-    CHECK(d >= 1e-5);
+}
+
+TEST_CASE("throughflow-eq: the limit of Eq. 7-30 near choke (45-degree cone at 74 kg/s)", "[turbolenza][throughflow]")
+{
+    // just below the full and approximate models' choke (75.8, 74.9) the hub nodes of quasi-normal 0
+    // reach M_m > 0.95: the limit max(1 - M_m^2, 0.1) of Eq. 7-30 acts; without it (0.1 -> 1e-6) the flow
+    // differs or does not converge
+    for (auto model : {TF::ThroughflowModel::FullNormalEquilibrium, TF::ThroughflowModel::Approximate}) {
+        auto c = channel(model, 7, 0.1, 0.0, cone_h, cone_s);
+        c.mass_flow = 74.0;
+        const auto r1 = TF::solve_throughflow(c);
+        REQUIRE(r1.status == TF::ThroughflowResult::Status::Converged);
+        bool active = false;
+        double mmax = 0.0;
+        for (const auto& st : r1.stations) {
+            active = active || st.mach_limit_active;
+            for (const auto& nd : st.nodes) mmax = std::max(mmax, nd.mach_m);
+        }
+        auto c2 = c;
+        c2.options.min_one_minus_mm2 = 1e-6;
+        double d = -1.0;
+        std::string status = "refused";
+        try {
+            const auto r2 = TF::solve_throughflow(c2);
+            status = TF::to_string(r2.status);
+            if (r2.status == TF::ThroughflowResult::Status::Converged) {
+                d = 0.0;
+                for (std::size_t i = 0; i < r1.stations.size(); ++i)
+                    for (std::size_t j = 0; j < r1.stations[i].nodes.size(); ++j)
+                        d = std::max(d, std::abs(r2.stations[i].nodes[j].Wm / r1.stations[i].nodes[j].Wm - 1.0));
+            }
+        } catch (const TF::ThroughflowError&) {
+        }
+        std::printf("[throughflow-eq] cone mdot 74, %s: max M_m %.4f, Eq. 7-30 active %d; without the limit: %s, "
+                    "max |dW_m| / W_m %.3e\n", TF::to_string(model).c_str(), mmax, active ? 1 : 0, status.c_str(), d);
+        CHECK(active);
+        CHECK((d < 0.0 || d >= 1e-5));
+    }
 }
 
 TEST_CASE("throughflow-eq: the full model ends on a choke only after a repositioning (Fig. 7-3)", "[turbolenza][throughflow]")
@@ -512,7 +638,7 @@ TEST_CASE("throughflow-eq: K_W in Eqs. 7-5 and 7-32, K_B in the dmdot of Eq. 7-3
         c.rows = {row_between(2, 0.0, specified(0.3, 0.0, 0.8), 0.23, 0.3, 0.23, 0.5, 0.27, 0.3, 0.27, 0.5)};
         res.push_back(TF::solve_throughflow(c));
         REQUIRE(res.back().status == TF::ThroughflowResult::Status::Converged);
-        const double m3 = independent_mass(res.back().stations[3], c.quasi_normals[3]);
+        const double m3 = independent_mass(res.back(), 3, c.quasi_normals[3], c.model, 0.0, 0.0);
         std::printf("[throughflow-eq] stator K_W 0.8, K_B 0.85, %s: discharge mdot(nodes) / mdot - 1 = %.3e (K_W %.2f)\n",
                     tube ? "Eq. 7-33" : "f3 / W_m", m3 / c.mass_flow - 1.0, res.back().stations[3].nodes[5].K_W);
         CHECK(std::abs(m3 / c.mass_flow - 1.0) <= 1e-4);

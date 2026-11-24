@@ -59,6 +59,23 @@ double x_c_at(const std::vector<double>& x_c, int index) { return index < 0 ? na
 
 }  // namespace
 
+std::vector<double> blade_station_fraction(const Grid& g)
+{
+    const int first = g.first_blade_i, last = g.last_blade_i;
+    if (!(0 <= first && first < last && last < static_cast<int>(g.m.size())))
+        throw BoundaryLayerError(std::format("the grid's blade stations {} .. {} are not two or more stations of its {}", first,
+                                             last, g.m.size()));
+    const double m0 = g.m[sz(first)], m1 = g.m[sz(last)];
+    std::vector<double> f;
+    for (int i = first; i <= last; ++i) {
+        if (i > first && !(g.m[sz(i)] > g.m[sz(i - 1)]))
+            throw BoundaryLayerError(std::format("the grid's m does not increase at blade station {}", i));
+        f.push_back((g.m[sz(i)] - m0) / (m1 - m0));
+    }
+    f.back() = 1.0;  // exactly, whatever the rounding of the division
+    return f;
+}
+
 std::vector<double> wall_arc_length(const Grid& g, int j)
 {
     if (!g.boundaries.blade_curves) throw BoundaryLayerError("the grid has no blade surface curves");
@@ -105,6 +122,7 @@ WallLayer wall_layer(const Solution& sol, int j, const std::vector<double>& x_c,
     w.j = j;
     w.surface = (j == 0 ? g.wall_identity.lower : g.wall_identity.upper).surface.front();
     w.x_c = x_c;
+    w.f = blade_station_fraction(g);
     const std::vector<double> s = wall_arc_length(g, j);
     EdgeConditions& e = w.edge;
     e.cp = gas.cp();

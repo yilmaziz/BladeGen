@@ -101,9 +101,9 @@ struct CaseSettings
     BlCoupling bl_coupling = BlCoupling::TwoWay;
     LaminarCfForm laminar_cf_form = LaminarCfForm::Centrifugal2000;
     WakeModel wake_model = WakeModel::Constant;
-    double bl_relaxation = 0.5;                      ///< omega_BL, 0 < omega <= 1
+    double bl_relaxation = 0.2;                      ///< omega_BL, 0 < omega <= 1 (PORT.md "The Fig. 5-15 study")
     double bl_tolerance = 1e-4;                      ///< max relative change of m on the blade surfaces
-    int max_bl_iterations = 30;                      ///< coupled iterations after the inviscid one (0: one way)
+    int max_bl_iterations = 60;                      ///< coupled iterations after the inviscid one (0: one way)
     double transition_re_theta = 250.0;              ///< Aungier Eq. 5-126
     double separation_hk = 2.4;                      ///< Aungier 2003 p. 111
     SutherlandLaw sutherland;                        ///< mu(T) of the gas (air)
@@ -235,13 +235,16 @@ struct BlIteration
     double loss = 0.0;                  ///< omega of Eq. 5-139
 };
 
-/// One surface's layer at its stations (plot and file data).
+/// One surface's layer at its stations (plot and file data).  Two abscissae: x_c the blade-frame chordwise
+/// x/c of each wall node, f the blade-station fraction (Viscous.hpp blade_station_fraction; the axis of
+/// Aungier's Fig. 5-15 as we read it).
 struct BoundaryLayerSurfaceData
 {
-    std::vector<double> x_c, x, W_e, rho_e, T_e, mu, theta, delta_star, delta, H, H_k, c_f, Lambda, Re_theta;
+    std::vector<double> x_c, f, x, W_e, rho_e, T_e, mu, theta, delta_star, delta, H, H_k, c_f, Lambda, Re_theta;
     std::vector<double> mass_deficit;
     std::vector<std::string> regime;
     double transition_x_c = 0.0, separation_x_c = 0.0, laminar_separation_x_c = 0.0;  ///< NaN: none
+    double transition_f = 0.0, separation_f = 0.0, laminar_separation_f = 0.0;        ///< NaN: none
 };
 
 /// The viscous part of a run (RunResult::viscous).

@@ -272,6 +272,7 @@ BoundaryLayerSurfaceData layer_data(const WallLayer& w)
     const BoundaryLayerProfile& p = w.profile;
     BoundaryLayerSurfaceData d;
     d.x_c = w.x_c;
+    d.f = w.f;
     d.x = p.x;
     d.W_e = p.W;
     d.rho_e = p.rho;
@@ -287,10 +288,13 @@ BoundaryLayerSurfaceData layer_data(const WallLayer& w)
     d.Re_theta = p.Re_theta;
     d.mass_deficit = p.mass_deficit;
     for (BlRegime g : p.regime) d.regime.emplace_back(bl_regime_name(g));
-    auto at = [&](int k) { return k < 0 ? detail::nan() : w.x_c[sz(k)]; };
-    d.transition_x_c = at(p.transition_index);
-    d.separation_x_c = at(p.separation_index);
-    d.laminar_separation_x_c = at(p.laminar_separation_index);
+    auto at = [](const std::vector<double>& a, int k) { return k < 0 ? detail::nan() : a[sz(k)]; };
+    d.transition_x_c = at(w.x_c, p.transition_index);
+    d.separation_x_c = at(w.x_c, p.separation_index);
+    d.laminar_separation_x_c = at(w.x_c, p.laminar_separation_index);
+    d.transition_f = at(w.f, p.transition_index);
+    d.separation_f = at(w.f, p.separation_index);
+    d.laminar_separation_f = at(w.f, p.laminar_separation_index);
     return d;
 }
 
@@ -1246,11 +1250,11 @@ std::vector<std::string> export_run(const RunResult& r, const Case& c, const std
         for (const auto& [name, d] : {std::pair<const char*, const BoundaryLayerSurfaceData*>{"bl_suction.csv", &v.suction},
                                       std::pair<const char*, const BoundaryLayerSurfaceData*>{"bl_pressure.csv", &v.pressure_side}}) {
             std::ofstream out = open(name);
-            out << csv_line({"x_c", "x", "W_e", "rho_e", "T_e", "mu", "theta", "delta_star", "delta", "H", "H_k", "c_f",
+            out << csv_line({"x_c", "f", "x", "W_e", "rho_e", "T_e", "mu", "theta", "delta_star", "delta", "H", "H_k", "c_f",
                              "Lambda", "Re_theta", "regime", "mass_deficit"});
             for (std::size_t k = 0; k < d->x_c.size(); ++k) {
                 std::vector<std::string> cells;
-                for (const std::vector<double>* col : {&d->x_c, &d->x, &d->W_e, &d->rho_e, &d->T_e, &d->mu, &d->theta,
+                for (const std::vector<double>* col : {&d->x_c, &d->f, &d->x, &d->W_e, &d->rho_e, &d->T_e, &d->mu, &d->theta,
                                                        &d->delta_star, &d->delta, &d->H, &d->H_k, &d->c_f, &d->Lambda,
                                                        &d->Re_theta})
                     cells.push_back(py_repr((*col)[k]));

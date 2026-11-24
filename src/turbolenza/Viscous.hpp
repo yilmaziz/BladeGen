@@ -16,7 +16,9 @@
 ///    Gauss-Legendre quadrature of |X'(u)| (8 points on 8 parts of every knot span), times the chord;
 ///  * W_e = |W| at the wall node (the reported evaluation), rho_e and T_e the static state of that
 ///    speed (eos), mu = Sutherland(T_e) (BoundaryLayer.hpp), T't = H'/cp, cp of the gas;
-///  * x/c the blade-frame chordwise coordinate of postprocess (Postprocess.hpp).
+///  * x/c the blade-frame chordwise coordinate of postprocess (Postprocess.hpp); f the blade-station
+///    fraction (m_i - m_first) / (m_last - m_first), the abscissa of Aungier's Figs. 5-6 and 5-15 as we
+///    read them (PORT.md "The Fig. 5-15 study"; Aungier does not state it).
 ///
 /// The equivalent inviscid flow (Lighthill, M. J., 1958, "On displacement thickness", J. Fluid Mech.
 /// 4, 383-392): the grid stays; the mass deficit m = rho_e W_e delta* of each wall node enters the
@@ -60,9 +62,9 @@ struct ViscousSettings
     WakeModel wake = WakeModel::Constant;
     BoundaryLayerSettings layer;
     SutherlandLaw viscosity;
-    double relaxation = 0.5;
+    double relaxation = 0.2;   ///< omega_BL: 0.5 diverges on the Dunavant case (PORT.md "The Fig. 5-15 study")
     double tolerance = 1e-4;
-    int max_iterations = 30;
+    int max_iterations = 60;
 };
 
 /// The layer of one wall.
@@ -72,6 +74,7 @@ struct WallLayer
     Surface surface = Surface::Suction;
     std::vector<int> stations;          ///< first_blade_i .. last_blade_i
     std::vector<double> x_c;
+    std::vector<double> f;              ///< the blade-station fraction of the stations (blade_station_fraction)
     EdgeConditions edge;
     BoundaryLayerProfile profile;
 };
@@ -102,6 +105,11 @@ struct ViscousAnalysis
     [[nodiscard]] const WallLayer& suction() const noexcept { return lower.surface == Surface::Suction ? lower : upper; }
     [[nodiscard]] const WallLayer& pressure() const noexcept { return lower.surface == Surface::Suction ? upper : lower; }
 };
+
+/// The blade-station fraction f = (m_i - m_first) / (m_last - m_first) of the blade stations
+/// i = first_blade_i .. last_blade_i: 0 at the first, 1 at the last.  BoundaryLayerError unless the grid
+/// has two or more blade stations with increasing m.
+[[nodiscard]] std::vector<double> blade_station_fraction(const Grid& grid);
 
 /// The arc length (chord units) of each wall node of wall j along its surface curve from the LE.
 [[nodiscard]] std::vector<double> wall_arc_length(const Grid& grid, int j);

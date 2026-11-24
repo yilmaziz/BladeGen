@@ -422,8 +422,10 @@ const QPointF kFigSeparation(0.7459, 2.6635);                           // sucti
 
 }  // namespace
 
-void drawBoundaryLayer(PlotWidget* w, const T::ViscousData& v, double chord, BlQuantity q, bool overlay, const QString& title)
+void drawBoundaryLayer(PlotWidget* w, const T::ViscousData& v, double chord, BlQuantity q, bool overlay, const QString& title,
+                       BlAbscissa abscissa)
 {
+    const bool on_f = abscissa == BlAbscissa::StationFraction;
     auto value = [&](const T::BoundaryLayerSurfaceData& d, std::size_t k) {
         switch (q) {
         case BlQuantity::H: return d.H[k];
@@ -447,21 +449,23 @@ void drawBoundaryLayer(PlotWidget* w, const T::ViscousData& v, double chord, BlQ
     };
     for (const auto& [d, c, name] : {std::tuple{&v.suction, kSuction, QString("suction surface")},
                                      std::tuple{&v.pressure_side, kPressure, QString("pressure surface")}}) {
+        const std::vector<double>& xs = on_f ? d->f : d->x_c;
+        const std::size_t n = std::min(xs.size(), d->H.size());
         QVector<QPointF> p;
-        for (std::size_t k = 0; k < d->x_c.size(); ++k)
-            if (std::isfinite(value(*d, k))) p << QPointF(d->x_c[k], value(*d, k));
+        for (std::size_t k = 0; k < n; ++k)
+            if (std::isfinite(value(*d, k))) p << QPointF(xs[k], value(*d, k));
         auto s = line(name, p, c, 1.8);
         s.markers = true;
         s.marker_size = 2;
         series << s;
         auto mark = [&](double x, char shape, const QString& label) {
             if (!std::isfinite(x)) return;
-            for (std::size_t k = 0; k < d->x_c.size(); ++k)
-                if (d->x_c[k] == x && std::isfinite(value(*d, k))) markers << marker(QPointF(x, value(*d, k)), shape, c, label);
+            for (std::size_t k = 0; k < n; ++k)
+                if (xs[k] == x && std::isfinite(value(*d, k))) markers << marker(QPointF(x, value(*d, k)), shape, c, label);
         };
-        mark(d->transition_x_c, 'o', "transition");
-        mark(d->separation_x_c, 'x', "separation");
-        mark(d->laminar_separation_x_c, 's', "laminar separation");
+        mark(on_f ? d->transition_f : d->transition_x_c, 'o', "transition");
+        mark(on_f ? d->separation_f : d->separation_x_c, 'x', "separation");
+        mark(on_f ? d->laminar_separation_f : d->laminar_separation_x_c, 's', "laminar separation");
     }
     if (overlay && q == BlQuantity::H) {
         QVector<QPointF> ss(std::begin(kFigSuction), std::end(kFigSuction)), ps(std::begin(kFigPressure), std::end(kFigPressure));
@@ -479,7 +483,7 @@ void drawBoundaryLayer(PlotWidget* w, const T::ViscousData& v, double chord, BlQ
                        : q == BlQuantity::Cf             ? "skin friction c_f"
                                                          : "Re_θ";
     w->setTitle(title);
-    w->setLabels("x / c", yl);
+    w->setLabels(on_f ? "blade-station fraction f = (m − m_first) / (m_last − m_first)" : "x / c", yl);
     w->logY = false;
     w->proportional = false;
     w->setFills({});

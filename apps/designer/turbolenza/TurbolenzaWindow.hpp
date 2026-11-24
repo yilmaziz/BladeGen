@@ -267,7 +267,7 @@ private:
     PostWindow *res_win_ = nullptr, *contour_win_ = nullptr, *loading_win_ = nullptr, *bl_win_ = nullptr;
     PlotWidget *contour_plot_ = nullptr, *loading_plot_ = nullptr;
     PlotWidget *bl_plot_ = nullptr, *bl_change_plot_ = nullptr, *bl_beta_plot_ = nullptr;
-    QComboBox *contour_field_ = nullptr, *loading_q_ = nullptr, *bl_q_ = nullptr;
+    QComboBox *contour_field_ = nullptr, *loading_q_ = nullptr, *bl_q_ = nullptr, *bl_x_ = nullptr;
     QCheckBox *loading_inviscid_ = nullptr, *bl_overlay_ = nullptr;
     QCheckBox* isolines_ = nullptr;
     QSpinBox* bands_ = nullptr;

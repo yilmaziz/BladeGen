@@ -90,8 +90,8 @@ separation at 0.939 against 0.746. Why?
   Our suction-surface Mach distribution differs from Fig. 5-6 on all five grid levels (the levels agree with
   each other within 0.01 for 0.2 ≤ f ≤ 0.8). Near the LE ours accelerates more slowly (f = 0.043:
   0.837 against 0.870). In 0.3 ≤ f ≤ 0.6 ours is 0.03 to 0.05 lower; in 0.78 ≤ f ≤ 0.95 it is 0.01 to
-  0.07 higher (medium, f = 0.5: 0.755 against 0.803; f = 0.87: 0.590 against 0.537). So our suction surface diffuses less before f ≈ 0.8 and
-  then abruptly at the end. Our separation (f 0.90 to 0.95) follows that abrupt rear diffusion. On our
+  0.07 higher (medium, f = 0.5: 0.755 against 0.803; f = 0.87: 0.590 against 0.537). So our suction
+  surface diffuses less before f ≈ 0.8 and then abruptly at the end. Our separation (f 0.90 to 0.95) follows that abrupt rear diffusion. On our
   input it stays within 0.902 to 0.951 for every boundary-layer ingredient in the table below.
 
 **How firm this is.** The Fig. 5-6 Mach numbers are our own rough digitization: ±0.004, with the f = 0

@@ -93,7 +93,8 @@
 ///      rho_e V_e theta / mu >= 250 in 8-36 (p. 186);
 ///  * entrainment: E = 0.025 (H - 1) [8-43] (default: blade rows, the axial-compressor application,
 ///    p. 187), or E = 0.025 (H1 - 1) [8-42] (blade-free passages); the form of BoundaryLayer's
-///    head_entrainment [5-133], called with H or H1;
+///    head_entrainment [5-133], called with H or H1 (ours: with H after its 2.4 limit, which p. 186
+///    states for 8-36 only; H1 is the limited one in any case);
 ///  * blade force defects (Sec. 8.5), nu_m = nu_theta = nu (Balsa and Mellor 1975, p. 189), constant
 ///    across a blade row, nu = nu0 + dnu [8-56]:
 ///      g = s cos(gamma) (averages of inlet and discharge) [8-2],
@@ -119,10 +120,11 @@
 ///      C_theta_e theta12 = W_theta_e theta12' [8-68], C_theta_e delta2* = W_theta_e delta2*' [8-69],
 ///      C_theta_e^2 theta22 = W_theta_e^2 theta22' + omega r W_theta_e delta2*' [8-70],
 ///      C_theta_e^2 theta22 (1 + H2) = W_theta_e^2 theta22' (1 + H2') + 2 omega r W_theta_e delta2*' [8-71];
-///    8-68 is the quantity under d/dm in 8-7 and 8-71 the bracket of 8-6: they are frame invariant, so
-///    the march carries (delta - delta1*), theta11 and q12 = V_theta_e theta12 across a wall rotation
-///    change without special logic (p. 193-194), and the profile in the new frame follows from
-///    theta12' = q12 / V_theta_e' by 8-21 or 8-31;
+///    8-68 is the quantity under d/dm in 8-7, so the march carries (delta - delta1*), theta11 and
+///    q12 = V_theta_e theta12 across a wall rotation change without special logic (p. 193-194).  The
+///    bracket of 8-6 (8-71) is NOT carried: it is rebuilt from the profile in the new frame, whose m
+///    follows from theta12' = q12 / V_theta_e' by 8-21 or 8-31; the profile family does not keep 8-69
+///    and 8-71 exactly (test_endwall.cpp measures -2.9 % and -3.0 % at a stationary-to-rotating hub);
 ///  * procedure (Sec. 8.8): turbulent layers only; at the inlet H1 = 1.4, m = 1/7 (H2 = 1.286),
 ///    2 pi r rho_e V_me delta1* = B mdot / 2 for each wall [8-72], B = 0.02 just upstream of the first
 ///    row; rho_e V_e theta11 / mu >= 250 throughout [8-73]; per station: initial theta11 and theta12 from
@@ -138,7 +140,10 @@
 ///    measures the order), with d/dm of an edge quantity the difference quotient over the interval:
 ///      delta1* r rho_e V_me dV_me/dm   -> mean of (delta1* r rho_e V_me) times (V_me,k - V_me,k-1),
 ///      r delta1* rho_e V_me d(r C_theta_e)/dm -> the same mean times (r C_theta_e)_k - (r C_theta_e)_k-1;
-///    the station equations are solved by the substitution of steps 2-6, started from 8-74 and 8-75;
+///    the station equations are solved by the substitution of steps 2-6, started from 8-74 and 8-75
+///    with H1 held (8-23 gives delta - delta1*); H2 is not held: q12 is the marched variable, so 8-75
+///    already fixes theta12 and with it m (holding H2 too would overdetermine the start); the start
+///    does not change the converged station;
 ///  * the blade forces of 8-8 and 8-9 are interval quantities (they jump at a leading or trailing
 ///    edge): f_me and f_theta_e of an interval from the interval means of rho_e, V_me, r, sin(phi),
 ///    C_theta_e^2 and the difference quotients of V_me, P_e and r C_theta_e; they enter 8-6 and 8-7
@@ -150,22 +155,36 @@
 ///    to the row (for a one-step row: the step's two stations and the step length, the q3d contract's
 ///    reading); xi = 0 (a row without turning) gives dnu = 0;  8-47, 8-48 and 8-50 are not coded
 ///    (their A and B, B not the blockage, are the nu-free parts used only to derive xi);
+///  * |dnu| <= [0.05 + 0.2 (H1 - 1)] delta at the row discharge, Aungier's Eq. 12-50 (2003 p. 306,
+///    stated there for a local blade force that "may be extremely small, or even zero") applied to
+///    the Ch. 8 row correction: without it dnu ~ 1/xi grows without bound as the turning -> 0 and
+///    dnu f_theta_e stays finite (a force defect without a blade force), while xi = 0 gives dnu = 0;
+///    with it the defect terms vanish continuously with the blade force;
 ///  * the row iteration: the row's intervals are marched with nu, then theta11bar = mean of the
 ///    row-inlet (after the inlet leakage correction) and discharge (before the discharge
 ///    correction) theta11, nu0 (8-44), F (8-55) and dnu (8-57) are updated, until |nu change| <=
 ///    tolerance * g;  nu starts from nu0 of the inlet theta11 and dnu = 0;
 ///  * the caller passes s bar and gamma bar of the row at that wall (8-2's averages of inlet and
-///    discharge values); delta_c = 0 for a shrouded wall or an attached blade (the book is silent);
+///    discharge values); delta_c = 0 for an attached blade; a shrouded wall with delta_c != 0 is
+///    refused (its leakage is the seal's, Sec. 8.6; the book is silent on delta_c there);
 ///  * the limits act in the closures; the marched (delta - delta1*), theta11 and q12 are not reset:
 ///    H1 limited -> n = 0.7, delta1* = H1 theta11, delta = (delta - delta1*) + delta1* (as BoundaryLayer's
 ///    delta* = H theta with H_k limited); theta12 limited by the step-4 precaution -> m from the limited
-///    value; m limited at (2.4 - 1)/2; 8-41 gets theta11, delta1*, the (precaution-limited) theta12 and
-///    the profile's delta2* and theta22; H = 2.4 when theta <= 0 after the >= 0 limits of p. 186;
+///    value; m limited at (2.4 - 1)/2 and, ours, at m >= -0.85 (H2 >= 0.40, the end of Fig. 8-4's
+///    extended curve; `extended_m_min`); 8-41 gets theta11, delta1*, the (precaution-limited) theta12
+///    and the profile's delta2* and theta22; H = 2.4 when theta <= 0 after the >= 0 limits of p. 186;
 ///  * 8-73 (rho_e V_e theta11 / mu >= 250) acts on the state: a station (or the inlet) below it is
 ///    scaled, (delta - delta1*), theta11 and q12 by the same factor (H1 and m kept);
-///  * V_theta_e = 0 exactly (no swirl relative to the wall): theta12 = q12/V_theta_e is undefined and m
-///    is held from the last station where it was defined (the inlet's m to start with); every term it
-///    feeds is multiplied by V_theta_e there;
+///  * V_theta_e -> 0 with q12 != 0: theta12 = q12 / V_theta_e -> +-infinity.  Toward the side where
+///    theta12 > 0 the H2 limit holds m at 0.7; toward the other, 8-31 sends m -> -infinity and
+///    V_theta_e delta2* (8-69's product) to a finite value, so without a second limit the 8-6 bracket
+///    jumps at V_theta_e = 0 (0.0569 against 0 in the review's case).  With m >= -0.85 the profile
+///    stays finite on both sides, the bracket, tau_theta_w and the streamwise terms (all carrying
+///    V_theta_e) tend to 0 from both sides, and the layer is continuous through V_theta_e = 0
+///    (tested).  The finite physical limit of 8-69 is not reproduced: the power-law family cannot hold
+///    a tangential defect at zero edge velocity, and the book's own H2 limit already drops it on one
+///    side.  At V_theta_e = 0 exactly, m is held from the last station where it was defined (the
+///    inlet's to start with) and theta12 is reported as NaN when q12 != 0;
 ///  * leakage: the station records keep the layer outside the row (the uncorrected inlet layer, the
 ///    corrected discharge layer); the "+" and "-" layers are in EndwallLeakage;  U_leak at the row
 ///    inlet and discharge from 8-61 with that station's r and edge values (the shroud frame is the
@@ -259,6 +278,7 @@ struct EndwallSettings
     double shape_factor_limit = 2.4;      ///< H1, H2 (p. 184) and H (p. 186)
     double re_theta_min = 250.0;          ///< 8-36 (p. 186) and 8-73
     double theta12_precaution = 0.99;     ///< theta12 <= 0.99 delta/(n+1) (p. 195 step 4)
+    double extended_m_min = -0.85;        ///< ours: m >= this (H2 >= 0.40, the end of Fig. 8-4's curve)
     double tolerance = 1e-12;             ///< ours: relative change of the station state, and of nu/g
     int max_iterations = 200;             ///< ours: per station and per row
 };
@@ -333,6 +353,8 @@ struct EndwallRowWallResult
     double theta11_mean = 0.0;  ///< theta11 bar
     double nu0 = 0.0, dnu = 0.0, nu = 0.0;  ///< [8-44], [8-57], [8-56]; nu is what the reported layers used
     double F = 0.0;                  ///< [8-55]
+    double dnu_bound = 0.0;          ///< [0.05 + 0.2 (H1 - 1)] delta at the discharge (12-50, ours here)
+    bool dnu_limited = false;        ///< 8-57's dnu exceeded the bound
     double xi = 0.0;                 ///< [8-53] [m/s]
     double collateral_defect = 0.0;  ///< V_theta_e theta12 - W_theta_e theta11 at the discharge [8-45] [m^2/s]
     int iterations = 0;

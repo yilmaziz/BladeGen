@@ -85,7 +85,7 @@ For the march, `EndwallStation` holds `{hub, shroud, quasi_normal_length}`. The 
 | `blade_count` | Z | - | not used by Ch. 8 (kept for Ch. 12's 12-48) |
 | `pitch` | s bar at this wall: the mean of inlet and discharge | m | > 0 (8-2) |
 | `stagger` | gamma bar at this wall | rad | abs < pi/2 (8-2) |
-| `clearance` | delta_c: tip or hub gap at this wall | m | >= 0; 0 for an attached blade or a shrouded wall |
+| `clearance` | delta_c: tip or hub gap at this wall | m | >= 0; 0 for an attached blade; must be 0 on a shrouded wall (refused otherwise) |
 | `shrouded` | shroud band with a seal at this wall | - | across the row the wall must rotate at `omega` (p. 193) |
 | `seal_leakage` | mdot_leak from Ch. 6 | kg/s | positive from row discharge to row inlet; 0 unless shrouded |
 
@@ -110,6 +110,7 @@ For the march, `EndwallBladeRow` holds `{station_in, station_out, hub, shroud}`.
 | shape-factor limit | 2.4 | text, pp. 184 and 186; Fig. 8-4 draws 2.2 |
 | Re_theta limit | 250 | pp. 186 and 194 |
 | theta12 precaution | 0.99 | p. 195 |
+| `extended_m_min` | -0.85 | ours: lower limit of m (H2 >= 0.40, the end of Fig. 8-4's curve); keeps the layer continuous through V_theta_e = 0 |
 | tolerance | 1e-12 | ours |
 | `max_iterations` | 200 | ours |
 
@@ -147,6 +148,7 @@ The layer is reported in the frame of the segment ending at that station.
 | `theta11_mean` | theta11 bar |
 | `nu0`, `dnu`, `nu` | 8-44, 8-57, 8-56 |
 | `F` | 8-55 |
+| `dnu_bound`, `dnu_limited` | the bound abs(dnu) <= [0.05 + 0.2 (H1 - 1)] delta at the discharge, Aungier's Eq. 12-50, applied to the Ch. 8 row correction (ours), and whether it acted |
 | `xi` | 8-53 |
 | `collateral_defect` | V_theta_e theta12 - W_theta_e theta11 at the discharge (8-45) |
 | `iterations` | row iterations |
@@ -175,6 +177,18 @@ The layer is reported in the frame of the segment ending at that station.
 - **The symbol B in 8-48 and 8-50** is an integration term, not the blockage. 8-47, 8-48 and 8-50 are
   not coded: they serve only to derive xi (8-53).
 - **8-45, 8-62 and 8-66** print V_theta and W_theta without the subscript e. Edge values are used.
+- **E (8-43) uses the limited H** (ours; p. 186 states the 2.4 limit only for 8-36).
+- **The step-1 hold of H2 is not used.** The march carries q12, so 8-75 already fixes theta12 and
+  with it m. The start does not change the converged station.
+- **The 8-71 bracket is not carried across a frame change.** It is rebuilt from the profile in the
+  new frame. The profile family misses 8-69 by -2.9 % and 8-71 by -3.0 % at a
+  stationary-to-rotating hub (measured).
+- **V_theta_e -> 0 with q12 != 0.** theta12 = q12 / V_theta_e goes to +-infinity there. The H2 limit
+  (m <= 0.7) and our lower limit (m >= -0.85) keep the profile finite, so the 8-6 bracket and every
+  tangential term go to 0 from both sides. The layer is then continuous through V_theta_e = 0
+  (tested). Without the lower limit, 8-31 gives m -> -infinity on one side and the bracket jumps.
+- **The force defect as the turning vanishes.** 8-57 alone gives dnu ~ 1/xi, a force defect with
+  no blade force. Bounded by 12-50, the defect terms vanish with the blade force (tested).
 
 ## Not done
 

@@ -46,6 +46,9 @@ void check_settings(const EndwallSettings& s)
         throw EndwallError(std::format("the theta12 precaution {} must lie in (0, 1)", py_repr(s.theta12_precaution)));
     if (!(positive(s.tolerance) && s.max_iterations > 0))
         throw EndwallError("the tolerance must be > 0 and max_iterations > 0");
+    if (!(std::isfinite(s.extended_m_min) && s.extended_m_min < 0.5 * (s.shape_factor_limit - 1.0)))
+        throw EndwallError(std::format("the lower m limit {} must be finite and below the upper one {}",
+                                       py_repr(s.extended_m_min), py_repr(0.5 * (s.shape_factor_limit - 1.0))));
 }
 
 void check_row(const EndwallRowWall& w, const std::string& where)
@@ -56,6 +59,9 @@ void check_row(const EndwallRowWall& w, const std::string& where)
                                        py_repr(w.omega), py_repr(w.pitch), py_repr(w.stagger), py_repr(w.clearance)));
     if (!std::isfinite(w.seal_leakage) || (!w.shrouded && w.seal_leakage != 0.0))
         throw EndwallError(std::format("{}: the seal leakage {} needs a shrouded wall", where, py_repr(w.seal_leakage)));
+    if (w.shrouded && w.clearance != 0.0)
+        throw EndwallError(std::format("{}: a shrouded wall has no clearance (got {}); its leakage is the seal's", where,
+                                       py_repr(w.clearance)));
 }
 
 // the bracket of 8-6 times rho_e sin(phi): rho_e sin(phi) V_theta_e [V_theta_e (delta2* + theta22) + 2 omega_w r delta2*]
@@ -235,8 +241,15 @@ RowMarch row_march(const EndwallLayer& in, const std::vector<const EndwallWallSt
         }
         res.nu0 = base_force_defect(res.g, rw.clearance, res.theta11_mean);  // [8-44]
         res.dnu = 0.0;
-        if (set.force_defect_correction && res.xi != 0.0)
-            res.dnu = (dnu - res.collateral_defect / res.xi) * res.F;  // [8-57]
+        // |dnu| <= [0.05 + 0.2 (H1 - 1)] delta at the discharge: Aungier's Eq. 12-50 (2003 p. 306) for a
+        // vanishing blade force, applied here to the row correction (ours): dnu ~ 1/xi as the turning -> 0,
+        // while xi = 0 gives dnu = 0; bounded, dnu f -> 0 and the limit is continuous
+        res.dnu_bound = (0.05 + 0.2 * (minus.H1 - 1.0)) * minus.delta;
+        if (set.force_defect_correction && res.xi != 0.0) {
+            const double d = (dnu - res.collateral_defect / res.xi) * res.F;  // [8-57]
+            res.dnu_limited = std::abs(d) > res.dnu_bound;
+            res.dnu = std::clamp(d, -res.dnu_bound, res.dnu_bound);
+        }
         const double nu_new = res.nu0 + res.dnu;                     // [8-56]
         converged = std::abs(nu_new - nu) <= set.tolerance * res.g;  // step 6 on nu (theta11, H1 per station)
         dnu = res.dnu;
@@ -400,16 +413,20 @@ EndwallLayer endwall_closures(const EndwallState& s, const EndwallWallStation& w
         theta12_used = std::min(L.theta12, cap);
         m = endwall_m_of_theta12(theta12_used, L.delta, L.n);
     }
+    // H2 <= 2.4 (p. 184) and, ours, m >= the end of Fig. 8-4's extended curve: with both limits the
+    // profile stays finite, so V_theta_e delta2* and V_theta_e^2 theta22 tend to 0 from both sides as
+    // V_theta_e -> 0 at q12 != 0 (without the lower one, 8-31 gives m -> -infinity and a finite limit
+    // from one side only: a jump in the 8-6 bracket at V_theta_e = 0)
     const double m_max = 0.5 * (lim - 1.0);
-    L.H2_limited = m > m_max;
-    L.m = std::min(m, m_max);
+    L.H2_limited = m > m_max || m < set.extended_m_min;
+    L.m = std::clamp(m, set.extended_m_min, m_max);
     const EndwallProfile p = endwall_profile(L.delta, L.n, L.m);  // step 5 [8-25, 8-26] or [8-29, 8-30, 8-32]
     L.delta2 = p.delta2;
     L.theta22 = p.theta22;
     L.H2 = p.H2;
-    if (L.Vtheta_e == 0.0) {
-        L.theta12 = p.theta12;
-        theta12_used = p.theta12;
+    if (L.Vtheta_e == 0.0) {  // m held; every tangential term carries V_theta_e and vanishes
+        L.theta12 = s.q12 == 0.0 ? p.theta12 : std::numeric_limits<double>::quiet_NaN();  // q12 / 0
+        theta12_used = 0.0;
     }
 
     // Sec. 8.4

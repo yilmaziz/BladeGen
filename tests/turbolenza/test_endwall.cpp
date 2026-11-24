@@ -31,7 +31,7 @@ EndwallWallStation wall(double m, double r, double Vm, double Ct, double rho, do
                         double phi = 0.0)
 {
     EndwallWallStation w;
-    w.z = m;
+    w.z = m * std::cos(phi);  // a straight (conical) wall: dz/dm = cos(phi), dr/dm = sin(phi)
     w.r = r;
     w.phi = phi;
     w.m = m;
@@ -240,8 +240,8 @@ TEST_CASE("end wall: the integration is second order", "[turbolenza][endwall]")
             EndwallStation s;
             const double rh = 0.30 + slope * m, rs = 0.50 + slope * m;
             const double Vm = 150.0 - 40.0 * m, rho = 1.2 + 0.1 * m;
-            s.hub = wall(m, rh, Vm, 24.0 / rh, rho, 1e5, 1.8e-5, 0.0, std::atan(slope));
-            s.shroud = wall(m, rs, Vm, 24.0 / rs, rho, 1e5, 1.8e-5, 0.0, std::atan(slope));
+            s.hub = wall(m, rh, Vm, 24.0 / rh, rho, 1e5, 1.8e-5, 0.0, std::asin(slope));
+            s.shroud = wall(m, rs, Vm, 24.0 / rs, rho, 1e5, 1.8e-5, 0.0, std::asin(slope));
             in.stations.push_back(s);
         }
         in.mass_flow = 1.2 * 150.0 * kPi * (0.25 - 0.09);

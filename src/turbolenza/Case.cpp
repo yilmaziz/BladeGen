@@ -87,6 +87,7 @@ GridSettings grid_settings(const CaseSettings& s)
     g.upstream_extension_chords = s.upstream_extension_chords;
     g.downstream_extension_chords = s.downstream_extension_chords;
     g.level = s.grid_level;
+    g.edge_nodes = s.edge_nodes;
     return g;
 }
 
@@ -256,7 +257,7 @@ Case build_case(const CaseSettings& settings, const BladeSection& section)
             c.grid = make_grid(c.cascade, gs, c.inlet_angle, c.exit_angle_start, true);
         } else {  // the same grid make_grid(level) gives the solver, with its metadata
             StandardGrid standard = build_grid(c.cascade, *s.grid_level, c.inlet_angle, c.exit_angle_start,
-                                               {s.upstream_extension_chords, s.downstream_extension_chords});
+                                               {s.upstream_extension_chords, s.downstream_extension_chords}, s.edge_nodes);
             // v1 _standard_checks' last check, "metrics with positive S", needs the metrics, which come
             // after the grid layer in v2: run here, with v1's message
             try {
@@ -530,8 +531,20 @@ std::string format_grid_summary(const Case& c)
     rows.emplace_back("blade stations", std::to_string(g.last_blade_i - g.first_blade_i + 1));
     rows.emplace_back("dm", std::format("{:.6g} chords = {:.6g} m", g.dm(), g.dm() * s.chord));
     rows.emplace_back("deta", std::format("{:.6g}", g.deta()));
-    rows.emplace_back("admissibility", "admissible: first and last blade station each cut one suction and one pressure "
-                                       "surface");
+    if (g.touching()) {
+        rows.emplace_back("edge nodes", "touching (EXPERIMENT, Aungier 2003 Fig. 5-5 'outside', 2000 Fig. 13-3): the first "
+                                        "and last blade stations on the nose tip and the tail end, both wall nodes on "
+                                        "that point; the side lines end there");
+        rows.emplace_back("touching stations", std::format("i = {} at m = {:.6f}, i = {} at m = {:.6f} (chords)", g.first_blade_i,
+                                                           g.m_first_blade(), g.last_blade_i, g.m_last_blade()));
+        rows.emplace_back("admissibility", "admissible: the stations next to the touching ones each cut one suction and "
+                                           "one pressure surface");
+    } else {
+        rows.emplace_back("edge nodes", "inside (Aungier, v1): the first and last blade stations inside the passage, one "
+                                        "node on each surface");
+        rows.emplace_back("admissibility", "admissible: first and last blade station each cut one suction and one pressure "
+                                           "surface");
+    }
     std::string out = rule("GRID");
     for (const auto& [label, value] : rows) out += std::format("\n  {:20s}: {}", label, value);
     return out + "\n" + rule();

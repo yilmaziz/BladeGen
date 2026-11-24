@@ -176,6 +176,7 @@ private:
 
     // mesh page
     QComboBox* level_ = nullptr;
+    QComboBox* edge_nodes_ = nullptr;  ///< first / last blade nodes: inside (default) or touching (experiment)
     QSpinBox *n_passage_ = nullptr, *n_eta_ = nullptr;
     QDoubleSpinBox *ext_up_ = nullptr, *ext_down_ = nullptr;
     QLabel *mesh_info_ = nullptr, *mesh_error_ = nullptr;

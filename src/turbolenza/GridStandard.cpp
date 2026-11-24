@@ -8,6 +8,12 @@
 // messages; the cascade designation names the geometry here), build_grid_family (the window
 // builds the levels it needs one by one), and the last check of validate_standard_grid,
 // "metrics with positive S" (metrics.py; in v2 the metrics come after the grid).
+//
+// EXPERIMENT (not in v1): the standard levels of the EdgeNodes::Touching layout
+// (candidate_touching): the same target dm per level, candidate band and ranking, CELL_ASPECT eta
+// rule and whole-cell extensions, on the lattice dm = (m_tail - m_tip) / n_cells with stations on
+// the nose tip and the tail end; the station next to each touching one must cut one suction and
+// one pressure surface with v1's transition clearance (0.1 dm) past the window.
 #include "turbolenza/Grid.hpp"
 
 #include "turbolenza/GridDetail.hpp"
@@ -181,6 +187,33 @@ void classify(const CurveRow& row, const PassageTransitions& tr, const Cut& cut,
     }
 }
 
+/// The touching counterpart of v1 _classify (not in v1): no station ahead of the nose tip or
+/// behind the tail end meets the blade; every station strictly between the touching ones cuts one
+/// suction and one pressure surface and passes through neither the LE nor the TE point.
+void classify_touching(const CurveRow& row, const PassageTransitions& tr, const Cut& cut, int first, int last)
+{
+    for (int i = first - 1; i >= 0; --i)
+        if (cut.count[sz(i)] > 0)
+            throw Rejected{kRejectLE, "station " + std::to_string(i) + " ahead of the touching LE station meets the blade (" +
+                                          std::to_string(cut.count[sz(i)]) + " crossings)"};
+    for (int i = last + 1; i < static_cast<int>(cut.m.size()); ++i)
+        if (cut.count[sz(i)] > 0)
+            throw Rejected{kRejectTE, "station " + std::to_string(i) + " behind the touching TE station meets the blade (" +
+                                          std::to_string(cut.count[sz(i)]) + " crossings)"};
+    for (int i = first + 1; i < last; ++i) {
+        const auto c = crossings(row, cut, sz(i));
+        if (!(cut.count[sz(i)] == 2 && c[0] == 1 && c[1] == 1))
+            throw Rejected{i == first + 1 ? kRejectLE : (i == last - 1 ? kRejectTE : kRejectBranch),
+                           "blade station " + std::to_string(i) + " crosses the blade " + std::to_string(cut.count[sz(i)]) +
+                               " times (" + std::to_string(c[0]) + " suction, " + std::to_string(c[1]) + " pressure)"};
+    }
+    for (int i = first + 1; i < last; ++i) {
+        const double m = cut.m[sz(i)];
+        if (std::abs(m - tr.m_le) <= row.touch || std::abs(m - tr.m_te) <= row.touch)
+            throw Rejected{kRejectBranch, "blade station " + std::to_string(i) + " passes through the LE or TE point"};
+    }
+}
+
 /// v1 _standard_checks (without "metrics with positive S", see the file comment).
 std::vector<std::string> standard_checks(const Grid& grid, const CurveRow& row, const PassageTransitions& tr, const Cut& cut)
 {
@@ -213,8 +246,11 @@ std::vector<std::string> standard_checks(const Grid& grid, const CurveRow& row, 
          "station " + std::to_string(f - 1) + " meets the blade");
     need(!tr.valid_cut(m[sz(l + 1)]) && cut.count[sz(l + 1)] == 0, "l + 1 outside the blade", kRejectTE,
          "station " + std::to_string(l + 1) + " meets the blade");
+    // Touching (not in v1): the two touching stations are no SS + PS cut; the rule holds between them
+    const bool touching = grid.touching();
+    const int cut_f = touching ? f + 1 : f, cut_l = touching ? l - 1 : l;
     bool inside = true, one_each = true;
-    for (int i = f; i <= l; ++i) {
+    for (int i = cut_f; i <= cut_l; ++i) {
         inside = inside && tr.valid_cut(m[sz(i)]);
         const auto c = crossings(row, cut, sz(i));
         one_each = one_each && cut.count[sz(i)] == 2 && c[0] == 1 && c[1] == 1;
@@ -247,6 +283,15 @@ std::vector<std::string> standard_checks(const Grid& grid, const CurveRow& row, 
         min_width = i == 0 ? w : std::min(min_width, w);
     }
     need(positive_width, "positive width", kRejectOther, "width " + fmt_g(min_width / chord, 3) + " c");
+    if (touching) {
+        const double ty = grid.boundaries.periodic_translation.y;
+        double gap = 0.0;
+        for (int i : {f, l}) gap = std::max(gap, std::abs(grid.node_y(i, 0) - (grid.node_y(i, ne - 1) - ty)));
+        const double off = std::max(std::abs(m[sz(f)] - tr.m_tip), std::abs(m[sz(l)] - tr.m_tail));
+        need(off <= row.touch && gap <= row.touch, "touching stations on the nose tip and the tail end", kRejectOther,
+             "station m off the extreme point by " + fmt_g(off / chord, 3) + " c, wall nodes apart by " +
+                 fmt_g(gap / chord, 3) + " c");
+    }
     return checks;
 }
 
@@ -370,16 +415,77 @@ StandardGrid candidate(const Interrogation& it, const std::string& level, int n_
     return out;
 }
 
-/// v1 _build_level: the candidate search of one level.
-StandardGrid build_level(const Interrogation& it, const std::string& level, double inlet_angle,
-                         std::optional<double> exit_angle, std::array<double, 2> extension_chords)
+/// The touching counterpart of v1 _candidate (not in v1): one candidate spacing of the touching
+/// lattice; Rejected unless every condition holds.
+StandardGrid candidate_touching(const Interrogation& it, const std::string& level, int n_cells, double target,
+                                double inlet_angle, std::optional<double> exit_angle, double up, double down)
 {
+    const PassageTransitions& tr = it.transitions;
+    const CurveRow& row = *it.row;
+    const double chord = tr.chord;
+    if (n_cells < 2) throw Rejected{kRejectOther, "fewer than two cells between the nose tip and the tail end"};
+    const detail::TouchingLattice lattice = detail::touching_lattice(row, tr.m_le, tr.m_te, chord, n_cells, up, down);
+    const double dm = lattice.dm;
+    for (int e = 0; e < 2; ++e) {
+        const char* reason = e == 0 ? kRejectLE : kRejectTE;
+        const char* edge = e == 0 ? "LE" : "TE";
+        const double window = e == 0 ? tr.le_window() : tr.te_window();
+        const double clearance = dm - window;  // of the station next to the touching one from the window
+        if (!(clearance >= kTransitionClearance * dm))
+            throw Rejected{reason, std::string("the ") + edge + " window " + fmt_e(window / chord, 3) +
+                                       " c leaves the station next to the touching one " + fmt_e(clearance / chord, 3) +
+                                       " c of clearance, below " + fmt_g(kTransitionClearance) + " dm (" +
+                                       fmt_e(kTransitionClearance * dm / chord, 3) + " c): dm must exceed the window by " +
+                                       fmt_g(kTransitionClearance) + " dm"};
+    }
+    for (int e = 0; e < 2; ++e) {
+        const double actual = e == 0 ? lattice.upstream_chords : lattice.downstream_chords, nominal = e == 0 ? up : down;
+        if (!(std::abs(actual - nominal) <= kExtensionToleranceChords))
+            throw Rejected{kRejectExtension, std::string(e == 0 ? "upstream" : "downstream") + " extension " +
+                                                 fmt_f(actual, 4) + " c, nominal " + fmt_g(nominal) + " c, tolerance " +
+                                                 fmt_g(kExtensionToleranceChords) + " c"};
+    }
+    if (lattice.k_up < 1 || lattice.k_down < 1) throw Rejected{kRejectExtension, "an extension holds no whole cell"};
+    const long long eta_cells = detail::py_round(it.template_b.pitch / (kCellAspect * dm));
+    if (eta_cells < kMinEtaCells)
+        throw Rejected{kRejectEta, std::to_string(eta_cells) + " eta cells (pitch / (" + fmt_g(kCellAspect) +
+                                       " dm)), fewer than " + std::to_string(kMinEtaCells)};
+    const int first = static_cast<int>(lattice.k_up), last = static_cast<int>(lattice.k_up) + n_cells;
+
+    GridSettings settings;
+    settings.n_passage = n_cells;
+    settings.n_eta = static_cast<int>(eta_cells) + 1;
+    settings.upstream_extension_chords = lattice.upstream_chords;
+    settings.downstream_extension_chords = lattice.downstream_chords;
+    settings.edge_nodes = EdgeNodes::Touching;
+    const PassageBoundaries b = make_passage_boundaries(*it.cascade, settings, inlet_angle, exit_angle);
+    const auto m = detail::linspace(b.m_in, b.m_out, static_cast<int>(lattice.k_up + lattice.k_down) + n_cells + 1);
+    const Cut cut = row.cut(m);
+    classify_touching(row, tr, cut, first, last);
+    StandardGrid out;
+    try {
+        out.grid = detail::grid_on_touching_stations(b, row, m, static_cast<int>(eta_cells) + 1, first, last, &cut);
+    } catch (const GridError& error) {
+        std::string what = error.what();
+        throw Rejected{kRejectOther, what.substr(0, what.find('\n'))};
+    }
+    auto checks = standard_checks(out.grid, row, tr, cut);
+    out.info = info_of(it, level, out.grid, n_cells, target, std::move(checks));
+    return out;
+}
+
+/// v1 _build_level: the candidate search of one level (Touching: its lattice, not in v1).
+StandardGrid build_level(const Interrogation& it, const std::string& level, double inlet_angle,
+                         std::optional<double> exit_angle, std::array<double, 2> extension_chords,
+                         EdgeNodes edge_nodes = EdgeNodes::Inside)
+{
+    const bool touching = edge_nodes == EdgeNodes::Touching;
     const PassageTransitions& tr = it.transitions;
     const double up = positive(extension_chords[0], "upstream extension_chords");
     const double down = positive(extension_chords[1], "downstream extension_chords");
     const double target = level_target_dm_over_chord(level) * tr.chord;
     const double low = target * (1.0 - kCandidateBand), high = target * (1.0 + kCandidateBand);
-    const double length = tr.lattice_length();
+    const double length = touching ? tr.m_tail - tr.m_tip : tr.lattice_length();
     std::vector<int> ranked;
     for (long long n = std::max(1LL, static_cast<long long>(std::ceil(length / high)));
          n <= static_cast<long long>(std::floor(length / low)); ++n)
@@ -395,7 +501,8 @@ StandardGrid build_level(const Interrogation& it, const std::string& level, doub
     for (int n_cells : ranked) {
         ++rank;
         try {
-            StandardGrid out = candidate(it, level, n_cells, target, inlet_angle, exit_angle, up, down);
+            StandardGrid out = touching ? candidate_touching(it, level, n_cells, target, inlet_angle, exit_angle, up, down)
+                                        : candidate(it, level, n_cells, target, inlet_angle, exit_angle, up, down);
             records.push_back({n_cells, out.info.dm_over_chord, rank, true, "", "accepted"});
             out.candidates = std::move(records);
             out.target_dm_over_chord = target / tr.chord;
@@ -417,7 +524,8 @@ StandardGrid build_level(const Interrogation& it, const std::string& level, doub
                  "): " + r.reason + ", " + r.detail;
     }
     if (tried.empty()) tried = "none";
-    throw GridGenerationError("geometry " + it.geometry + " could not produce an admissible " + level + " grid: target dm/c " +
+    throw GridGenerationError("geometry " + it.geometry + " could not produce an admissible " + level +
+                                  (touching ? " touching-layout" : "") + " grid: target dm/c " +
                                   fmt_f(target / tr.chord, 5) + ", band " + fmt_f(band[0], 5) + " .. " + fmt_f(band[1], 5) +
                                   ", " + std::to_string(records.size()) + " candidate(s) tried: " + tried,
                               level, records, reasons);
@@ -447,6 +555,14 @@ StandardGrid build_grid(const Cascade& cascade, const std::string& level, double
     const std::string name = level_name(level);
     const Interrogation it = interrogate(cascade);
     return build_level(it, name, inlet_angle, exit_angle, extension_chords);
+}
+
+StandardGrid build_grid(const Cascade& cascade, const std::string& level, double inlet_angle, std::optional<double> exit_angle,
+                        std::array<double, 2> extension_chords, EdgeNodes edge_nodes)
+{
+    const std::string name = level_name(level);
+    const Interrogation it = interrogate(cascade);
+    return build_level(it, name, inlet_angle, exit_angle, extension_chords, edge_nodes);
 }
 
 std::vector<std::string> validate_standard_grid(const Grid& grid)

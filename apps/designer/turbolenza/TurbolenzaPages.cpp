@@ -466,7 +466,16 @@ QWidget* TurbolenzaWindow::meshPage()
     ext_down_ = dspin(g, 0.01, 50.0, 3, 0.1, "chords");
     ext_up_->setValue(d.upstream_extension_chords);
     ext_down_->setValue(d.downstream_extension_chords);
+    edge_nodes_ = new QComboBox(g);
+    edge_nodes_->addItem("inside the passage (Aungier, default)");
+    edge_nodes_->addItem("on the LE and TE (touching, Fig. 5-5, experiment)");
+    edge_nodes_->setCurrentIndex(d.edge_nodes == T::EdgeNodes::Touching ? 1 : 0);
+    edge_nodes_->setToolTip("Inside: the first and last blade stations lie inside the passage, one node on each surface "
+                            "(Aungier 2003 Fig. 5-5, recommended). Touching: they pass through the nose tip and the tail "
+                            "end, both wall nodes on that point, the side lines ending there; Aungier reports that this "
+                            "layout can cause local numerical instability.");
     f->addRow("grid level", level_);
+    f->addRow("First / last blade nodes", edge_nodes_);
     f->addRow("n_passage (cells LE -> TE)", n_passage_);
     f->addRow("n_eta (nodes across)", n_eta_);
     f->addRow("upstream extension", ext_up_);
@@ -492,6 +501,7 @@ QWidget* TurbolenzaWindow::meshPage()
         mesh_case_.reset();
     };
     connect(level_, &QComboBox::currentIndexChanged, this, explicitGrid);
+    connect(edge_nodes_, &QComboBox::currentIndexChanged, this, [this] { mesh_case_.reset(); });
     explicitGrid();
     for (auto* s : {n_passage_, n_eta_}) connect(s, &QSpinBox::valueChanged, this, [this] { mesh_case_.reset(); });
     for (auto* s : {ext_up_, ext_down_}) connect(s, &QDoubleSpinBox::valueChanged, this, [this] { mesh_case_.reset(); });
@@ -574,12 +584,30 @@ void TurbolenzaWindow::meshFinished()
     auto name = [](T::Surface s) { return s == T::Surface::Suction ? QString("SS") : QString("PS"); };
     QString edges;
     bool ok = !wi.stations.empty();
-    for (const std::size_t b : {std::size_t{0}, wi.stations.empty() ? std::size_t{0} : wi.stations.size() - 1}) {
+    const bool touching = gr.touching();
+    if (touching && wi.stations.size() >= 3) {
+        // the touching stations: both wall nodes on the nose tip / tail end (the point's own curve and u)
+        for (int e = 0; e < 2; ++e) {
+            const std::size_t b = e == 0 ? 0 : wi.stations.size() - 1;
+            const auto s = gr.touching_surface[static_cast<std::size_t>(e)];
+            edges += QString("<tr><td>%1 blade station i = %2</td><td colspan=2>both walls on the %3 (on %4 at x/c %5)</td>"
+                             "<td><span style='color:#a60'>touching (experiment)</span></td></tr>")
+                         .arg(e == 0 ? "first" : "last")
+                         .arg(wi.stations[b])
+                         .arg(e == 0 ? "nose tip" : "tail end")
+                         .arg(name(s))
+                         .arg(xc(s, gr.touching_u[static_cast<std::size_t>(e)]), 0, 'f', 5);
+        }
+    }
+    // the stations whose walls must be one suction and one pressure node: the first and the last
+    // blade station (inside), the stations next to the touching ones (touching)
+    const std::size_t inner = touching && wi.stations.size() >= 3 ? 1 : 0;
+    for (const std::size_t b : {inner, wi.stations.empty() ? std::size_t{0} : wi.stations.size() - 1 - inner}) {
         if (wi.stations.empty()) break;
         const bool one_each = wi.lower.surface[b] == T::Surface::Suction && wi.upper.surface[b] == T::Surface::Pressure;
         ok = ok && one_each;
         edges += QString("<tr><td>%1 blade station i = %2</td><td>lower wall on %3 at x/c %4</td><td>upper wall on %5 at x/c %6</td><td>%7</td></tr>")
-                     .arg(b == 0 ? "first" : "last")
+                     .arg(touching ? (b == inner ? "next to the first" : "next to the last") : (b == 0 ? "first" : "last"))
                      .arg(wi.stations[b])
                      .arg(name(wi.lower.surface[b]))
                      .arg(xc(wi.lower.surface[b], wi.lower.u[b]), 0, 'f', 5)
@@ -615,7 +643,9 @@ void TurbolenzaWindow::meshFinished()
     }
     t += "<pre>" + QString::fromStdString(T::format_grid_summary(c)).toHtmlEscaped() + "</pre>";
     mesh_info_->setText(t);
-    if (!ok) mesh_error_->setText("the first or last blade station does not cut one suction and one pressure surface");
+    if (!ok)
+        mesh_error_->setText(touching ? "a station next to a touching one does not cut one suction and one pressure surface"
+                                      : "the first or last blade station does not cut one suction and one pressure surface");
     status_->setText(QString("mesh %1 x %2").arg(gr.n_m()).arg(gr.n_eta()));
 }
 
@@ -757,6 +787,7 @@ T::CaseSettings TurbolenzaWindow::settings() const
         s.n_passage = n_passage_->value();
         s.n_eta = n_eta_->value();
     }
+    s.edge_nodes = edge_nodes_->currentIndex() == 1 ? T::EdgeNodes::Touching : T::EdgeNodes::Inside;
     s.upstream_extension_chords = ext_up_->value();
     s.downstream_extension_chords = ext_down_->value();
     s.density_tolerance = sciValue(tol_rho_);

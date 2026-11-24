@@ -23,6 +23,7 @@
 
 #include "turbolenza/Field.hpp"
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -33,6 +34,23 @@ struct SurfaceCurves;  // Curve.hpp: the authoritative C2 blade surfaces
 
 enum class Region : int { Inlet = 0, Passage = 1, Exit = 2 };   // v1 grid.INLET, PASSAGE, EXIT
 enum class Surface : int { Suction = 0, Pressure = 1 };
+
+/// Where the first and the last blade station lie (Aungier 2003 Sec. 5.3, pp. 89-90, Fig. 5-5;
+/// 2000 Sec. 13.4, pp. 247-249, Fig. 13-3).  Not in v1: an EXPERIMENT option of v2, so the user
+/// can test Aungier's statement that the "touching" layout can cause local numerical instability.
+///  * Inside (default, v1, Aungier's recommendation): both stations inside the passage, one node
+///    on each surface; the side lines meet the blade at the chord-end LE / TE points.
+///  * Touching (Fig. 5-5 "outside", Fig. 13-3 "External Leading-Edge Grid Point"): the first
+///    blade station passes through the nose tip (the blade's least m), the last through the tail
+///    end (its greatest m); both wall nodes of such a station are that one point (the upper node
+///    one pitch up: zero blade thickness), and the side lines end there.  Every station strictly
+///    between is a normal blade station.  The grid alone carries the layout to the solver, whose
+///    modules are v1's, unchanged: see Grid::wall_d and WallIdentity at the touching stations.
+enum class EdgeNodes : int { Inside = 0, Touching = 1 };
+[[nodiscard]] inline const char* edge_nodes_name(EdgeNodes e) noexcept
+{
+    return e == EdgeNodes::Touching ? "touching" : "inside";
+}
 
 /// v1 PassageBoundaries: the side boundaries of one passage, far inlet to far exit.
 struct PassageBoundaries
@@ -86,7 +104,29 @@ struct Grid
     {
         std::vector<Point> lower, upper;
     };
+    ///
+    /// EdgeNodes::Touching, at the two touching stations only (entries 0 and last_blade_i -
+    /// first_blade_i): k = 0 is the touching point itself (upper: + periodic_translation), but
+    /// k = 1 and k = 2 are NOT the curve's derivatives (the curve's tangent is vertical at the nose
+    /// tip and a round tail end: m is no coordinate along the wall there).  They are the mesh's
+    /// assigned edge direction, the side line at its end parametrized by arc length s: X_s =
+    /// (cos kappa, sin kappa), X_ss = (d beta/ds) (-sin kappa, cos kappa), d beta/ds = cos(kappa)
+    /// d beta/dm of the side line's linear-angle law, d beta/dm = (far angle - kappa) / (m_far -
+    /// m_junction) (kappa_le, inlet_angle, m_in at the LE station; kappa_te, exit_angle, m_out at
+    /// the TE station).  The unchanged metrics then give tan(beta0) = tan(beta1) = y_s / m_s =
+    /// tan(kappa) and d tan(beta)/dm = (y_ss m_s - y_s m_ss) / m_s^3 = sec^2(kappa) d beta/dm there
+    /// (Aungier 2003 p. 86: the side boundary turns to the blade angle at the blade).
     WallDerivative wall_d[3];
+    /// The layout of the first and last blade stations (not in v1; see EdgeNodes).  Touching:
+    /// stations first_blade_i and last_blade_i are the touching stations, the rest as Inside.
+    EdgeNodes edge_nodes = EdgeNodes::Inside;
+    /// Touching only: the curve the nose tip ([0]) and the tail end ([1]) actually lie on, and their
+    /// u there.  The wall identity LABELS each touching node with its wall's surface on the next
+    /// station (lower suction, upper pressure), so the unchanged Kutta condition (Eq. 5-34 at the
+    /// last blade station: j = 0 against j = n_eta - 1) and post-processing read one suction and
+    /// one pressure node; its u is this u, on this curve.
+    std::array<Surface, 2> touching_surface{Surface::Suction, Surface::Suction};
+    std::array<double, 2> touching_u{0.0, 0.0};
 
     [[nodiscard]] int n_m() const noexcept { return static_cast<int>(m.size()); }
     [[nodiscard]] int n_eta() const noexcept { return static_cast<int>(eta.size()); }
@@ -111,6 +151,12 @@ struct Grid
     [[nodiscard]] double m_last_blade() const { return m[static_cast<std::size_t>(last_blade_i)]; }
     [[nodiscard]] double actual_le_offset() const { return m_first_blade() - m_le(); }
     [[nodiscard]] double actual_te_offset() const { return m_last_blade() - m_te(); }
+    [[nodiscard]] bool touching() const noexcept { return edge_nodes == EdgeNodes::Touching; }
+    /// Station i is a touching station (Touching layout, i = first_blade_i or last_blade_i).
+    [[nodiscard]] bool touching_station(int i) const noexcept
+    {
+        return touching() && (i == first_blade_i || i == last_blade_i);
+    }
 };
 
 }  // namespace BladeGen::Turbolenza

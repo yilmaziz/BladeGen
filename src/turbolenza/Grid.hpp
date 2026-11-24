@@ -14,6 +14,23 @@
 /// every grid it hands to the solver (the standard levels by construction; an explicit
 /// n_passage x n_eta grid is refused when its first or last blade station does not cut exactly
 /// one suction and one pressure surface: v1's require_ss_ps).
+///
+/// EXPERIMENT (not in v1): GridSettings::edge_nodes = EdgeNodes::Touching builds Aungier's other
+/// layout (2003 Fig. 5-5 "outside"; 2000 Fig. 13-3), which he reports can cause local numerical
+/// instability: the first blade station through the nose tip m_tip, the last through the tail end
+/// m_tail, both wall nodes of such a station on that one point (zero blade thickness), the side
+/// lines ending there (anchored at the nose tip / tail end instead of the chord-end LE / TE
+/// points; the idea of v1's scripts/sideline_anchoring_study.py "tip" anchor).  The lattice: dm =
+/// (m_tail - m_tip) / n_cells (standard levels: the same target dm per level, candidate band,
+/// CELL_ASPECT eta rule and whole-cell extensions; explicit: n_cells = n_passage), stations at
+/// m_tip + k dm.  The stations next to the touching ones (first_blade_i + 1, last_blade_i - 1)
+/// must each cut one suction and one pressure surface, or the grid is refused.  The Grid
+/// invariants that forbid a touching station (two distinct wall nodes; the TOUCH rule that makes
+/// a line through a single blade point periodic) are relaxed for those two stations only.
+/// Only the grid knows the layout; the solver modules are v1's, unchanged.  So the grid hands them
+/// a touching station in their own terms (GridData.hpp): Grid::wall_d[1], [2] there are the
+/// mesh's assigned edge direction (the side line's end at kappa_le / kappa_te), not the curve's
+/// vertical tangent, and the wall identity labels the lower node suction, the upper pressure.
 #pragma once
 
 #include "turbolenza/Cascade.hpp"
@@ -37,6 +54,7 @@ struct GridSettings
     double upstream_extension_chords = 1.0;
     double downstream_extension_chords = 1.0;
     std::optional<std::string> level;
+    EdgeNodes edge_nodes = EdgeNodes::Inside;  ///< not in v1: the EXPERIMENT layout (see the file comment)
 };
 
 /// v1 GRID_LEVELS.
@@ -207,6 +225,10 @@ struct EdgeStationTopology
 /// v1 build_grid with the nominal (upstream, downstream) extension lengths in chords.
 [[nodiscard]] StandardGrid build_grid(const Cascade& cascade, const std::string& level, double inlet_angle,
                                       std::optional<double> exit_angle, std::array<double, 2> extension_chords);
+/// The same in the given edge-node layout (EdgeNodes::Inside: exactly the overload above).
+[[nodiscard]] StandardGrid build_grid(const Cascade& cascade, const std::string& level, double inlet_angle,
+                                      std::optional<double> exit_angle, std::array<double, 2> extension_chords,
+                                      EdgeNodes edge_nodes);
 
 /// v1 rebuild_exit: the same grid with its exit extension turned to exit_angle; only the exit
 /// stations' nodes move.
@@ -215,17 +237,22 @@ struct EdgeStationTopology
 [[nodiscard]] PassageBoundaries rebuild_exit(const PassageBoundaries& boundaries, double exit_angle);
 
 /// v1 validate_uniform_grid_topology: GridTopologyError unless the first and last blade stations
-/// each cut one suction and one pressure surface.
+/// each cut one suction and one pressure surface.  A Touching grid (not in v1): unless its first
+/// and last blade stations lie on the nose tip and the tail end and the stations next to them
+/// (first_blade_i + 1, last_blade_i - 1) each cut one suction and one pressure surface.
 void validate_uniform_grid_topology(const Grid& grid);
 /// The same with v1's keywords: the n_passage that built the grid (for the nearest admissible
 /// values in the message and the error) and the stagger [rad] that names the cascade.
 void validate_uniform_grid_topology(const Grid& grid, std::optional<int> n_passage, std::optional<double> stagger);
 
-/// v1 find_valid_n_passage: the admissible n_passage among n_values, ascending (no grid is built).
+/// v1 find_valid_n_passage: the admissible n_passage among n_values, ascending (no grid is built);
+/// in the layout settings.edge_nodes.
 [[nodiscard]] std::vector<int> find_valid_n_passage(const Cascade& cascade, const GridSettings& settings,
                                                     double inlet_angle, const std::vector<int>& n_values);
 /// v1 n_passage_ceiling: the first n_passage from which every finer one fails; empty when the blade
-/// has neither an LE nor a TE window.
+/// has neither an LE nor a TE window.  Touching: the first n_passage whose dm = (m_tail - m_tip) /
+/// n_passage does not exceed the wider window (station first_blade_i + 1 or last_blade_i - 1 then
+/// lies in it).
 [[nodiscard]] std::optional<int> n_passage_ceiling(const Cascade& cascade, const GridSettings& settings,
                                                    double inlet_angle);
 

@@ -272,6 +272,16 @@ CurveRow::CurveRow(const PassageBoundaries& b)
     tau_tail = ends_tau[order.back()];
     m_tip = ends_m[order.front()];
     m_tail = ends_m[order.back()];
+    // the branch end behind each extreme (ends_m: the u0 ends of the branches, then their u1 ends)
+    auto branch_end = [&](std::size_t e, int& branch, double& u) {
+        const std::size_t n = sz(nb);
+        branch = static_cast<int>(e < n ? e : e - n);
+        u = e < n ? u0[e] : u1[e - n];
+    };
+    branch_end(order.front(), tip_branch, tip_u);
+    branch_end(order.back(), tail_branch, tail_u);
+    tip_point = point(tip_branch, tip_u);
+    tail_point = point(tail_branch, tail_u);
     const double span = np_mod(tau_tail - tau_tip, total);
     for (int k = 0; k < nb; ++k) {
         const double middle = tau(k, 0.5 * (u0[sz(k)] + u1[sz(k)]));
@@ -385,12 +395,26 @@ void check_walls(const WallSide& lower, const WallSide& upper, const std::array<
 
 }  // namespace
 
-WallIdentity CurveRow::identity(const Cut& cut, int first, int last) const
+WallIdentity CurveRow::identity(const Cut& cut, int first, int last, bool touching) const
 {
     WallIdentity out;
     std::vector<int> top, bottom;
     std::vector<double> u_top, u_bottom;
-    for (int i = first; i <= last; ++i) {
+    // touching: the stations between the two touching stations are read from the cut (as v1)
+    const int cut_first = touching ? first + 1 : first, cut_last = touching ? last - 1 : last;
+    if (touching) {
+        // the tip entry first (its station `first`); the cut's rows follow
+        out.stations.push_back(first);
+        for (WallSide* w : {&out.lower, &out.upper}) {
+            w->surface.push_back(surface_of(tip_branch));
+            w->parameter.push_back(tip_u);
+            w->u.push_back(tip_u);
+            w->hidden.push_back(0);
+        }
+        out.lower.contour.push_back(np_mod(tau_tip - tau(tip_branch, tip_u), total));
+        out.upper.contour.push_back(np_mod(tau(tip_branch, tip_u) - tau_tip, total));
+    }
+    for (int i = cut_first; i <= cut_last; ++i) {
         const std::size_t r = sz(i);
         const int c = cut.count[r];
         top.push_back(cut.top_segment(r));
@@ -403,10 +427,10 @@ WallIdentity CurveRow::identity(const Cut& cut, int first, int last) const
             throw GridError("a wall node is not on its contour: the top of a cut must lie on the blade's upper contour "
                             "and the bottom on its lower contour");
     for (std::size_t k = 0; k < top.size(); ++k) {
-        const std::size_t r = sz(first) + k;
+        const std::size_t r = sz(cut_first) + k;
         int on_lower = 0, off_lower = 0;
         for (int j = 0; j < cut.count[r]; ++j) (lower_contour[sz(cut.segment[r][sz(j)])] ? on_lower : off_lower) += 1;
-        out.stations.push_back(first + static_cast<int>(k));
+        out.stations.push_back(cut_first + static_cast<int>(k));
         out.lower.surface.push_back(surface_of(top[k]));
         out.lower.parameter.push_back(u_top[k]);
         out.lower.u.push_back(u_top[k]);
@@ -417,6 +441,31 @@ WallIdentity CurveRow::identity(const Cut& cut, int first, int last) const
         out.upper.u.push_back(u_bottom[k]);
         out.upper.contour.push_back(np_mod(tau(bottom[k], u_bottom[k]) - tau_tip, total));
         out.upper.hidden.push_back(on_lower - 1);
+    }
+    if (touching) {
+        // the tail entry last (its station `last`): the lower wall reaches the tail end along the
+        // upper contour (decreasing tau from the tip), the upper wall along the lower contour
+        out.stations.push_back(last);
+        for (WallSide* w : {&out.lower, &out.upper}) {
+            w->surface.push_back(surface_of(tail_branch));
+            w->parameter.push_back(tail_u);
+            w->u.push_back(tail_u);
+            w->hidden.push_back(0);
+        }
+        out.lower.contour.push_back(np_mod(tau_tip - tau(tail_branch, tail_u), total));
+        out.upper.contour.push_back(np_mod(tau(tail_branch, tail_u) - tau_tip, total));
+    }
+    if (touching && out.stations.size() >= 3) {
+        // the touching nodes' labels: each wall keeps the surface it has on the station next to the
+        // touching one (normally lower suction, upper pressure), as if the extreme point were the
+        // shared end of both surfaces; so the unchanged Kutta condition and post-processing read
+        // one suction and one pressure node there.  u and parameter stay the extreme point's u on
+        // the curve it lies on (Grid::touching_surface, touching_u)
+        const std::size_t last_k = out.stations.size() - 1;
+        for (WallSide* w : {&out.lower, &out.upper}) {
+            w->surface.front() = w->surface[1];
+            w->surface.back() = w->surface[last_k - 1];
+        }
     }
     // geometry.py's LE point (tau = L_s) and TE point (tau = 0 = total) on each contour
     std::array<std::vector<double>, 2> splits;

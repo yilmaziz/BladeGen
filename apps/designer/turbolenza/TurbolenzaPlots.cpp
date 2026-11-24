@@ -144,11 +144,30 @@ void drawGrid(PlotWidget* w, const T::Grid& g)
         o << b.front();
         series << line("blade", o, QColor(50, 50, 50), 1.0, Qt::SolidLine, k == 0);
     }
-    w->setTitle(QString("Grid %1 x %2 (stations x eta), blade stations %3 .. %4").arg(nm).arg(ne).arg(g.first_blade_i).arg(g.last_blade_i));
+    QVector<PointMarker> markers;
+    if (g.touching()) {
+        // the touching stations (EXPERIMENT): both wall nodes on the nose tip / tail end
+        for (int i : {g.first_blade_i, g.last_blade_i})
+            for (int j : {0, ne - 1}) {
+                PointMarker m;
+                m.p = QPointF(g.node_m(i, j), g.node_y(i, j));
+                m.shape = 'o';
+                m.color = QColor(230, 120, 0);
+                m.size = 5;
+                if (j == 0) m.label = i == g.first_blade_i ? "touching LE station" : "touching TE station";
+                markers << m;
+            }
+    }
+    w->setTitle(QString("Grid %1 x %2 (stations x eta), blade stations %3 .. %4%5")
+                    .arg(nm)
+                    .arg(ne)
+                    .arg(g.first_blade_i)
+                    .arg(g.last_blade_i)
+                    .arg(g.touching() ? ", touching LE / TE stations (experiment)" : ""));
     w->setLabels("m / c (axial)", "y / c (tangential)");
     w->proportional = true;
     w->setFills(fills);
-    w->setMarkers({});
+    w->setMarkers(markers);
     w->setSeries(series);
     w->commit(true);
 }

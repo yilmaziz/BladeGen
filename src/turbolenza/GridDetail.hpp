@@ -97,6 +97,10 @@ public:
     std::vector<double> u0, u1, m0, m1, lo_m, hi_m;
     double tau_tip = 0.0, tau_tail = 0.0, m_tip = 0.0, m_tail = 0.0;
     std::vector<bool> lower_contour;
+    // added with the EdgeNodes::Touching experiment: the branch end that is the nose tip / tail end
+    int tip_branch = 0, tail_branch = 0;
+    double tip_u = 0.0, tail_u = 0.0;
+    Point tip_point, tail_point;  ///< point(tip_branch, tip_u), point(tail_branch, tail_u)
 
     [[nodiscard]] int n_branches() const noexcept { return static_cast<int>(curve_of.size()); }
     [[nodiscard]] Surface surface_of(int branch) const noexcept
@@ -113,7 +117,14 @@ public:
     /// GridError for an odd crossing count.
     [[nodiscard]] Cut cut(const std::vector<double>& m) const;
     /// v1 identity: the wall identity of stations first .. first + n - 1 of the cut (rows [first, last]).
-    [[nodiscard]] WallIdentity identity(const Cut& cut, int first, int last) const;
+    /// touching (EdgeNodes::Touching, not in v1): stations first and last are the touching stations,
+    /// not read from the cut: both walls there are the nose tip (first) or the tail end (last), at
+    /// the u of that branch end (u and parameter), contour position 0 (tip) or the tip-to-tail
+    /// distance along each wall's contour (tail), no hidden crossing, and LABELED with the surface
+    /// the wall has on the neighbouring station (lower suction, upper pressure: the extreme point
+    /// taken as the shared end of both surfaces); the stations between come from the cut as v1
+    /// reads them, and v1's contour and surface-change checks run on the whole.
+    [[nodiscard]] WallIdentity identity(const Cut& cut, int first, int last, bool touching = false) const;
 
     struct Pieces
     {
@@ -140,6 +151,26 @@ void finish_grid(Grid& grid, const CurveRow& row, const Cut& cut);
 /// v1 _grid_on_stations.
 [[nodiscard]] Grid grid_on_stations(const PassageBoundaries& b, const CurveRow& row, const std::vector<double>& m,
                                     int n_eta, const Cut* cut = nullptr);
+/// EdgeNodes::Touching (not in v1): the grid on stations m whose stations `first` and `last` are
+/// the touching stations (m[first] = m_tip, m[last] = m_tail to round-off).  Their wall nodes are
+/// the nose tip / tail end (upper node + pitch); the stations between take the cut's wall nodes
+/// as v1 does; the periodic stations the side lines of b (anchored at the tip / tail).
+[[nodiscard]] Grid grid_on_touching_stations(const PassageBoundaries& b, const CurveRow& row,
+                                             const std::vector<double>& m, int n_eta, int first, int last,
+                                             const Cut* cut = nullptr);
+
+/// The touching lattice (not in v1): dm = (m_tail - m_tip) / n_cells, k_up / k_down whole cells
+/// ahead of the nose tip / behind the tail end, rounded from the nominal extensions (in chords
+/// from the chord-end LE / TE points, as v1 measures them), and the actual extensions.  Station
+/// k_up is the nose tip, k_up + n_cells the tail end, k_up + n_cells + k_down + 1 stations.
+struct TouchingLattice
+{
+    double dm = 0.0;
+    long long k_up = 0, k_down = 0;
+    double upstream_chords = 0.0, downstream_chords = 0.0;
+};
+[[nodiscard]] TouchingLattice touching_lattice(const CurveRow& row, double m_le, double m_te, double chord,
+                                               int n_cells, double upstream_chords, double downstream_chords);
 /// v1 _check_passage.
 void check_passage(const Cascade& cascade, const PassageBoundaries& b, const CurveRow& row);
 /// v1 _stations.

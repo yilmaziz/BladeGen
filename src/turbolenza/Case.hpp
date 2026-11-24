@@ -55,6 +55,9 @@ struct CaseSettings
     std::optional<int> n_eta;
     double upstream_extension_chords = 1.0;
     double downstream_extension_chords = 1.0;
+    /// not in v1: the first / last blade nodes inside the passage (Aungier, default) or on the LE
+    /// and TE (touching, Fig. 5-5 "outside": an EXPERIMENT; GridData.hpp, EdgeNodes)
+    EdgeNodes edge_nodes = EdgeNodes::Inside;
     // 5. density
     double density_tolerance = 1e-5;
     std::optional<double> velocity_tolerance;        ///< empty: density_tolerance

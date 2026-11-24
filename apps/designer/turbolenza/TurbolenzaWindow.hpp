@@ -9,10 +9,13 @@
 //                              attack, kappa_le / kappa_te, throat o/s; three blades with the throat
 //                    Mesh      grid level (or explicit n_passage x n_eta), extensions; "Generate mesh"
 //                    Solver    every CaseSettings solver input, cores, linear solver; Run, Stop
+//                      Mesh independence  the same case on the checked standard grid levels
+//                              (run_mesh_study), a results table; Run mesh study, Stop, Save
 //   Run                        the log of the passes (also printed to the terminal) and the live
 //                              residual plot
 //   Post-processing  Residuals, Contours (pressure, Mach), Blade loading (Mach, p, Dunavant S):
-//                              separate windows after a run; "Save results..."
+//                              separate windows after a run; "Save results..."; Mesh study:
+//                              beta_out, Mesh study: blade loading (after a mesh study)
 //
 // The window holds no numerics: it fills CaseSettings, calls section_from_layer (BladeGen ->
 // BladeSection), make_cascade, build_case and run_case, and draws.  The solve runs on a worker
@@ -26,6 +29,7 @@
 
 #include "turbolenza/BladeGenSource.hpp"
 #include "turbolenza/Case.hpp"
+#include "turbolenza/MeshStudy.hpp"
 
 #include <QFutureWatcher>
 #include <QMainWindow>
@@ -48,6 +52,7 @@ class QPlainTextEdit;
 class QPushButton;
 class QSpinBox;
 class QStackedWidget;
+class QTableWidget;
 class QTimer;
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -73,6 +78,12 @@ public:
     void startRun();
     void stopRun();
     [[nodiscard]] bool running() const { return worker_.joinable(); }
+    /// run_mesh_study of the current settings on the checked levels, on a worker thread.
+    void startStudy();
+    void stopStudy();
+    [[nodiscard]] bool studyRunning() const { return study_worker_.joinable(); }
+    /// write_mesh_study + the PNGs of the mesh-study plots into dir; the files written.
+    QStringList saveStudy(const QString& dir, bool overwrite);
     /// export_run + the PNGs of the post-processing plots into dir; the files written.
     QStringList saveResults(const QString& dir, bool overwrite);
     /// --turbolenza-self-test: Mid layer, very_coarse mesh, a `passes`-pass solve, post-processing
@@ -84,6 +95,7 @@ protected:
 
 private:
     struct Channel;       // worker thread -> GUI
+    struct StudyChannel;  // mesh-study worker thread -> GUI
     struct MeshJob
     {
         std::optional<BladeGen::Turbolenza::Case> c;
@@ -99,6 +111,7 @@ private:
     QWidget* solverPage();
     QWidget* runPage();
     QWidget* postPage();
+    QWidget* studyPage();
     void syncBlade();          ///< widgets <- layer_
     void updateBladeEnabled();
     void bladeChanged();       ///< layer_ edited: the section, cascade and mesh are stale
@@ -126,6 +139,18 @@ private:
     void saveDialog();
     void redrawContours();
     void redrawLoading();
+    void updateRunButtons();   ///< a normal run and a mesh study exclude each other
+
+    // mesh study
+    void pollStudy();
+    void studyFinished();
+    void addStudyRow(const BladeGen::Turbolenza::MeshStudyEntry& e);
+    void redrawStudyResiduals(const QString& status);
+    void showStudyBetaOut();
+    void showStudyLoading();
+    void redrawStudyBetaOut();
+    void redrawStudyLoading();
+    void saveStudyDialog();
 
     Session& s_;
     BladeGen::Design::Evaluator ev_;
@@ -207,6 +232,23 @@ private:
     QComboBox *contour_field_ = nullptr, *loading_q_ = nullptr;
     QCheckBox* isolines_ = nullptr;
     QSpinBox* bands_ = nullptr;
+
+    // mesh study
+    std::unique_ptr<StudyChannel> sch_;
+    std::thread study_worker_;
+    BladeGen::Turbolenza::CaseSettings study_settings_;
+    std::optional<BladeGen::Turbolenza::MeshStudyResult> study_;  ///< the levels finished so far / the last study
+    std::string study_level_;                                     ///< the level of study_records_
+    std::vector<BladeGen::Turbolenza::PassRecord> study_records_;  ///< the current level's history
+    qint64 study_plot_ms_ = 0;
+    std::vector<QCheckBox*> study_check_;  ///< one per kGridLevels entry
+    QPushButton *study_run_ = nullptr, *study_stop_ = nullptr, *study_save_ = nullptr;
+    QLabel* study_status_ = nullptr;
+    QTableWidget* study_table_ = nullptr;
+    PlotWidget* study_residuals_ = nullptr;
+    PostWindow *study_beta_win_ = nullptr, *study_load_win_ = nullptr;
+    PlotWidget *study_beta_plot_ = nullptr, *study_load_plot_ = nullptr;
+    QComboBox *study_x_ = nullptr, *study_q_ = nullptr;
 };
 
 }  // namespace Designer

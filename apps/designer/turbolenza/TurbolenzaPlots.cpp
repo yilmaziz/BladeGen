@@ -334,4 +334,90 @@ void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, con
     w->commit(true);
 }
 
+namespace {
+
+/// One fixed colour per standard level (the order of kGridLevels); other names grey.
+QColor levelColor(const std::string& level)
+{
+    static const QColor colors[] = {QColor(148, 103, 189), QColor(31, 119, 180), QColor(44, 160, 44), QColor(255, 127, 14), QColor(214, 39, 40)};
+    for (std::size_t k = 0; k < T::kGridLevels.size(); ++k)
+        if (level == T::kGridLevels[k]) return colors[k];
+    return QColor(110, 110, 110);
+}
+
+}  // namespace
+
+void drawStudyBetaOut(PlotWidget* w, const std::vector<T::MeshStudyEntry>& levels, bool x_nodes)
+{
+    QVector<QPointF> ok, bad;
+    QVector<PointMarker> markers;
+    QStringList not_converged;
+    for (const auto& e : levels) {
+        if (!e.converged) not_converged << QString::fromStdString(e.level);
+        const double x = x_nodes ? static_cast<double>(e.total_nodes) : e.dm_over_chord;
+        if (!std::isfinite(x) || !std::isfinite(e.beta_out_deg) || (x_nodes && e.total_nodes <= 0)) continue;
+        const QPointF p(x, e.beta_out_deg);
+        if (e.converged) ok << p;
+        else bad << p << QPointF(kNaN, kNaN);  // markers only, no line between them
+        PointMarker m;
+        m.p = p;
+        m.shape = e.converged ? 'o' : 'x';
+        m.color = e.converged ? kSuction : kPressure;
+        m.size = e.converged ? 4.0 : 6.0;
+        m.label = QString::fromStdString(e.level);
+        markers << m;
+    }
+    std::sort(ok.begin(), ok.end(), [](const QPointF& a, const QPointF& b) { return a.x() < b.x(); });
+    QVector<Series> series;
+    if (!ok.isEmpty()) series << line("converged levels", ok, kSuction, 1.2);
+    if (!bad.isEmpty()) {
+        auto s = line("not converged (last pass)", bad, kPressure, 1.0);
+        s.markers = true;
+        s.marker_size = 3;
+        series << s;
+    }
+    QString title = "Mesh study: β_out against the grid";
+    if (!not_converged.isEmpty()) title += "   [NOT CONVERGED: " + not_converged.join(", ") + "]";
+    w->setTitle(title);
+    w->setLabels(x_nodes ? "total nodes" : "dm / c", "β_out [deg]");
+    w->proportional = false;
+    w->setFills({});
+    w->setMarkers(markers);
+    w->setSeries(series);
+    w->setBadge(series.isEmpty() ? Badge{"no level with a solution", 1} : Badge{});
+    w->commit(true);
+}
+
+void drawStudyLoading(PlotWidget* w, const std::vector<T::MeshStudyEntry>& levels, LoadingQuantity q)
+{
+    auto pts = [&](const T::SurfaceData& d) {
+        QVector<QPointF> out;
+        const auto& val = q == LoadingQuantity::Mach ? d.mach : q == LoadingQuantity::Pressure ? d.pressure : d.dunavant_S;
+        for (std::size_t k = 0; k < d.x_c.size() && k < val.size(); ++k) out << QPointF(d.x_c[k], val[k]);
+        return out;
+    };
+    QVector<Series> series;
+    for (const auto& e : levels) {
+        if (!e.result || !e.result->solution) continue;
+        const auto& s = *e.result->solution;
+        if (s.suction.x_c.empty()) continue;
+        const QColor c = levelColor(e.level);
+        const QString name = QString::fromStdString(e.level) + (e.converged ? "" : " (not converged)");
+        series << line(name, pts(s.suction), c, 1.6) << line(name + " PS", pts(s.pressure_side), c, 1.6, Qt::DashLine, false);
+    }
+    if (q == LoadingQuantity::Mach && !series.isEmpty())
+        series << line("M = 1", {QPointF(0.0, 1.0), QPointF(1.0, 1.0)}, QColor(85, 85, 85), 0.9, Qt::DotLine);
+    const QString yl = q == LoadingQuantity::Mach       ? "surface relative Mach number"
+                       : q == LoadingQuantity::Pressure ? "surface static pressure p [Pa]"
+                                                        : "Dunavant S = (Pt1 - p) / q1";
+    w->setTitle("Mesh study: blade loading (solid: suction side, dashed: pressure side)");
+    w->setLabels("x / c", yl);
+    w->proportional = false;
+    w->setFills({});
+    w->setMarkers({});
+    w->setSeries(series);
+    w->setBadge(series.isEmpty() ? Badge{"no level with blade surfaces", 1} : Badge{});
+    w->commit(true);
+}
+
 }  // namespace Designer::Tl

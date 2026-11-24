@@ -12,12 +12,15 @@
 //               resolved by its centre value), periodic copies one pitch up and down, the blades on top, a colour bar
 //               with the turbo map
 //   loading     a blade-surface quantity against x/c, suction side blue, pressure side red
+//   mesh study  beta_out against dm/c (or the node count), one labelled marker per level; the
+//               blade loading of every level on one axes (one colour per level)
 #pragma once
 
 #include "PlotWidget.hpp"
 
 #include "design/BladeDesign.hpp"
 #include "turbolenza/Case.hpp"
+#include "turbolenza/MeshStudy.hpp"
 
 #include <QString>
 
@@ -45,6 +48,13 @@ void drawContours(PlotWidget* w, const T::SolutionData& s, ContourField f, int b
 
 enum class LoadingQuantity { Mach, Pressure, DunavantS };
 void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title);
+
+/// Mesh study: beta_out [deg] of every level with a solution against dm/c (or the total nodes when
+/// x_nodes), labelled with the level; unconverged levels as red crosses, named in the title.
+void drawStudyBetaOut(PlotWidget* w, const std::vector<T::MeshStudyEntry>& levels, bool x_nodes);
+/// Mesh study: the blade loading of every level with surfaces, one colour per level (legend),
+/// suction side solid, pressure side dashed.
+void drawStudyLoading(PlotWidget* w, const std::vector<T::MeshStudyEntry>& levels, LoadingQuantity q);
 
 /// The closed outline of blade k (k = 0 the reference blade) from the grid boundaries (v1
 /// plots.plot_mach_contour: the suction samples reversed, then the pressure samples).

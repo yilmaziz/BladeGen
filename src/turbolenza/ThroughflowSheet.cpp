@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <limits>
 #include <numbers>
 #include <stdexcept>
 #include <string>
@@ -75,7 +76,15 @@ ThroughflowSurfaceSheet throughflow_surface_sheet(const ThroughflowCase& c, cons
     s.m = ss.m;
     s.z = ss.z;
     s.r = ss.r;
-    s.b = thickness == SheetThickness::Geometric ? ss.b : ss.b_mass;
+    if (thickness == SheetThickness::Geometric) s.b = ss.b;
+    else if (thickness == SheetThickness::Mass) s.b = ss.b_mass;
+    else {  // Carried: b_mass K_B K_W K_B_blade = dpsi mdot / (2 pi r rho W_m)
+        s.b.resize(ss.b_mass.size());
+        for (std::size_t k = 0; k < s.b.size(); ++k) {
+            const ThroughflowNode& nd = result.stations[k].nodes[j];
+            s.b[k] = ss.b_mass[k] * result.stations[k].K_B_endwall * nd.K_W * nd.K_B_blade;
+        }
+    }
     for (std::size_t k = 1; k < s.m.size(); ++k)
         if (!(s.m[k] > s.m[k - 1])) fail("throughflow_surface_sheet: m does not increase along the surface");
     for (const auto& st : result.stations) {
@@ -185,38 +194,49 @@ BladeToBladeOnSurface blade_to_blade_on_surface(const ThroughflowCase& c, const 
     }
     o.r_le_ratio = s.r_le / (r_ref * L);
     // the sheet covers the grid's nominal far inlet and exit, plus the margin
-    const double M_in = -base.upstream_extension_chords;
-    const double M_te = std::max(std::cos(blade.stagger_deg * kPi / 180.0), (s.m_te - s.m_le) / L);
+    const double M_nominal = -base.upstream_extension_chords;
+    const double M_te_blade = std::cos(blade.stagger_deg * kPi / 180.0);  // the section's TE (chord 1 at the stagger)
+    const double M_te = std::max(M_te_blade, (s.m_te - s.m_le) / L);
     const double M_out = M_te + base.downstream_extension_chords;
-    blade.sheet = solver_stream_sheet(s, L, r_ref, M_in - opt.margin_chords, M_out + opt.margin_chords, opt.table_step_chords);
+    o.sigma_te_blade = blade.sheet ? blade.sheet->scale(M_te_blade) : std::numeric_limits<double>::quiet_NaN();
+    blade.sheet = solver_stream_sheet(s, L, r_ref, M_nominal - opt.margin_chords, M_out + opt.margin_chords, opt.table_step_chords);
+    o.sigma_te = blade.sheet->scale(M_te_blade);
     if (blade.source.empty()) blade.source = "through-flow stream surface";
     blade.source += std::format(" on through-flow surface {} (psi {:.4g})", surface, s.mass_fraction);
     o.blade = std::move(blade);
-    // the inlet at the nominal far inlet, and the row's motion; mirrored for s_row = -1 (the header)
-    o.inlet = surface_inlet_state(s, c.gas, s.m_le + M_in * L);
+    // the row's motion and the inlet; mirrored for s_row = -1 (the header)
     o.frame_sign = s.s_row;
     const double fs = static_cast<double>(s.s_row);
     CaseSettings& st = base;
     st.stream_surface = StreamSurfaceKind::Layer;
     st.gamma = c.gas.gamma;
     st.gas_constant = c.gas.gas_constant;
-    st.inlet_total_pressure = o.inlet.Pt;
-    st.inlet_total_temperature = o.inlet.Tt;
-    const double alpha_deg = fs * o.inlet.alpha * 180.0 / kPi;
-    if (s.omega != 0.0) {
-        st.row = RowMotion::Rotating;
-        o.rpm = fs * (-60.0 * s.omega / (2.0 * kPi));
-        st.rpm = o.rpm;
-        st.omega = 0.0;  // derived by build_case from rpm
-        st.inlet_absolute_mach = o.inlet.mach;
-        st.inlet_absolute_flow_angle_deg = alpha_deg;
-    } else {
-        st.row = RowMotion::Stationary;
-        st.omega = 0.0;
-        st.rpm = 0.0;
-        st.inlet_mach = o.inlet.mach;
-        st.inlet_flow_angle_deg = alpha_deg;
-    }
+    st.omega = 0.0;  // a rotating row's is derived by build_case from rpm
+    auto set_inlet = [&](double M) {
+        o.M_in = M;
+        o.inlet = surface_inlet_state(s, c.gas, s.m_le + M * L);
+        st.inlet_total_pressure = o.inlet.Pt;
+        st.inlet_total_temperature = o.inlet.Tt;
+        const double alpha_deg = fs * o.inlet.alpha * 180.0 / kPi;
+        if (s.omega != 0.0) {
+            st.row = RowMotion::Rotating;
+            o.rpm = fs * (-60.0 * s.omega / (2.0 * kPi));
+            st.rpm = o.rpm;
+            st.inlet_absolute_mach = o.inlet.mach;
+            st.inlet_absolute_flow_angle_deg = alpha_deg;
+        } else {
+            st.row = RowMotion::Stationary;
+            st.rpm = 0.0;
+            st.inlet_mach = o.inlet.mach;
+            st.inlet_flow_angle_deg = alpha_deg;
+        }
+    };
+    // first at the nominal far inlet; then at the grid's own (a standard level rounds the extension to whole
+    // cells; the stations do not depend on the inlet state, Case.cpp), so that C_theta = (r C_theta) / r_in is
+    // formed at the radius the case's velocity triangle uses
+    set_inlet(M_nominal);
+    const double M_grid = build_case(st, o.blade).grid.m.front();
+    if (M_grid != M_nominal) set_inlet(M_grid);
     o.settings = std::move(st);
     return o;
 }

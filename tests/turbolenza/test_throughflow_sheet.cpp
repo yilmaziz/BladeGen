@@ -77,7 +77,7 @@ TEST_CASE("sheet: a through-flow surface as r(m), b(m): the quasi-normals, linea
     const TF::ThroughflowResult& r = stage_result();
     REQUIRE(r.status == TF::ThroughflowResult::Status::Converged);
     const int j = 5;
-    const TF::ThroughflowSurfaceSheet s = TF::throughflow_surface_sheet(c, r, coupling::kRotor, j);
+    const TF::ThroughflowSurfaceSheet s = TF::throughflow_surface_sheet(c, r, coupling::kRotor, j, TF::SheetThickness::Geometric);
     const TF::ThroughflowStreamSurface& ss = r.stream_surfaces[static_cast<std::size_t>(j)];
     CHECK(s.qn_inlet == 2);
     CHECK(s.qn_outlet == 3);
@@ -131,6 +131,17 @@ TEST_CASE("sheet: a through-flow surface as r(m), b(m): the quasi-normals, linea
                                          1.0));
     }
     CHECK(measure("sheet: Eq. 12-39 b_mass carries the tube's mass, max rel. error", e1239) <= 1e-12);
+    // the carried thickness (the contract's, the default): 2 pi r rho W_m b = mdot / (n_ss - 1), no blockage
+    const TF::ThroughflowSurfaceSheet sc = TF::throughflow_surface_sheet(c, r, coupling::kRotor, j);
+    CHECK(sc.thickness == TF::SheetThickness::Carried);
+    double ecar = 0.0, ratio_min = 1.0;
+    for (std::size_t k = 0; k < ss.m.size(); ++k) {
+        const auto& nd = r.stations[k].nodes[5];
+        ecar = std::max(ecar, std::abs(2.0 * kPi * nd.r * nd.rho * nd.Wm * sc.b[k] / (c.mass_flow / 10.0) - 1.0));
+        ratio_min = std::min(ratio_min, sc.b[k] / ss.b[k]);
+    }
+    CHECK(measure("sheet: the carried b carries the tube's mass, max rel. error", ecar) <= 1e-12);
+    CHECK(measure("sheet: min carried b / geometric b (about K_B K_W)", ratio_min) < 0.98);
     // the solver's sheet: M = (m - m_LE) / L, r / L, b; linear inside the row away from its two kinks
     const double L = 0.06, rref = s.r_le / L;
     const auto sh = TF::solver_stream_sheet(s, L, rref, -0.5, 2.0, 0.0025);
@@ -181,6 +192,7 @@ TEST_CASE("sheet: the inlet state on the surface (the blade-free stretch, Eqs. 7
     // halfway: P_t, T_t, W_m and r C_theta linear in m, C_theta = r C_theta / r
     const double mh = 0.5 * (s.m[0] + s.m[1]);
     const TF::SurfaceInletState h = TF::surface_inlet_state(s, c.gas, mh);
+    CHECK(h.r == s.radius(mh));
     CHECK(std::abs(h.Wm - 0.5 * (s.Wm[0] + s.Wm[1])) <= 1e-13);
     CHECK(std::abs(h.Ctheta - 0.5 * (s.rCtheta[0] + s.rCtheta[1]) / s.radius(mh)) <= 1e-13);
     // before QN 0: QN 0's state; between QN1 and the LE: QN1's (with C_theta = (r C_theta)_1 / r there)
@@ -223,6 +235,9 @@ TEST_CASE("sheet: the blade-to-blade case on the stage's rotor and (mirrored) st
     CHECK(std::abs(o.blade.sheet->r_ref() - o.sheet.r_le / L) <= 1e-15);
     CHECK(std::abs(o.blade.solidity - L * 32.0 / (2.0 * kPi * o.sheet.r_le)) <= 1e-14);
     CHECK(o.r_le_ratio == 1.0);
+    // sigma at the blade's TE point (M = cos(stagger)) on the through-flow's sheet; a blade by hand has no own sheet
+    CHECK(std::abs(o.sigma_te - o.sheet.radius(o.sheet.m_le + std::cos(37.0 * kDeg) * L) / (o.blade.sheet->r_ref() * L)) <= 1e-12);
+    CHECK(std::isnan(o.sigma_te_blade));
     CHECK(o.blade.sheet->m_front() <= -base.upstream_extension_chords - 1.0 + 1e-12);
     const T::Case cs = T::build_case(o.settings, o.blade);
     REQUIRE(cs.triangle);
@@ -234,6 +249,20 @@ TEST_CASE("sheet: the blade-to-blade case on the stage's rotor and (mirrored) st
                                                   r.stations[2].nodes[5].Wm) / kDeg,
                 rin, r.stations[2].nodes[5].r);
     CHECK(std::abs(cs.inlet_angle - beta) <= 1e-12);
+    CHECK(cs.grid.m.front() == o.M_in);  // the inlet state at the grid's own far inlet
+    CHECK(std::abs(rin / o.inlet.r - 1.0) <= 1e-9);
+    // the thickness option reaches the case: Eq. 12-39's b on request
+    {
+        TF::BladeToBladeOptions bo;
+        bo.thickness = TF::SheetThickness::Mass;
+        const TF::BladeToBladeOnSurface om = TF::blade_to_blade_on_surface(c, r, coupling::kRotor, 5, hand_blade(37.0, 32, L), base, bo);
+        CHECK(om.sheet.thickness == TF::SheetThickness::Mass);
+        const TF::ThroughflowSurfaceSheet sm = TF::throughflow_surface_sheet(c, r, coupling::kRotor, 5, TF::SheetThickness::Mass);
+        for (std::size_t k = 0; k < sm.b.size(); ++k) CHECK(om.sheet.b[k] == sm.b[k]);
+        CHECK(std::abs(om.blade.sheet->thickness(0.0) / sm.thickness_at(sm.m_le) - 1.0) <= 1e-12);
+        CHECK(std::abs(o.blade.sheet->thickness(0.0) / o.sheet.thickness_at(o.sheet.m_le) - 1.0) <= 1e-12);
+        CHECK(std::abs(om.blade.sheet->thickness(0.0) / o.blade.sheet->thickness(0.0) - 1.0) > 1e-3);
+    }
     // the stator: s_row = -1, stationary, mirrored (theta -> -theta): the case sees a positive inlet angle
     const TF::BladeToBladeOnSurface st = TF::blade_to_blade_on_surface(c, r, coupling::kStator, 5, hand_blade(11.0, 60, 0.046), base);
     CHECK(st.frame_sign == -1);
@@ -269,7 +298,44 @@ TEST_CASE("sheet: the blade-to-blade case on the stage's rotor and (mirrored) st
     CHECK_THROWS_AS(TF::blade_to_blade_on_surface(c, r, coupling::kRotor, 5, hand_blade(37.0, 32, 0.0), base), std::invalid_argument);
 }
 
-TEST_CASE("sheet: blade-to-blade on BladeGen's default rotor (mid surface) against Chapter 6 (measured)", "[turbolenza][sheet][coupling][bladegen]")
+namespace {
+
+/// The mass averages of Eqs. 12-40, 12-41 over eta at station i (weights rho W_m), and beta' of Eq. 12-42.
+struct StationAverage
+{
+    double Wm = 0.0, Wtheta = 0.0, beta = 0.0;
+};
+StationAverage station_average(const T::SolutionData& d, int i)
+{
+    const auto& eta = d.grid.eta;
+    double w = 0.0, wm = 0.0, wt = 0.0;
+    for (std::size_t q = 0; q + 1 < eta.size(); ++q) {
+        const int a = static_cast<int>(q), b = a + 1;
+        const double h = 0.5 * (eta[q + 1] - eta[q]);
+        const double fa = d.density(i, a) * d.W_m(i, a), fb = d.density(i, b) * d.W_m(i, b);
+        w += h * (fa + fb);
+        wm += h * (fa * d.W_m(i, a) + fb * d.W_m(i, b));
+        wt += h * (fa * d.W_theta(i, a) + fb * d.W_theta(i, b));
+    }
+    StationAverage o;
+    o.Wm = wm / w;
+    o.Wtheta = wt / w;
+    o.beta = std::atan2(o.Wtheta, o.Wm);
+    return o;
+}
+
+int nearest_station(const T::Grid& g, double M)
+{
+    int best = 0;
+    for (int i = 1; i < g.n_m(); ++i)
+        if (std::abs(g.m[static_cast<std::size_t>(i)] - M) < std::abs(g.m[static_cast<std::size_t>(best)] - M)) best = i;
+    return best;
+}
+
+}  // namespace
+
+TEST_CASE("sheet: blade-to-blade on BladeGen's default rotor against Chapter 6 (measured), the three thicknesses",
+          "[turbolenza][sheet][coupling][bladegen]")
 {
     int qb = 0;
     const TF::ThroughflowCase c = coupling::bladegen_rotor_case(TF::ThroughflowModel::Approximate, &qb);
@@ -284,45 +350,105 @@ TEST_CASE("sheet: blade-to-blade on BladeGen's default rotor (mid surface) again
         if (std::abs(TF::throughflow_surface_sheet(c, r, 0, k).span - design.layers[2].span) <
             std::abs(TF::throughflow_surface_sheet(c, r, 0, j).span - design.layers[2].span))
             j = k;
-    const TF::BladeToBladeOnSurface o = TF::blade_to_blade_on_surface(c, r, 0, j, blade, b2b_settings());
-    std::printf("[sheet] BladeGen rotor surface %d (psi %.2f, span %.4f): r_LE through-flow / layer = %.6f, b(TE)/b(LE) %.5f (layer's own %.5f), "
-                "far inlet alpha %.3f deg M %.4f\n",
-                j, o.sheet.mass_fraction, o.sheet.span, o.r_le_ratio, o.blade.sheet->thickness((o.sheet.m_te - o.sheet.m_le) / blade.chord) /
-                                                            o.blade.sheet->thickness(0.0),
-                blade.sheet->thickness(std::cos(blade.stagger_deg * kDeg)) / blade.sheet->thickness(0.0), o.inlet.alpha / kDeg,
-                o.inlet.mach);
-    CHECK(std::abs(o.r_le_ratio - 1.0) <= 0.05);  // the layer and the through-flow surface nearest its span (placement mismatch)
-    CHECK(std::abs(o.settings.rpm / 15000.0 - 1.0) <= 1e-14);
-    const T::Case cs = T::build_case(o.settings, o.blade);
-    const T::RunResult rr = T::run_case(cs);
-    INFO(rr.error);
-    REQUIRE(rr.converged);
-    REQUIRE(rr.solution);
-    const T::SolutionData& d = *rr.solution;
-    // the solve's stream sheet is the through-flow's: r at every station from the sheet
-    double dr = 0.0;
-    for (int i = 0; i < d.grid.n_m(); ++i) {
-        const double M = d.grid.m[static_cast<std::size_t>(i)];
-        dr = std::max(dr, std::abs(d.station_radius[static_cast<std::size_t>(i)] / (o.sheet.radius(o.sheet.m_le + M * blade.chord)) - 1.0));
-    }
-    CHECK(measure("B2B station radius against the through-flow's piecewise-linear r(m)", dr) <= 1e-6);
-    // the measured comparison: the blade-to-blade exit angle (Kutta, far exit) against Ch. 6's beta'_2 on QN2
-    const double b2b = static_cast<double>(o.frame_sign) * d.exit_angle;
     const auto& n1 = r.stations[static_cast<std::size_t>(qb)].nodes[static_cast<std::size_t>(j)];
     const auto& n2 = r.stations[static_cast<std::size_t>(qb + 1)].nodes[static_cast<std::size_t>(j)];
     const double w = c.rows[0].omega;
-    std::printf("[sheet] BladeGen rotor mid surface: beta'1 through-flow %.3f deg, B2B %.3f deg; beta'2 Ch. 6 %.3f deg, B2B exit "
-                "%.3f deg (difference %.3f deg); kappa_TE %.3f deg; %d passes\n",
-                std::atan2(n1.Ctheta - w * n1.r, n1.Wm) / kDeg, cs.inlet_angle / kDeg, o.sheet.beta2 / kDeg, b2b / kDeg,
-                (b2b - o.sheet.beta2) / kDeg, cs.cascade.kappa_te / kDeg, rr.iterations);
-    if (rr.summary && rr.summary->rotor) {
-        const T::RotorSummary& rs = *rr.summary->rotor;
-        std::printf("[sheet] BladeGen rotor mid surface: Euler work B2B %.1f J/kg (cp dT0 %.1f), through-flow %.1f J/kg; Pt ratio "
-                    "B2B %.4f (inviscid), through-flow %.4f\n",
-                    rs.euler_work, rs.total_enthalpy_rise, w * (n2.rCtheta - n1.rCtheta), rs.total_pressure_ratio, n2.Pt / n1.Pt);
-        CHECK(std::abs(rs.euler_work / rs.total_enthalpy_rise - 1.0) <= 1e-6);
+    // Ch. 6's metal angle on this surface: the through-flow's section at the surface's span (linear in span)
+    const TF::ThroughflowSurfaceSheet s0 = TF::throughflow_surface_sheet(c, r, 0, j);
+    const auto& S = c.rows[0].sections;
+    std::size_t a = 0;
+    while (a + 2 < S.size() && S[a + 1].span < s0.span) ++a;
+    const double t = (s0.span - S[a].span) / (S[a + 1].span - S[a].span);
+    const double kappa2_ch6 = S[a].kappa2 + t * (S[a + 1].kappa2 - S[a].kappa2);
+    std::printf("[sheet] BladeGen rotor sections (span, kappa2 deg):");
+    for (const auto& sec : S) std::printf(" (%.3f, %.3f)", sec.span, sec.kappa2 / kDeg);
+    std::printf("\n");
+    double err[3] = {0.0, 0.0, 0.0};
+    const TF::SheetThickness kinds[3] = {TF::SheetThickness::Carried, TF::SheetThickness::Geometric, TF::SheetThickness::Mass};
+    const char* names[3] = {"carried", "geometric", "Eq. 12-39"};
+    for (int v = 0; v < 3; ++v) {
+        TF::BladeToBladeOptions bo;
+        bo.thickness = kinds[v];
+        const TF::BladeToBladeOnSurface o = TF::blade_to_blade_on_surface(c, r, 0, j, blade, b2b_settings(), bo);
+        CHECK(o.sheet.thickness == kinds[v]);
+        CHECK(std::abs(o.r_le_ratio - 1.0) <= 0.05);  // the layer and the through-flow surface nearest its span
+        CHECK(std::abs(o.settings.rpm / 15000.0 - 1.0) <= 1e-14);
+        const T::Case cs = T::build_case(o.settings, o.blade);
+        CHECK(cs.grid.m.front() == o.M_in);  // the inlet state is taken at the grid's own far inlet
+        const T::RunResult rr = T::run_case(cs);
+        INFO(rr.error);
+        REQUIRE(rr.converged);
+        REQUIRE(rr.solution);
+        const T::SolutionData& d = *rr.solution;
+        // the solve's stream sheet is the through-flow's: r and b / b_in at every station from the sheet
+        double dr = 0.0, db = 0.0;
+        for (int i = 0; i < d.grid.n_m(); ++i) {
+            const double m = o.sheet.m_le + d.grid.m[static_cast<std::size_t>(i)] * blade.chord;
+            dr = std::max(dr, std::abs(d.station_radius[static_cast<std::size_t>(i)] / o.sheet.radius(m) - 1.0));
+            db = std::max(db, std::abs(d.station_thickness[static_cast<std::size_t>(i)] /
+                                           (o.sheet.thickness_at(m) / o.sheet.thickness_at(o.sheet.m_le + o.M_in * blade.chord)) -
+                                       1.0));
+        }
+        CHECK(dr <= 1e-6);  // measured 1.1e-8 (the sheet's spline against the piecewise-linear rule)
+        CHECK(db <= 1e-6);
+        // at QN2's m: the mass-averaged W_m (against the through-flow's, the measure of the thickness) and beta'
+        const int i2 = nearest_station(d.grid, (o.sheet.m[static_cast<std::size_t>(qb + 1)] - o.sheet.m_le) / blade.chord);
+        const StationAverage q2 = station_average(d, i2);
+        err[v] = q2.Wm / n2.Wm - 1.0;
+        const double b2b_exit = static_cast<double>(o.frame_sign) * d.exit_angle;
+        const double b2b_q2 = static_cast<double>(o.frame_sign) * q2.beta;
+        std::printf("[sheet] BladeGen rotor surface %d (psi %.2f, span %.4f), b %s: sigma_LE %.5f, sigma_TE %.5f (layer's own %.5f); "
+                    "W_m at QN2 B2B %.3f, through-flow %.3f m/s (%+.2e); beta'2 at QN2 B2B %.3f, far exit %.3f, Ch. 6 %.3f deg; "
+                    "deviation B2B %.3f (from kappa_TE %.3f), Ch. 6 %.3f (from kappa2 %.3f) deg; %d passes\n",
+                    j, o.sheet.mass_fraction, o.sheet.span, names[v], o.r_le_ratio, o.sigma_te, o.sigma_te_blade, q2.Wm, n2.Wm,
+                    err[v], b2b_q2 / kDeg, b2b_exit / kDeg, o.sheet.beta2 / kDeg, (b2b_exit - cs.cascade.kappa_te) / kDeg,
+                    cs.cascade.kappa_te / kDeg, (o.sheet.beta2 - kappa2_ch6) / kDeg, kappa2_ch6 / kDeg, rr.iterations);
+        if (rr.summary && rr.summary->rotor) {
+            const T::RotorSummary& rs = *rr.summary->rotor;
+            std::printf("[sheet]   Euler work B2B %.1f J/kg (cp dT0 %.1f), through-flow %.1f J/kg; Pt ratio B2B %.4f (inviscid), "
+                        "through-flow %.4f; beta'1 B2B %.3f, through-flow %.3f deg\n",
+                        rs.euler_work, rs.total_enthalpy_rise, w * (n2.rCtheta - n1.rCtheta), rs.total_pressure_ratio,
+                        n2.Pt / n1.Pt, cs.inlet_angle / kDeg, std::atan2(n1.Ctheta - w * n1.r, n1.Wm) / kDeg);
+            CHECK(std::abs(rs.euler_work / rs.total_enthalpy_rise - 1.0) <= 1e-6);
+        }
+        CHECK(std::isfinite(b2b_exit));
     }
-    CHECK(std::isfinite(b2b));
+    // the measured argument for the default: the carried thickness (the contract's) reproduces Ch. 7's W_m on QN2 best
+    CHECK(std::abs(err[0]) < std::abs(err[1]));
+    CHECK(std::abs(err[0]) < std::abs(err[2]));
+}
+
+TEST_CASE("sheet: the far inlet on a sloped (conical) inlet: C_theta = (r C_theta) / r at the case's own radius",
+          "[turbolenza][sheet][coupling]")
+{
+    const TF::ThroughflowCase c = coupling::cone_rotor_case();
+    const TF::ThroughflowResult r = TF::solve_throughflow(c);
+    INFO(r.message);
+    REQUIRE(r.status == TF::ThroughflowResult::Status::Converged);
+    const double L = 0.05;
+    const TF::BladeToBladeOnSurface o = TF::blade_to_blade_on_surface(c, r, 0, 5, hand_blade(37.0, 32, L), b2b_settings());
+    const TF::ThroughflowSurfaceSheet& s = o.sheet;
+    // the far inlet lies between QN 0 and QN 2 on the cone (the blade-free stretch): r differs from QN1's by the slope
+    const double m_in = s.m_le + o.M_in * L;
+    REQUIRE(m_in > s.m[0]);
+    REQUIRE(m_in < s.m[2]);
+    CHECK(o.inlet.m == m_in);
+    CHECK(o.inlet.r == s.radius(m_in));
+    CHECK(std::abs(o.inlet.r - s.r[2]) > 1e-3);  // a sloped inlet: the radius used is not QN1's
+    // r C_theta linear in m (Eq. 7-40, conserved), divided by the radius actually used
+    const std::size_t k = m_in < s.m[1] ? 0 : 1;
+    const double tk = (m_in - s.m[k]) / (s.m[k + 1] - s.m[k]);
+    const double rct = s.rCtheta[k] + tk * (s.rCtheta[k + 1] - s.rCtheta[k]);
+    CHECK(std::abs(o.inlet.Ctheta * o.inlet.r - rct) <= 1e-13);
+    // the case's velocity triangle is formed at that very radius, from that very C_theta
+    const T::Case cs = T::build_case(o.settings, o.blade);
+    REQUIRE(cs.triangle);
+    CHECK(cs.grid.m.front() == o.M_in);
+    std::printf("[sheet] cone: far inlet M %.4f chords (nominal %.4f), r_in case %.6f m, sheet %.6f m, QN1 %.6f m; C_theta %.4f m/s\n",
+                o.M_in, -b2b_settings().upstream_extension_chords, cs.triangle->radius, o.inlet.r, s.r[2], o.inlet.Ctheta);
+    CHECK(measure("cone: the case's far-inlet radius against the inlet state's", std::abs(cs.triangle->radius / o.inlet.r - 1.0)) <= 1e-9);
+    CHECK(std::abs(cs.triangle->C_theta - o.inlet.Ctheta) <= 1e-9 * std::abs(o.inlet.Ctheta));
+    CHECK(std::abs(cs.triangle->C_m - o.inlet.Wm) <= 1e-9 * o.inlet.Wm);
 }
 
 TEST_CASE("sheet: the BladeGen rotor's blade-to-blade exit angle by grid level (report)", "[.b2bgrid][turbolenza][sheet]")
@@ -340,7 +466,12 @@ TEST_CASE("sheet: the BladeGen rotor's blade-to-blade exit angle by grid level (
         s.max_kutta_iterations = 8000;
         const TF::BladeToBladeOnSurface o = TF::blade_to_blade_on_surface(c, r, 0, 4, blade, s);
         const T::RunResult rr = T::run_case(T::build_case(o.settings, o.blade));
-        std::printf("[sheet] grid %s: converged %d, B2B exit %.3f deg against Ch. 6 %.3f deg\n", level, rr.converged,
-                    rr.solution ? rr.solution->exit_angle / kDeg : 0.0, o.sheet.beta2 / kDeg);
+        double q2 = 0.0;
+        if (rr.solution) {
+            const double Mq2 = (o.sheet.m[static_cast<std::size_t>(o.sheet.qn_outlet)] - o.sheet.m_le) / blade.chord;
+            q2 = station_average(*rr.solution, nearest_station(rr.solution->grid, Mq2)).beta;
+        }
+        std::printf("[sheet] grid %s: converged %d, B2B at QN2 %.3f deg, far exit %.3f deg, against Ch. 6 %.3f deg\n", level,
+                    rr.converged, q2 / kDeg, rr.solution ? rr.solution->exit_angle / kDeg : 0.0, o.sheet.beta2 / kDeg);
     }
 }

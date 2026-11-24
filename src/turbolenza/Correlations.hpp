@@ -116,7 +116,7 @@ enum class Camberline {
 };
 
 /// The blade row: an inlet guide vane uses Howell's deviation Eq. 6-26 (p. 128) and no incidence
-/// term in Eq. 6-77 (p. 144).  Rotor and stator are treated alike (a rotor through InletState::omega,
+/// term in Eq. 6-77 (p. 144).  Rotor and stator are treated alike (a rotor through CascadeInletState::omega,
 /// the blade speed of Eq. 6-39).
 enum class BladeRowKind { Rotor, Stator, InletGuideVane };
 
@@ -140,7 +140,7 @@ struct CascadeGeometry
 };
 
 /// The flow at QN1 (upstream of the row) on the stream surface, book frame, relative to this row.
-struct InletState
+struct CascadeInletState
 {
     double radius = 0.0;      ///< r1 [m]
     double wm = 0.0;          ///< W_m1 = C_m1 [m/s] (> 0)
@@ -273,7 +273,7 @@ struct CascadePerformance
 
 /// The cascade performance of Sec. 7.3: exit relative angle, loss (with parts), stall margins and
 /// K_W.  Throws CorrelationError (see the file comment).
-[[nodiscard]] CascadePerformance evaluate(const CascadeGeometry& geometry, const InletState& inlet,
+[[nodiscard]] CascadePerformance evaluate(const CascadeGeometry& geometry, const CascadeInletState& inlet,
                                           const DischargeEstimate& discharge, const Gas& gas = {},
                                           const CorrelationOptions& options = {});
 

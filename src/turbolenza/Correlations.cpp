@@ -895,7 +895,7 @@ void note_range(CascadePerformance& r, bool outside, const std::string& what)
 
 }  // namespace
 
-CascadePerformance evaluate(const CascadeGeometry& geo, const InletState& in, const DischargeEstimate& out,
+CascadePerformance evaluate(const CascadeGeometry& geo, const CascadeInletState& in, const DischargeEstimate& out,
                             const Gas& gas, const CorrelationOptions& opt)
 {
     // ---- refusals of the input
@@ -907,11 +907,11 @@ CascadePerformance evaluate(const CascadeGeometry& geo, const InletState& in, co
     require_finite(geo.camber, "camber", "CascadeGeometry");
     require_thickness(geo.thickness_ratio, "CascadeGeometry");
     require_positive(geo.throat_over_pitch, "throat o/s", "CascadeGeometry (Eq. 6-53)");
-    require_positive(in.radius, "r1", "InletState");
-    require_positive(in.wm, "W_m1", "InletState");
-    require_finite(in.wtheta, "W_theta1", "InletState");
-    require_finite(in.omega, "omega", "InletState");
-    require_positive(in.mach, "M'_1", "InletState");
+    require_positive(in.radius, "r1", "CascadeInletState");
+    require_positive(in.wm, "W_m1", "CascadeInletState");
+    require_finite(in.wtheta, "W_theta1", "CascadeInletState");
+    require_finite(in.omega, "omega", "CascadeInletState");
+    require_positive(in.mach, "M'_1", "CascadeInletState");
     require_positive(out.radius, "r2", "DischargeEstimate");
     require_positive(out.wm, "W_m2", "DischargeEstimate");
     require_gamma(gas.gamma);
@@ -938,7 +938,7 @@ CascadePerformance evaluate(const CascadeGeometry& geo, const InletState& in, co
     const double wm_ratio = out.wm / in.wm, radius_ratio = out.radius / in.radius;
     const double u_ratio = sd * in.omega * in.radius / in.wm;  // U1 / W_m1: a tangential velocity, sign-changed too
     const double sigma = geo.solidity, tb = geo.thickness_ratio, ac = geo.max_camber_position;
-    require_angle(beta1, "beta1", "InletState");
+    require_angle(beta1, "beta1", "CascadeInletState");
     // Re_c = rho1 W1 c / mu1 (ours: the book gives no formula)
     if (in.density > 0.0 && in.viscosity > 0.0)
         r.reynolds = in.density * std::hypot(in.wm, in.wtheta) * geo.chord / in.viscosity;

@@ -10,6 +10,8 @@
 #include "turbolenza/ThroughflowBladeGen.hpp"
 #include "turbolenza/ThroughflowCoupling.hpp"
 
+#include "blade/FlowPath.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -218,7 +220,9 @@ TF::ThroughflowCase synthetic_stage(const StageOptions& o)
                 s.stagger = -s.stagger;
             }
         }
-        *r = TF::with_correlations(*r, {}, lo);
+        TF::CorrelationRowOptions ro;
+        ro.correlations.reynolds_correction = o.reynolds_correction;
+        *r = TF::with_correlations(*r, ro, lo);
         if (!o.row_loss) r->row_loss.reset();
     }
     c.rows = {igv, rot, sta};
@@ -250,6 +254,42 @@ TF::ThroughflowCase bladegen_rotor_case(TF::ThroughflowModel model, int* qn_befo
     return c;
 }
 
+TF::ThroughflowCase cone_rotor_case()
+{
+    const double omega = -2.0 * kPi * 5000.0 / 60.0, t = std::tan(15.0 * kDeg);
+    TF::ThroughflowCase c;
+    c.model = TF::ThroughflowModel::Approximate;
+    c.mass_flow = 22.0;
+    c.compressor_omega = omega;
+    const double z[] = {0.0, 0.05, 0.10, 0.16, 0.22};
+    for (int k = 0; k < 5; ++k) {
+        TF::QuasiNormal q;
+        q.z_hub = q.z_shroud = z[k];
+        q.r_hub = 0.22 + z[k] * t;
+        q.r_shroud = 0.32 + z[k] * t;
+        if (k == 3) q.hub_wall_omega = omega;  // the drum under the rotor
+        c.quasi_normals.push_back(q);
+    }
+    c.inlet = TF::InletProfile::uniform(101325.0, 288.15, TF::InletProfile::Swirl::Ctheta, 20.0);
+    TF::BladeRowSpec rot;
+    rot.name = "cone rotor";
+    rot.qn_inlet = 2;
+    rot.omega = omega;
+    rot.n_blades = 32;
+    rot.le_hub_z = rot.le_shroud_z = 0.108;
+    rot.te_hub_z = rot.te_shroud_z = 0.152;
+    rot.le_hub_r = 0.22 + 0.108 * t;
+    rot.le_shroud_r = 0.32 + 0.108 * t;
+    rot.te_hub_r = 0.22 + 0.152 * t;
+    rot.te_shroud_r = 0.32 + 0.152 * t;
+    rot.tip_clearance = 5e-4;
+    rot.sections = {section(0.0, 50.0, 30.0, 0.044, 0.07, 32), section(1.0, 60.0, 45.0, 0.044, 0.07, 32)};
+    rot.model = std::make_shared<TF::SpecifiedBladeRow>(std::vector<double>{0.0, 1.0}, std::vector<double>{0.6, 0.6},
+                                                        std::vector<double>{0.03, 0.03});
+    c.rows = {rot};
+    return c;
+}
+
 }  // namespace coupling
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -262,7 +302,7 @@ TEST_CASE("coupling: the Ch. 6 row adapter maps the Ch. 7 state field by field",
     const TF::CorrelationBladeRow row(spec);
     const TF::BladeRowInlet in = rotor_inlet();
     // the inlet of Correlations.hpp: Eq. 7-44's W_theta1 in the row frame, M'_1, Sutherland's mu at the static T1
-    const T::InletState is = TF::CorrelationBladeRow::inlet_state(in);
+    const T::CascadeInletState is = TF::CorrelationBladeRow::inlet_state(in);
     CHECK(is.radius == 0.30);
     CHECK(is.wm == 101.0);
     CHECK(is.wtheta == -17.8 + 0.30 * 523.6);
@@ -317,7 +357,7 @@ TEST_CASE("coupling: the Ch. 6 row adapter maps the Ch. 7 state field by field",
     hand.max_camber_position = 0.5;
     hand.throat_over_pitch = 0.9 * std::cos(44.0 * kDeg) * 0.30 / 0.301;
     hand.pitch_over_height = 2.0 * kPi * 0.30 / 32.0 / 0.1;
-    T::InletState hi;
+    T::CascadeInletState hi;
     hi.radius = 0.30;
     hi.wm = 101.0;
     hi.wtheta = -17.8 + 0.30 * 523.6;
@@ -506,7 +546,7 @@ TF::RowLossInput rotor_loss_input()
     in.hub1 = wall(0.25, 100.0, -21.4, 92000.0, 280.0);
     in.shroud1 = wall(0.35, 102.0, -15.3, 93500.0, 281.0);
     in.hub2 = wall(0.25, 96.0, -67.8, 99000.0, 287.0);
-    in.shroud2 = wall(0.35, 98.0, -85.8, 101000.0, 292.0);
+    in.shroud2 = wall(0.354, 98.0, -85.8, 101000.0, 292.0);  // a rising casing: the gap radius is the mean (ours)
     return in;
 }
 
@@ -627,9 +667,35 @@ TEST_CASE("coupling: the Ch. 6 row-level loss adapter (Eqs. 6-85 .. 6-91) and it
 
 namespace {
 
-/// The Ch. 8 march input of a converged through-flow: its wall edges, its rows (from the case), its mdot; a
-/// shrouded row's seal leakage recovered from the adapter's record (Eq. 8-59: mdot_leak = Delta+ 2 pi r rho_e V_me).
-T::EndwallInput march_input(const TF::ThroughflowCase& c, const TF::ThroughflowResult& r, const TF::ChapterEightEndwall& ew)
+/// The wall geometry of a march input, per station: arc length along each wall and the contour angle.
+struct WallGeometry
+{
+    std::vector<double> m_hub, m_shroud, phi_hub, phi_shroud;
+};
+
+/// Straight walls between the stations (a cylinder, a cone): m the sum of the segment lengths, phi = atan2(dr, dz)
+/// of the segment (the same for every segment of a cone; the first segment's at station 0).
+WallGeometry straight_walls(const TF::ThroughflowResult& r)
+{
+    WallGeometry g;
+    for (int side = 0; side < 2; ++side) {
+        std::vector<double>& m = side == 0 ? g.m_hub : g.m_shroud;
+        std::vector<double>& phi = side == 0 ? g.phi_hub : g.phi_shroud;
+        for (std::size_t k = 0; k < r.stations.size(); ++k) {
+            const auto& a = side == 0 ? r.stations[k == 0 ? 0 : k - 1].nodes.front() : r.stations[k == 0 ? 0 : k - 1].nodes.back();
+            const auto& b = side == 0 ? r.stations[k == 0 ? 1 : k].nodes.front() : r.stations[k == 0 ? 1 : k].nodes.back();
+            m.push_back(k == 0 ? 0.0 : m.back() + std::hypot(b.z - a.z, b.r - a.r));
+            phi.push_back(std::atan2(b.r - a.r, b.z - a.z));
+        }
+    }
+    return g;
+}
+
+/// The Ch. 8 march input of a converged through-flow: its wall edges, the wall geometry given, its rows (from the
+/// case, s_bar at the wall's radii on the two quasi-normals), its mdot; a shrouded row's seal leakage recovered from
+/// the adapter's record (Eq. 8-59: mdot_leak = Delta+ 2 pi r rho_e V_me).
+T::EndwallInput march_input(const TF::ThroughflowCase& c, const TF::ThroughflowResult& r, const TF::ChapterEightEndwall& ew,
+                            const WallGeometry& wg)
 {
     T::EndwallInput in;
     in.mass_flow = c.mass_flow;
@@ -642,8 +708,8 @@ T::EndwallInput march_input(const TF::ThroughflowCase& c, const TF::ThroughflowR
             T::EndwallWallStation& w = side == 0 ? s.hub : s.shroud;
             w.z = nd.z;
             w.r = nd.r;
-            w.phi = nd.phi;
-            w.m = side == 0 ? 0.0 : 0.0;
+            w.phi = side == 0 ? wg.phi_hub[k] : wg.phi_shroud[k];
+            w.m = side == 0 ? wg.m_hub[k] : wg.m_shroud[k];
             w.Vm = nd.Wm;
             w.Ctheta = nd.Ctheta;
             w.rho = nd.rho;
@@ -654,11 +720,6 @@ T::EndwallInput march_input(const TF::ThroughflowCase& c, const TF::ThroughflowR
         s.quasi_normal_length = st.y_s;
         in.stations.push_back(s);
     }
-    // the arc length along each wall (straight cylindrical walls here: dz)
-    for (std::size_t k = 0; k < in.stations.size(); ++k) {
-        in.stations[k].hub.m = in.stations[k].hub.z - in.stations[0].hub.z;
-        in.stations[k].shroud.m = in.stations[k].shroud.z - in.stations[0].shroud.z;
-    }
     for (const auto& row : c.rows) {
         T::EndwallBladeRow b;
         b.station_in = row.qn_inlet;
@@ -666,10 +727,12 @@ T::EndwallInput march_input(const TF::ThroughflowCase& c, const TF::ThroughflowR
         for (int side = 0; side < 2; ++side) {
             T::EndwallRowWall& w = side == 0 ? b.hub : b.shroud;
             const auto& sec = side == 0 ? row.sections.front() : row.sections.back();
-            const double rw = side == 0 ? kRh : kRs;
+            const auto& n1 = r.stations[static_cast<std::size_t>(b.station_in)].nodes;
+            const auto& n2 = r.stations[static_cast<std::size_t>(b.station_out)].nodes;
+            const double r1 = side == 0 ? n1.front().r : n1.back().r, r2 = side == 0 ? n2.front().r : n2.back().r;
             w.omega = row.omega;
             w.blade_count = row.n_blades;
-            w.pitch = 2.0 * kPi * rw / row.n_blades;
+            w.pitch = 2.0 * kPi * 0.5 * (r1 + r2) / row.n_blades;
             w.stagger = sec.stagger;
             w.clearance = side == 0 ? row.hub_clearance : row.tip_clearance;
             if (row.shrouded && side == 0) {
@@ -724,7 +787,7 @@ TEST_CASE("coupling: the Ch. 8 adapter in an annulus without rows (Eqs. 8-72, 8-
     }
     CHECK(kb_min < 0.98);  // the layers grow along the walls
     // the adapter's march is Ch. 8's own march on the converged edges, to round-off
-    const T::EndwallResult m = T::analyze_endwalls(march_input(c, r, *ew));
+    const T::EndwallResult m = T::analyze_endwalls(march_input(c, r, *ew, straight_walls(r)));
     double dk = 0.0;
     for (std::size_t k = 0; k < r.stations.size(); ++k) dk = std::max(dk, std::abs(m.stations[k].blockage.K_B - r.stations[k].K_B_endwall));
     CHECK(measure("Ch. 8 adapter vs analyze_endwalls, annulus: max |dK_B|", dk) <= 1e-12);
@@ -770,7 +833,7 @@ TEST_CASE("coupling: the Ch. 8 adapter's row walls (s_bar, gamma_bar, clearance,
     row.omega = 0.0;
     row.n_blades = 44;
     row.shrouded = true;
-    row.leakage_mass_flow = 0.031;
+    row.leakage_mass_flow = -0.031;  // P2 < P1: the seal flows from the inlet to the discharge (Ch. 8 takes the sign)
     row.hub.pitch_mean = 0.0357;
     row.hub.stagger_mean = -0.25;
     row.hub.clearance = 3e-4;
@@ -781,7 +844,7 @@ TEST_CASE("coupling: the Ch. 8 adapter's row walls (s_bar, gamma_bar, clearance,
     const T::EndwallRowWall h = hub_band.row_wall(row, T::EndWall::Hub);
     CHECK(h.shrouded);
     CHECK(h.clearance == 0.0);  // the band's gap is the seal's (Sec. 8.6)
-    CHECK(h.seal_leakage == 0.031);
+    CHECK(h.seal_leakage == -0.031);
     CHECK(h.pitch == 0.0357);
     CHECK(h.stagger == -0.25);
     CHECK(h.blade_count == 44);
@@ -793,7 +856,7 @@ TEST_CASE("coupling: the Ch. 8 adapter's row walls (s_bar, gamma_bar, clearance,
     so.seal_wall = T::EndWall::Shroud;
     const T::EndwallRowWall s2 = TF::ChapterEightEndwall(so).row_wall(row, T::EndWall::Shroud);
     CHECK(s2.shrouded);
-    CHECK(s2.seal_leakage == 0.031);
+    CHECK(s2.seal_leakage == -0.031);
     const T::EndwallRowWall h2 = TF::ChapterEightEndwall(so).row_wall(row, T::EndWall::Hub);
     CHECK_FALSE(h2.shrouded);
     CHECK(h2.clearance == 3e-4);
@@ -813,7 +876,8 @@ TEST_CASE("coupling: the Ch. 8 adapter's row walls (s_bar, gamma_bar, clearance,
 namespace {
 
 /// The Ch. 6 inputs of surface j of row k rebuilt by hand from the converged nodes and evaluated with Correlations.
-T::CascadePerformance hand_ch6(const TF::ThroughflowCase& c, const TF::ThroughflowResult& r, int k, std::size_t j)
+T::CascadePerformance hand_ch6(const TF::ThroughflowCase& c, const TF::ThroughflowResult& r, int k, std::size_t j,
+                            const T::CorrelationOptions& opt = {})
 {
     const TF::BladeRowSpec& row = c.rows[static_cast<std::size_t>(k)];
     const auto& n1 = r.stations[static_cast<std::size_t>(row.qn_inlet)].nodes[j];
@@ -843,7 +907,7 @@ T::CascadePerformance hand_ch6(const TF::ThroughflowCase& c, const TF::Throughfl
     g.max_camber_position = 0.5;
     g.throat_over_pitch = o / pitch;
     g.pitch_over_height = 2.0 * kPi * 0.5 * (kRh + kRs) / row.n_blades / (kRs - kRh);
-    T::InletState in;
+    T::CascadeInletState in;
     in.radius = n1.r;
     in.wm = n1.Wm;
     in.wtheta = n1.Ctheta - row.omega * n1.r;  // Eq. 7-44 (QN1 is solved in the frame of the row before)
@@ -851,21 +915,26 @@ T::CascadePerformance hand_ch6(const TF::ThroughflowCase& c, const TF::Throughfl
     in.mach = std::hypot(in.wm, in.wtheta) / n1.a;
     in.density = n1.rho;
     in.viscosity = 1.716e-5 * std::pow(n1.T / 273.15, 1.5) * (273.15 + 110.4) / (n1.T + 110.4);
-    return T::evaluate(g, in, {n2.r, n2.Wm}, {1.4, 287.05});
+    return T::evaluate(g, in, {n2.r, n2.Wm}, {1.4, 287.05}, opt);
 }
 
 }  // namespace
 
 TEST_CASE("coupling: a synthetic stage (IGV, rotor, shrouded stator) with Ch. 6 and Ch. 8", "[turbolenza][coupling]")
 {
-    for (const auto model : {TF::ThroughflowModel::Approximate, TF::ThroughflowModel::FullNormalEquilibrium}) {
+    // approximate, full, and approximate with Ch. 6's Reynolds correction (K_Re of the node's Re_c = rho1 W1 c / mu(T1))
+    for (int v = 0; v < 3; ++v) {
+        const auto model = v == 1 ? TF::ThroughflowModel::FullNormalEquilibrium : TF::ThroughflowModel::Approximate;
         coupling::StageOptions so;
         so.model = model;
+        so.reynolds_correction = v == 2;
+        T::CorrelationOptions copt;
+        copt.reynolds_correction = so.reynolds_correction;
         const TF::ThroughflowCase c = coupling::synthetic_stage(so);
         const TF::ThroughflowResult r = TF::solve_throughflow(c);
         INFO(r.message);
         REQUIRE(r.status == TF::ThroughflowResult::Status::Converged);
-        const char* mn = model == TF::ThroughflowModel::Approximate ? "approximate" : "full";
+        const char* mn = v == 0 ? "approximate" : v == 1 ? "full" : "approximate, K_Re";
         std::printf("[coupling] stage, %s: %zu passes, max mass error %.2e\n", mn, r.history.size(), max_mass_error(r));
         CHECK(max_mass_error(r) <= 1e-10);  // measured 1.1e-11 (approximate and full)
         const double cp = c.gas.cp();
@@ -891,7 +960,7 @@ TEST_CASE("coupling: a synthetic stage (IGV, rotor, shrouded stator) with Ch. 6 
         const std::size_t jm = q1.nodes.size() / 2;
         for (int k = 0; k < 3; ++k) {
             const auto& nd2 = r.stations[static_cast<std::size_t>(c.rows[static_cast<std::size_t>(k)].qn_inlet + 1)].nodes[jm];
-            const T::CascadePerformance p = hand_ch6(c, r, k, jm);
+            const T::CascadePerformance p = hand_ch6(c, r, k, jm, copt);
             std::printf("[coupling] stage %s, %s mid surface: beta'2 %.4f deg (hand %.4f), omega %.5f (hand %.5f), "
                         "row loss %.5f, K_W %.4f (hand %.4f), i %.2f, delta %.2f deg, D_eq %.3f, M'1 %.3f\n",
                         mn, c.rows[static_cast<std::size_t>(k)].name.c_str(), nd2.beta / kDeg, p.beta2 / kDeg,
@@ -922,7 +991,7 @@ TEST_CASE("coupling: a synthetic stage (IGV, rotor, shrouded stator) with Ch. 6 
         // the end walls: K_B of every station from its own walls, and Ch. 8's march on the converged edges
         const auto ew = std::dynamic_pointer_cast<TF::ChapterEightEndwall>(c.endwall);
         REQUIRE(ew);
-        const T::EndwallResult m = T::analyze_endwalls(march_input(c, r, *ew));
+        const T::EndwallResult m = T::analyze_endwalls(march_input(c, r, *ew, straight_walls(r)));
         double dk = 0.0;
         std::printf("[coupling] stage %s K_B:", mn);
         for (std::size_t k = 0; k < r.stations.size(); ++k) {
@@ -1017,3 +1086,201 @@ TEST_CASE("coupling: BladeGen's default rotor with Ch. 6 and Ch. 8 (simple, appr
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// the wake blockage K_W (Eqs. 6-83, 6-84) and its use in Eq. 7-5
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+
+/// A test wrapper: the adapter evaluated at a FROZEN discharge estimate W_m2 = W_m1 (rho2 = rho1), so that K_W no
+/// longer follows the iterate.  With D_eq > 2 the plain substitution of K_W against W_m2 has a loop gain near -1
+/// (coupling.md, open items) and does not settle; frozen, the case converges and K_W's way into Eq. 7-5 can be
+/// checked.  Records the last output and D_eq per surface.
+class FrozenDischarge final : public TF::BladeRowModel
+{
+public:
+    FrozenDischarge(std::shared_ptr<const TF::CorrelationBladeRow> m, int n)
+        : m_(std::move(m)), kw(static_cast<std::size_t>(n)), deq(static_cast<std::size_t>(n))
+    {
+    }
+    TF::BladeRowDischarge evaluate(const TF::BladeRowInlet& in) const override
+    {
+        TF::BladeRowInlet f = in;
+        f.Wm2 = in.Wm1;
+        f.rho2 = in.rho1;
+        const T::CascadePerformance p = m_->performance(f);
+        const TF::BladeRowDischarge d = m_->evaluate(f);
+        kw[static_cast<std::size_t>(in.stream_surface)] = d.wake_blockage;
+        deq[static_cast<std::size_t>(in.stream_surface)] = p.d_eq;
+        return d;
+    }
+    std::shared_ptr<const TF::CorrelationBladeRow> m_;
+    mutable std::vector<double> kw, deq;
+};
+
+}  // namespace
+
+TEST_CASE("coupling: the wake blockage K_W = (2 / D_eq)^0.9 (Eq. 6-84) through the adapter and into Eq. 7-5",
+          "[turbolenza][coupling]")
+{
+    // by hand: the rotor surface with a strong deceleration W_m 101 -> 55 m/s, D_eq > 2
+    {
+        const TF::CorrelationBladeRow row(rotor_spec());
+        TF::BladeRowInlet in = rotor_inlet();
+        in.Wm2 = 55.0;
+        const T::CascadePerformance p = row.performance(in);
+        REQUIRE(p.d_eq > 2.0);
+        const TF::BladeRowDischarge d = row.evaluate(in);
+        std::printf("[coupling] K_W by hand: D_eq %.4f, K_W %.5f\n", p.d_eq, d.wake_blockage);
+        CHECK(std::abs(d.wake_blockage - std::pow(2.0 / p.d_eq, 0.9)) <= 1e-14);  // 1 - B_wake, Eqs. 6-84, 7-6
+        CHECK(d.wake_blockage < 0.95);
+    }
+    // a single stator with alpha_1 = -40 deg and 22 vanes (D_eq above 2 over most of the span), the discharge frozen
+    TF::ThroughflowCase c;
+    c.model = TF::ThroughflowModel::Approximate;
+    c.mass_flow = 22.0;
+    for (double z : {0.0, 0.06, 0.12, 0.18}) {
+        TF::QuasiNormal q;
+        q.z_hub = q.z_shroud = z;
+        q.r_hub = kRh;
+        q.r_shroud = kRs;
+        c.quasi_normals.push_back(q);
+    }
+    c.inlet = TF::InletProfile::uniform(101325.0, 288.15, TF::InletProfile::Swirl::Alpha, -40.0 * kDeg);
+    TF::BladeRowSpec sta = stage_row("stator", 0.06, 0.12, 22, -1, 0.0);
+    sta.qn_inlet = 1;
+    sta.sections = {section(0.0, -40.0, 0.0, 0.044, 0.08, 22), section(1.0, -40.0, 0.0, 0.044, 0.08, 22)};
+    auto frozen = std::make_shared<FrozenDischarge>(std::make_shared<TF::CorrelationBladeRow>(sta), c.options.n_stream_surfaces);
+    sta.model = frozen;
+    c.rows = {sta};
+    const TF::ThroughflowResult r = TF::solve_throughflow(c);
+    INFO(r.message);
+    REQUIRE(r.status == TF::ThroughflowResult::Status::Converged);
+    const auto& q2 = r.stations[2];
+    double kmin = 1.0;
+    for (std::size_t j = 0; j < q2.nodes.size(); ++j) {
+        CHECK(q2.nodes[j].K_W == frozen->kw[j]);  // the adapter's K_W is the node's, on the discharge quasi-normal only
+        if (frozen->deq[j] > 2.0) CHECK(std::abs(frozen->kw[j] - std::pow(2.0 / frozen->deq[j], 0.9)) <= 1e-14);
+        else CHECK(frozen->kw[j] == 1.0);  // Eq. 6-83
+        CHECK(r.stations[1].nodes[j].K_W == 1.0);
+        CHECK(r.stations[3].nodes[j].K_W == 1.0);
+        kmin = std::min(kmin, q2.nodes[j].K_W);
+    }
+    CHECK(measure("K_W case: the smallest K_W on the stator's discharge quasi-normal", kmin) < 0.95);
+    // Eq. 7-5 on QN2: mdot = 2 pi K_B int K_W r rho W_m cos(eps) dy; without K_W the node data carry more
+    const double with = 2.0 * kPi * trapezoid(q2, [](const TF::ThroughflowNode& n) { return n.K_W * n.r * n.rho * n.Wm * std::cos(n.epsilon); });
+    const double without = 2.0 * kPi * trapezoid(q2, [](const TF::ThroughflowNode& n) { return n.r * n.rho * n.Wm * std::cos(n.epsilon); });
+    CHECK(measure("K_W case: Eq. 7-5 with K_W from the nodes, |mdot / 22 - 1|", std::abs(with / 22.0 - 1.0)) <= 1e-4);
+    CHECK(measure("K_W case: the same without K_W", std::abs(without / 22.0 - 1.0)) > 1e-2);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chapter 8 on sloped and curved walls
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("coupling: the Ch. 8 adapter on a 15-degree cone (sloped walls, swirl) against Ch. 8's march",
+          "[turbolenza][coupling]")
+{
+    // the cone without its rotor (Ch. 8's row step does not converge on this rotor: 'the blade force defect did
+    // not converge in 200 iterations', measured), the inlet swirl kept: sin(phi) acts in Eq. 8-6
+    TF::ThroughflowCase c = coupling::cone_rotor_case();
+    c.rows.clear();
+    for (auto& q : c.quasi_normals) q.hub_wall_omega = 0.0;
+    c.endwall = std::make_shared<TF::ChapterEightEndwall>();
+    const TF::ThroughflowResult r = TF::solve_throughflow(c);
+    INFO(r.message);
+    REQUIRE(r.status == TF::ThroughflowResult::Status::Converged);
+    const auto ew = std::dynamic_pointer_cast<TF::ChapterEightEndwall>(c.endwall);
+    REQUIRE(ew);
+    // the march input with m = the straight segment lengths and phi = atan2(dr, dz) of the contours, by hand
+    const WallGeometry wg = straight_walls(r);
+    for (std::size_t k = 0; k < r.stations.size(); ++k) {
+        CHECK(std::abs(wg.phi_hub[k] - 15.0 * kDeg) <= 1e-12);
+        CHECK(std::abs(ew->records()[k].hub_wall.phi - 15.0 * kDeg) <= 1e-12);  // what the adapter handed over
+        CHECK(std::abs(ew->records()[k].shroud_wall.m - wg.m_shroud[k]) <= 1e-12);
+    }
+    const T::EndwallResult m = T::analyze_endwalls(march_input(c, r, *ew, wg));
+    double dk = 0.0;
+    std::printf("[coupling] cone K_B:");
+    for (std::size_t k = 0; k < r.stations.size(); ++k) {
+        std::printf(" %.6f", r.stations[k].K_B_endwall);
+        dk = std::max(dk, std::abs(m.stations[k].blockage.K_B - r.stations[k].K_B_endwall));
+    }
+    std::printf("\n");
+    CHECK(measure("cone: Ch. 8 adapter vs analyze_endwalls (m, phi of the contours), max |dK_B|", dk) <= 1e-12);
+}
+
+namespace {
+
+/// u of a BladeGen wall spline at axial position z [mm] (z(u) is monotone on every piece: bisection).
+double u_at(const BladeGen::Math::BSpline2& w, double z)
+{
+    double a = w.t0(), b = w.t1();
+    for (int it = 0; it < 200; ++it) {
+        const double mid = 0.5 * (a + b);
+        if (w.eval(mid).x() < z) a = mid;
+        else b = mid;
+    }
+    return 0.5 * (a + b);
+}
+
+/// The arc length of a wall spline from u0 to u1 (composite 5-point Gauss-Legendre on 400 pieces) [mm].
+double arc(const BladeGen::Math::BSpline2& w, double u0, double u1)
+{
+    static const double x[5] = {-0.9061798459386640, -0.5384693101056831, 0.0, 0.5384693101056831, 0.9061798459386640};
+    static const double g[5] = {0.2369268850561891, 0.4786286704993665, 0.5688888888888889, 0.4786286704993665,
+                                0.2369268850561891};
+    const int n = 400;
+    double s = 0.0;
+    for (int p = 0; p < n; ++p) {
+        const double a = u0 + (u1 - u0) * p / n, b = u0 + (u1 - u0) * (p + 1) / n;
+        for (int q = 0; q < 5; ++q) {
+            const auto d = w.derivs(0.5 * (a + b) + 0.5 * (b - a) * x[q], 1);
+            s += 0.5 * (b - a) * g[q] * std::hypot(d[1].x(), d[1].y());
+        }
+    }
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE("coupling: the Ch. 8 adapter on BladeGen's curved walls against Ch. 8's march from the contours",
+          "[turbolenza][coupling]")
+{
+    const TF::ThroughflowCase c = coupling::bladegen_rotor_case(TF::ThroughflowModel::Approximate);
+    const TF::ThroughflowResult r = TF::solve_throughflow(c);
+    REQUIRE(r.status == TF::ThroughflowResult::Status::Converged);
+    const auto ew = std::dynamic_pointer_cast<TF::ChapterEightEndwall>(c.endwall);
+    REQUIRE(ew);
+    // the wall geometry integrated independently along BladeGen's own hub and casing splines (mm -> m)
+    const BladeGen::Blade::FlowPath fp(D::BladeDesign::defaults().meridional);
+    WallGeometry wg;
+    for (int side = 0; side < 2; ++side) {
+        const auto& w = side == 0 ? fp.hub() : fp.casing();
+        const double u0 = u_at(w, 1e3 * r.stations.front().nodes.front().z);
+        for (const auto& st : r.stations) {
+            const double u = u_at(w, 1e3 * st.nodes.front().z);  // radial quasi-normals
+            const auto d = w.derivs(u, 1);
+            (side == 0 ? wg.m_hub : wg.m_shroud).push_back(1e-3 * arc(w, u0, u));
+            (side == 0 ? wg.phi_hub : wg.phi_shroud).push_back(std::atan2(d[1].y(), d[1].x()));
+        }
+    }
+    double dm = 0.0, dphi = 0.0, mlen = 0.0;
+    for (std::size_t k = 0; k < r.stations.size(); ++k) {
+        const auto& rec = ew->records()[k];
+        dm = std::max({dm, std::abs(rec.hub_wall.m - wg.m_hub[k]), std::abs(rec.shroud_wall.m - wg.m_shroud[k])});
+        dphi = std::max({dphi, std::abs(rec.hub_wall.phi - wg.phi_hub[k]), std::abs(rec.shroud_wall.phi - wg.phi_shroud[k])});
+        mlen = std::max(mlen, wg.m_hub[k]);
+    }
+    std::printf("[coupling] BladeGen walls: hub length %.5f m over %zu stations\n", mlen, r.stations.size());
+    // the through-flow's wall m is Eq. 7-58 on the quasi-normal points only (two across the row): short of the
+    // contour's arc where the hub rises inside the row (measured 5.3e-4 m of 0.042 m); the end-wall march takes it
+    CHECK(measure("BladeGen walls: |m handed to Ch. 8 - the contour's arc length| [m]", dm) <= 5e-3);
+    CHECK(measure("BladeGen walls: |phi handed to Ch. 8 - atan2(dr, dz) of the contour| [rad]", dphi) <= 1e-9);
+    const T::EndwallResult m = T::analyze_endwalls(march_input(c, r, *ew, wg));
+    double dk = 0.0;
+    for (std::size_t k = 0; k < r.stations.size(); ++k)
+        dk = std::max(dk, std::abs(m.stations[k].blockage.K_B - r.stations[k].K_B_endwall));
+    CHECK(measure("BladeGen walls: Ch. 8 adapter vs analyze_endwalls from the contours, max |dK_B|", dk) <= 4e-4);  // measured 3.8e-5: the m difference above
+    CHECK(dk > 0.0);
+}

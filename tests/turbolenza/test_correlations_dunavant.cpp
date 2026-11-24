@@ -84,7 +84,7 @@ TEST_CASE("Dunavant's NACA 65-(12A10)10 cascade: design incidence, deviation, lo
 
     // QN1: beta'_1 = 45 deg (W_theta1 = W_m1), a stationary planar cascade; QN2: W_m2 = W_m1, r2 = r1
     // (AVDR 1 assumed: Dunavant's AVDR is not in the book)
-    InletState in;
+    CascadeInletState in;
     in.radius = 1.0;
     in.wm = 100.0;
     in.wtheta = 100.0;

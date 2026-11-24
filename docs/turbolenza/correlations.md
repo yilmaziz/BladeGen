@@ -55,7 +55,7 @@ implemented.
 
 ## API
 
-`evaluate(CascadeGeometry, InletState, DischargeEstimate, Gas, CorrelationOptions) -> CascadePerformance`.
+`evaluate(CascadeGeometry, CascadeInletState, DischargeEstimate, Gas, CorrelationOptions) -> CascadePerformance`.
 This is the per-stream-surface call of Sec. 7.3.
 - Inputs:
   - QN1: r1, W_m1, W_theta1, omega, M'_1, and rho1, mu1 for Re_c.

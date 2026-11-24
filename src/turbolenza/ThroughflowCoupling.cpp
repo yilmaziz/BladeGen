@@ -84,9 +84,9 @@ Gas CorrelationBladeRow::gas_of(const BladeRowInlet& in)
     return gas_from_state(in.P1, in.rho1, in.T1, in.a1, "CorrelationBladeRow (inlet)");
 }
 
-InletState CorrelationBladeRow::inlet_state(const BladeRowInlet& in)
+CascadeInletState CorrelationBladeRow::inlet_state(const BladeRowInlet& in)
 {
-    InletState s;
+    CascadeInletState s;
     s.radius = in.r1;
     s.wm = in.Wm1;
     s.wtheta = in.Wtheta1;  // C_theta1 - omega r1 (Eq. 7-44), the row's frame

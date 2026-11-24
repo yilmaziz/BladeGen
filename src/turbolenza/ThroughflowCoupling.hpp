@@ -25,7 +25,7 @@
 ///
 /// CHAPTER 6 -> CHAPTER 7 (CorrelationBladeRow, CorrelationRowLoss), per stream surface j of a row between
 /// the quasi-normals QN1 (inlet) and QN2 (discharge), both outside the blade (p. 155):
-///  * inlet (Correlations InletState): r1, W_m1, W_theta1 = C_theta1 - omega r1 (Eq. 7-44), omega, M'_1 =
+///  * inlet (Correlations CascadeInletState): r1, W_m1, W_theta1 = C_theta1 - omega r1 (Eq. 7-44), omega, M'_1 =
 ///    W1 / a1, rho1 and mu1 = mu(T1) by Sutherland's law at the static T1 (the through-flow's gas): Re_c =
 ///    rho1 W1 c / mu1 (ours, the book names Re_c only; Correlations.hpp computes it from these);
 ///  * discharge estimate (DischargeEstimate): r2 and the through-flow's current W_m2 (p. 163);
@@ -35,8 +35,9 @@
 ///    BladeRowSpec::sections, which a BladeGen layer set fills through ThroughflowBladeGen.hpp or a plain table
 ///    by hand): chord, camber theta = kappa_1 - kappa_2, t_b / c, a / c (0.5 for the circular arc and the NACA 65
 ///    equivalent arc, Eq. 4-35, whatever the section's measured value; ours); solidity c / s with the through-flow's
-///    pitch s = 2 pi r_mean / Z, r_mean = (r1 + r2) / 2; o / s = throat / s (ours: o is taken where the
-///    section gives it, s at r_mean);
+///    pitch s = 2 pi r_mean / Z, r_mean = (r1 + r2) / 2 of the quasi-normal points (ours: the q3d contract
+///    Sec. 2.1 takes s at the mean of the LE and TE radii of the cut; 0.07244 against 0.07246 m on BladeGen's
+///    default rotor); o / s = throat / s (ours: o is taken where the section gives it, s at r_mean);
 ///  * the stagger (StaggerSource): MetalAngles (default, ours) places the chord line so that the Ch. 4
 ///    camberline of camber theta has the section's metal angles exactly, gamma = kappa_1 - chi_1(theta, a / c)
 ///    in the cascade frame (for a circular arc gamma = (kappa_1 + kappa_2) / 2): Ch. 6 measures incidence and
@@ -66,8 +67,8 @@
 /// clearance is 0 (its leakage is the seal's, Sec. 8.6) and the seal leakage is the row-level model's.  No
 /// damping of K_B (p. 195 asks for "some limits and numerical damping" without a form; none is applied, ours).
 ///
-/// CHAPTER 7 -> BLADE-TO-BLADE: ThroughflowSheet.hpp (a header of its own: Correlations.hpp and Case.hpp,
-/// through Flow.hpp, both declare BladeGen::Turbolenza::InletState, so no translation unit can include both).
+/// CHAPTER 7 -> BLADE-TO-BLADE: ThroughflowSheet.hpp (a header of its own: it needs the blade-to-blade case,
+/// Case.hpp, which the Ch. 6 and Ch. 8 adapters do not).
 #pragma once
 
 #include "turbolenza/Correlations.hpp"
@@ -117,7 +118,7 @@ public:
 
     // the mapping (public for the tests)
     [[nodiscard]] CascadeGeometry cascade_geometry(const BladeRowInlet& in) const;
-    [[nodiscard]] static InletState inlet_state(const BladeRowInlet& in);
+    [[nodiscard]] static CascadeInletState inlet_state(const BladeRowInlet& in);
     [[nodiscard]] static DischargeEstimate discharge_estimate(const BladeRowInlet& in);
     /// R = P1 / (rho1 T1), gamma = a1^2 rho1 / P1.  ThroughflowError for a non-physical state.
     [[nodiscard]] static Gas gas_of(const BladeRowInlet& in);

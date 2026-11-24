@@ -43,10 +43,28 @@ struct Ticks
     QStringList label;
 };
 
-Ticks makeTicks(double a, double b, bool log, int n)
+/// mode 0: linear, 1: symmetric log, 2: log10 (the axis holds exponents)
+Ticks makeTicks(double a, double b, int mode, int n)
 {
     Ticks k;
     if (a > b) std::swap(a, b);
+    if (mode == 2) {
+        const double lo = std::ceil(a - 1e-9), hi = std::floor(b + 1e-9);
+        const double step = std::max(1.0, std::ceil((hi - lo + 1.0) / std::max(n, 2)));
+        for (double e = lo; e <= hi + 1e-9; e += step) {
+            k.t.push_back(e);
+            k.label << QString("1e%1").arg(static_cast<int>(std::lround(e)));
+        }
+        if (k.t.size() >= 2) return k;
+        k = {};  // less than two decades visible: plain ticks of the value
+        const double st = niceStep(b - a, n);
+        for (double v = std::ceil(a / st - 1e-9) * st; v <= b + 1e-9 * st; v += st) {
+            k.t.push_back(v);
+            k.label << QString::number(std::pow(10.0, v), 'g', 3);
+        }
+        return k;
+    }
+    const bool log = mode == 1;
     if (log) {
         QVector<double> vals = {0.0};
         for (double d = 1; d <= 1e9; d *= 10) {
@@ -104,11 +122,11 @@ void PlotWidget::setColorBar(bool on, double lo, double hi, const QString& label
 
 QPointF PlotWidget::toData(const QPointF& p) const
 {
-    const double y = symlogY ? symlog(p.y()) : p.y();
+    const double y = symlogY ? symlog(p.y()) : logY ? (p.y() > 0.0 ? std::log10(p.y()) : std::numeric_limits<double>::quiet_NaN()) : p.y();
     return swapAxes ? QPointF(y, p.x()) : QPointF(p.x(), y);
 }
 
-double PlotWidget::untransformY(double y) const { return symlogY ? symexp(y) : y; }
+double PlotWidget::untransformY(double y) const { return symlogY ? symexp(y) : logY ? std::pow(10.0, y) : y; }
 
 QPointF PlotWidget::dataAt(const QPointF& screen) const
 {
@@ -254,9 +272,9 @@ void PlotWidget::resizeEvent(QResizeEvent*)
 
 void PlotWidget::drawAxes(QPainter& p, const QRect& r)
 {
-    const bool xlog = symlogY && swapAxes, ylog = symlogY && !swapAxes;
-    const auto tx = makeTicks(x0_, x1_, xlog, std::max(3, r.width() / 90));
-    const auto ty = makeTicks(y0_, y1_, ylog, std::max(3, r.height() / 45));
+    const int ymode = symlogY ? 1 : logY ? 2 : 0;
+    const auto tx = makeTicks(x0_, x1_, swapAxes ? ymode : 0, std::max(3, r.width() / 90));
+    const auto ty = makeTicks(y0_, y1_, swapAxes ? 0 : ymode, std::max(3, r.height() / 45));
     QPen grid(QColor(190, 190, 190), 0, Qt::DotLine);
     grid.setCosmetic(true);
     QPen axis(QColor(60, 60, 60), 0);
@@ -279,7 +297,7 @@ void PlotWidget::drawAxes(QPainter& p, const QRect& r)
         const double sx = toScreen({0, 0}).x();
         p.drawLine(QPointF(sx, r.top()), QPointF(sx, r.bottom()));
     }
-    if (y0_ < 0 && y1_ > 0) {
+    if (y0_ < 0 && y1_ > 0 && !(logY && !swapAxes)) {  // no "zero" line on a log axis (it would be y = 1)
         const double sy = toScreen({0, 0}).y();
         p.drawLine(QPointF(r.left(), sy), QPointF(r.right(), sy));
     }
@@ -450,7 +468,7 @@ void PlotWidget::paintEvent(QPaintEvent*)
         p.setPen(QPen(Qt::black, 0));
         p.setBrush(Qt::NoBrush);
         p.drawRect(cb);
-        const auto tk = makeTicks(cb_lo_, cb_hi_, false, 6);
+        const auto tk = makeTicks(cb_lo_, cb_hi_, 0, 6);
         for (int i = 0; i < tk.t.size(); ++i) {
             const double f = (tk.t[i] - cb_lo_) / std::max(cb_hi_ - cb_lo_, 1e-300);
             const int y = static_cast<int>(cb.bottom() - f * cb.height());

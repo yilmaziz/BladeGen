@@ -1,12 +1,17 @@
 // bladegen_designer: the BladeGen desktop designer (Qt Widgets, MDI).
 //
 //   bladegen_designer [design.json] [--screenshot out.png] [--self-test out_dir]
+//                     [--turbolenza-self-test out_dir [--turbolenza-passes n]]
 //
 // --screenshot  evaluates the design, renders the default layout and writes the window image
 // --self-test   additionally cycles every view content over every layer, writes one image per
 //               content to out_dir and exits non-zero when a view fails (CI, offscreen)
+// --turbolenza-self-test  opens the TURBOlenza window, takes the Mid layer, generates a
+//               very_coarse mesh, runs a short solve (20 passes), opens the post-processing
+//               views and saves their PNGs and the exported run into out_dir
 #include "DesignerWindow.hpp"
 #include "OcctView.hpp"
+#include "turbolenza/TurbolenzaWindow.hpp"
 
 #include <QApplication>
 #include <QMdiSubWindow>
@@ -35,13 +40,22 @@ int main(int argc, char** argv)
     cli.addPositionalArgument("design", "design file (bladegen-design-2, or a v1.0.1 bladegen-design-1)");
     QCommandLineOption shot("screenshot", "write the window image and exit", "png");
     QCommandLineOption self("self-test", "render every view content and exit", "dir");
+    QCommandLineOption tl_self("turbolenza-self-test", "run the TURBOlenza window's self-test and exit", "dir");
+    QCommandLineOption tl_passes("turbolenza-passes", "passes of the TURBOlenza self-test solve (default 20)", "n", "20");
     cli.addOption(shot);
     cli.addOption(self);
+    cli.addOption(tl_self);
+    cli.addOption(tl_passes);
     cli.process(app);
 
     Designer::DesignerWindow w;
-    if (!cli.positionalArguments().isEmpty() && !w.openDesign(cli.positionalArguments().front(), cli.isSet(shot) || cli.isSet(self))) return 2;
+    if (!cli.positionalArguments().isEmpty() && !w.openDesign(cli.positionalArguments().front(), cli.isSet(shot) || cli.isSet(self) || cli.isSet(tl_self))) return 2;
     w.show();
+    if (cli.isSet(tl_self)) {
+        w.settle();
+        auto* tw = w.openTurbolenza();
+        return tw->selfTest(cli.value(tl_self), std::max(1, cli.value(tl_passes).toInt()));
+    }
     if (cli.isSet(self)) {
         const QString dir = cli.value(self);
         QDir().mkpath(dir);

@@ -332,7 +332,8 @@ ContourGeometry contourGeometry(const T::Field& x, const T::Field& y, const T::F
     return out;
 }
 
-void drawContours(PlotWidget* w, const T::SolutionData& s, ContourField f, int bands, bool isolines, const QString& title)
+void drawContours(PlotWidget* w, const T::SolutionData& s, ContourField f, int bands, bool isolines, const QString& title,
+                  const T::ViscousData* layers)
 {
     const T::Field& v = f == ContourField::Mach ? s.mach : s.pressure;
     const auto& g = s.grid;
@@ -360,13 +361,58 @@ void drawContours(PlotWidget* w, const T::SolutionData& s, ContourField f, int b
         o << b.front();
         series << line("blade", o, QColor(51, 51, 51), 1.0, Qt::SolidLine, false);
     }
+    QVector<PointMarker> marks;
+    if (layers) {  // the boundary layer on the blades: delta* and delta normal to the wall, into the passage
+        const int J = g.n_eta() - 1, i0 = g.first_blade_i, i1 = g.last_blade_i;
+        const bool lower_is_suction = g.wall_identity.lower.surface.empty() || g.wall_identity.lower.surface[0] == T::Surface::Suction;
+        const double c = s.c_ref > 0.0 ? s.c_ref : 1.0;
+        // the offset wall line of one wall (j = 0 or J) at the blade stations; the thickness in metres
+        auto offset = [&](int j, const std::vector<double>& t, double dy) {
+            QVector<QPointF> out;
+            if (static_cast<int>(t.size()) != i1 - i0 + 1) return out;
+            const int jin = j == 0 ? 1 : J - 1;
+            for (int i = i0; i <= i1; ++i) {
+                const int a = std::max(i - 1, i0), b = std::min(i + 1, i1);
+                double tm = g.node_m(b, j) - g.node_m(a, j), ty = g.node_y(b, j) - g.node_y(a, j);
+                const double len = std::hypot(tm, ty);
+                if (!(len > 0.0) || !std::isfinite(t[static_cast<std::size_t>(i - i0)])) {
+                    out << QPointF(kNaN, kNaN);
+                    continue;
+                }
+                double nm = -ty / len, ny = tm / len;
+                if (nm * (g.node_m(i, jin) - g.node_m(i, j)) + ny * (g.node_y(i, jin) - g.node_y(i, j)) < 0.0) nm = -nm, ny = -ny;
+                const double h = t[static_cast<std::size_t>(i - i0)] / c;
+                out << QPointF(g.node_m(i, j) + nm * h, g.node_y(i, j) + ny * h + dy);
+            }
+            return out;
+        };
+        const T::BoundaryLayerSurfaceData* side[2] = {&layers->suction, &layers->pressure_side};
+        const int wall[2] = {lower_is_suction ? 0 : J, lower_is_suction ? J : 0};
+        for (int k = -1; k <= 1; ++k)
+            for (int q = 0; q < 2; ++q) {
+                series << line("boundary layer δ*", offset(wall[q], side[q]->delta_star, k * pitch), Qt::black, 1.6, Qt::SolidLine, false)
+                       << line("boundary layer δ", offset(wall[q], side[q]->delta, k * pitch), Qt::black, 1.0, Qt::DashLine, false);
+            }
+        for (int q = 0; q < 2; ++q) {  // the separation points, at the wall node of their station
+            const auto& d = *side[q];
+            for (const double xc : {d.separation_x_c, d.laminar_separation_x_c}) {
+                if (!std::isfinite(xc) || d.x_c.empty() || static_cast<int>(d.x_c.size()) != i1 - i0 + 1) continue;
+                std::size_t best = 0;
+                for (std::size_t b = 1; b < d.x_c.size(); ++b)
+                    if (std::abs(d.x_c[b] - xc) < std::abs(d.x_c[best] - xc)) best = b;
+                const int i = i0 + static_cast<int>(best);
+                marks << PointMarker{QPointF(g.node_m(i, wall[q]), g.node_y(i, wall[q])), Qt::black, 'x',
+                                     xc == d.separation_x_c ? "separation" : "laminar separation", 7.0, 2.0};
+            }
+        }
+    }
     const QString label = f == ContourField::Mach ? "relative Mach number" : "static pressure [Pa]";
     w->setTitle(title);
     w->setLabels("m / c (axial)", "y / c (tangential)");
     w->proportional = true;
     w->showLegend = false;
     w->setFills(fills);
-    w->setMarkers({});
+    w->setMarkers(marks);
     w->setSeries(series);
     w->setColorBar(true, lo, hi, label, [bands](double t) {
         return bandColor(std::clamp(static_cast<int>(std::floor(t * bands)), 0, bands - 1), bands);

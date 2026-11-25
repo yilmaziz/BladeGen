@@ -798,6 +798,11 @@ void TurbolenzaWindow::showContours()
         row->addWidget(new QLabel("bands", contour_win_));
         row->addWidget(bands_);
         row->addWidget(isolines_);
+        contour_bl_ = new QCheckBox("boundary layer (δ*, δ)", contour_win_);
+        contour_bl_->setChecked(false);
+        contour_bl_->setToolTip("a viscous run: the displacement thickness δ* (solid) and the layer thickness δ (dashed) drawn "
+                                "normal to the blade surfaces, and the separation points (x); the wake is not drawn");
+        row->addWidget(contour_bl_);
         row->addStretch(1);
         contour_win_->box->addLayout(row);
         contour_plot_ = new PlotWidget(contour_win_);
@@ -805,6 +810,7 @@ void TurbolenzaWindow::showContours()
         connect(contour_field_, &QComboBox::currentIndexChanged, this, [this] { redrawContours(); });
         connect(bands_, &QSpinBox::valueChanged, this, [this] { redrawContours(); });
         connect(isolines_, &QCheckBox::toggled, this, [this] { redrawContours(); });
+        connect(contour_bl_, &QCheckBox::toggled, this, [this] { redrawContours(); });
     }
     redrawContours();
     contour_win_->show();
@@ -825,8 +831,9 @@ void TurbolenzaWindow::redrawContours()
                               .arg(mach ? "Relative Mach number" : "Static pressure [Pa]")
                               .arg(r.solution->exit_angle * kDeg, 0, 'f', 3)
                               .arg(r.converged ? "" : "  [NOT CONVERGED]");
+    contour_bl_->setEnabled(r.viscous.has_value());
     Tl::drawContours(contour_plot_, *r.solution, mach ? Tl::ContourField::Mach : Tl::ContourField::Pressure, bands_->value(),
-                     isolines_->isChecked(), title);
+                     isolines_->isChecked(), title, r.viscous && contour_bl_->isChecked() ? &*r.viscous : nullptr);
     contour_plot_->setBadge({});
 }
 
@@ -1174,6 +1181,21 @@ int TurbolenzaWindow::selfTest(const QString& dir, int passes)
         if (n56 != 48 || n57 != 102 || !sep56 || n56_off != 0)
             return fail("the Aungier Fig. 5-6 / 5-7 overlays are not 24 + 24 / 51 + 51 points with the Fig. 5-6 separation", 48);
         if (has != marked) return fail("the boundary layer's separation is not marked on the loading", 49);
+        // the boundary layer on the contours: both walls' delta* and delta at every blade station (x 3 blade copies)
+        auto bl_points = [this] {
+            int n = 0;
+            for (const auto& x : contour_plot_->series())
+                if (x.name.startsWith("boundary layer"))
+                    for (const auto& p : x.pts) n += std::isfinite(p.x()) ? 1 : 0;
+            return n;
+        };
+        contour_bl_->setChecked(true);
+        const int bl_on = bl_points();
+        contour_bl_->setChecked(false);
+        const int bl_off = bl_points();
+        const int stations = result_->solution->grid.last_blade_i - result_->solution->grid.first_blade_i + 1;
+        if (bl_off != 0 || bl_on != (result_->viscous ? 3 * 2 * 2 * stations : 0))
+            return fail("the boundary layer on the contours is not delta* and delta at every blade station of both walls", 50);
     }
     QStringList files;
     try {

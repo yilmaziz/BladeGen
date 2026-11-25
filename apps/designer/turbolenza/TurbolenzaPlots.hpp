@@ -51,7 +51,10 @@ void drawResiduals(PlotWidget* w, const std::vector<T::PassRecord>& records, dou
 
 enum class ContourField { Pressure, Mach };
 /// bands: number of colour bands; isolines: thin lines at the band edges.
-void drawContours(PlotWidget* w, const T::SolutionData& s, ContourField f, int bands, bool isolines, const QString& title);
+/// layers: the boundary layer drawn on the blades (delta* solid, delta dashed, normal to the wall, and the separation
+/// points x); null: none.  The wake is not drawn.
+void drawContours(PlotWidget* w, const T::SolutionData& s, ContourField f, int bands, bool isolines, const QString& title,
+                  const T::ViscousData* layers = nullptr);
 
 enum class LoadingQuantity { Mach, Pressure, DunavantS };
 /// Optional overlays of the blade-loading plot.

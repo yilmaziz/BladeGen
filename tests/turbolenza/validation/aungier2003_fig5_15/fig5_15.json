@@ -1,0 +1,201 @@
+{
+ "source": "Aungier, R. H., Axial-Flow Compressors (ASME Press, 2003), Ch. 5, Fig. 5-15 'Boundary Layer Analysis Result', printed p. 113: NACA 65(12A10)-10, alpha = 12 deg, beta_in = 45 deg, M_in = 0.65; boundary-layer shape factor H = delta*/theta (Eq. 5-129) on the suction and pressure surfaces vs x/c, edge conditions from the potential-flow solution of Fig. 5-6",
+ "method": "digitized from the PDF's embedded raster (1057 x 801 px) by tools/turbolenza_reference digitization: axes calibrated on the 11 x and 6 y tick marks (least squares); the plotted curves are polylines, so their vertices are taken: near the LE as intersections of straight-line fits through the line centres, the transition points as the centres of the transition dots, downstream of transition by Douglas-Peucker simplification (1.0 px) of the column-scanned line centres",
+ "uncertainty": "about 0.5 px: x/c +- 0.0006, H +- 0.0021 (one pixel 0.00118 in x/c, 0.00424 in H)",
+ "calibration": {
+  "x_per_px": 0.0011758407881521233,
+  "x_tick_rms": 0.00029274309075896787,
+  "H_per_px": -0.004238559599798531,
+  "H_tick_rms": 0.0011201467977286206,
+  "frame_check": {
+   "top_row16_H": 3.7994310945334817,
+   "bottom_row677_H": 0.9977431990666523,
+   "left_frame_col102_x": -0.04901075344993647,
+   "right_frame_col1037_x": 1.0504003834722988
+  }
+ },
+ "le_fit_rms_px": {
+  "SS_a": 1.5385522370697434e-16,
+  "SS_b": 0.1644295691079443,
+  "SS_c": 0.031043430315389992,
+  "PS_a": 0.07136716136683663,
+  "PS_b": 0.2157468352076909,
+  "PS_c": 0.05070722756577618
+ },
+ "junction_distance_from_ps_line_px": 1.3372272664039624,
+ "transition": {
+  "suction": [
+   0.1297,
+   1.8969
+  ],
+  "pressure": [
+   0.1732,
+   1.6553
+  ],
+  "disc_core_pixels": [
+   166,
+   166
+  ]
+ },
+ "separation_start_suction_x_c": 0.7459,
+ "suction": [
+  [
+   0.0,
+   2.9547
+  ],
+  [
+   0.0426,
+   2.8819
+  ],
+  [
+   0.0863,
+   2.9972
+  ],
+  [
+   0.1297,
+   1.8969
+  ],
+  [
+   0.1662,
+   1.9048
+  ],
+  [
+   0.2579,
+   1.909
+  ],
+  [
+   0.3061,
+   1.9006
+  ],
+  [
+   0.3943,
+   1.9006
+  ],
+  [
+   0.4319,
+   1.9133
+  ],
+  [
+   0.4778,
+   1.9578
+  ],
+  [
+   0.5224,
+   2.032
+  ],
+  [
+   0.566,
+   2.1167
+  ],
+  [
+   0.6059,
+   2.21
+  ],
+  [
+   0.6506,
+   2.3604
+  ],
+  [
+   0.6965,
+   2.6042
+  ],
+  [
+   0.7376,
+   2.6656
+  ],
+  [
+   0.7459,
+   2.6635
+  ]
+ ],
+ "suction_separated": [
+  [
+   0.7459,
+   2.6635
+  ],
+  [
+   0.7517,
+   2.6571
+  ],
+  [
+   1.0,
+   2.5123
+  ]
+ ],
+ "suction_separated_line_rms_px": 0.7546084684536007,
+ "pressure": [
+  [
+   0.0,
+   2.8802
+  ],
+  [
+   0.0429,
+   3.2135
+  ],
+  [
+   0.1296,
+   2.7996
+  ],
+  [
+   0.1732,
+   1.6553
+  ],
+  [
+   0.1873,
+   1.659
+  ],
+  [
+   0.2191,
+   1.6674
+  ],
+  [
+   0.3884,
+   1.6717
+  ],
+  [
+   0.4154,
+   1.6844
+  ],
+  [
+   0.4319,
+   1.6844
+  ],
+  [
+   0.4789,
+   1.7119
+  ],
+  [
+   0.747,
+   1.9196
+  ],
+  [
+   0.8329,
+   1.9726
+  ],
+  [
+   0.8705,
+   1.9874
+  ],
+  [
+   0.9093,
+   1.9663
+  ],
+  [
+   0.914,
+   1.9578
+  ],
+  [
+   0.9587,
+   1.7819
+  ],
+  [
+   0.9975,
+   1.5827
+  ],
+  [
+   1.0,
+   1.5766
+  ]
+ ],
+ "note": "H on the suction surface after separation_start is the dashed part (separated, H_k limited, Aungier p. 111); the LE segments before transition are laminar (Gruschwitz), after transition turbulent (Head / Green)"
+}

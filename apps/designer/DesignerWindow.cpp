@@ -1,6 +1,7 @@
 #include "DesignerWindow.hpp"
 
 #include "ParameterPanel.hpp"
+#include "turbolenza/TurbolenzaWindow.hpp"
 #include "design/DesignSolid.hpp"
 
 #include <QApplication>
@@ -147,6 +148,10 @@ void DesignerWindow::buildMenus()
     view->addAction("&Default layout", this, &DesignerWindow::defaultLayout);
     view->addAction("Zoom fit all", this, [this] { refreshViews(true); });
 
+    auto* tl = menuBar()->addMenu("T&URBOlenza");
+    tl->addAction("&TURBOlenza...", this, [this] { openTurbolenza(); })
+        ->setToolTip("the blade-to-blade potential-flow solver on a copy of one layer (its own window)");
+
     auto* help = menuBar()->addMenu("&Help");
     help->addAction("&About", this, [this] {
         QMessageBox::about(this, "BladeGen Designer",
@@ -174,6 +179,15 @@ void DesignerWindow::buildMenus()
     });
     tb->addSeparator();
     tb->addAction("Export STEP", this, &DesignerWindow::exportStep);
+}
+
+TurbolenzaWindow* DesignerWindow::openTurbolenza()
+{
+    if (!turbolenza_) turbolenza_ = new TurbolenzaWindow(s_, this);  // its own top-level window, closed with the designer
+    turbolenza_->show();
+    turbolenza_->raise();
+    turbolenza_->activateWindow();
+    return turbolenza_;
 }
 
 ContentView* DesignerWindow::addView(Content c)

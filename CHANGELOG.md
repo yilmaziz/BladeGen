@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — TURBOlenza: the blade-to-blade solver window (branch `feat/turbolenza`, in testing)
+
+### New
+- **TURBOlenza** (menu *TURBOlenza → TURBOlenza...*): Aungier's blade-to-blade compressible potential-flow
+  solver (2003, Ch. 5) for a planar cascade of one design layer, as its own window. The pages are pre-processing
+  (Blade, a copy of a layer with BladeGen's knobs; Cascade; Mesh; Solver), Run (one line per pass in the
+  terminal, live residuals) and post-processing (residuals, pressure / Mach contours with iso-lines, blade
+  loading). *Save results...* writes CSV, JSON and PNG files to a chosen folder.
+- `src/turbolenza`: the C++ port of the verified TURBOlenza v1 Python solver (`turbolenza.b2b` @ 67599a6),
+  with v1's cascade generation, grid generation (five standard levels; the first and last blade nodes inside
+  the passage, Aungier Fig. 5-5), discretization, density + Kutta loop and post-processing. It matches v1 to
+  round-off: on the M1 0.65 medium case, 254 passes and beta_out 23.5712 deg in both.
+- Parallel solve: OpenMP node loops and a choice of sparse direct solver, Eigen SparseLU or Intel MKL PARDISO
+  (when `mkl-devel` is installed), on 1 to 10 cores. See `docs/turbolenza/README.md`.
+
 ## v1.0.4 — Stacking on a reference point (DLR variants 1 and 2, centre of gravity) and `bladegen export-sections`
 
 ### New

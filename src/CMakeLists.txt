@@ -37,3 +37,5 @@ target_link_libraries(bladegen_lib
     PUBLIC  Eigen3::Eigen bladegen::occt bladegen::json
     PRIVATE bladegen::compiler_flags)
 set_target_properties(bladegen_lib PROPERTIES OUTPUT_NAME bladegen_core)
+
+add_subdirectory(turbolenza)

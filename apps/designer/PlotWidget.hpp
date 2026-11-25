@@ -3,7 +3,7 @@
 // filled polygons (contour plots) with a colour bar, a status badge, legend, axis labels.
 // Interaction: wheel = zoom at the cursor, left drag = pan, double click = zoom fit; the
 // cursor position is shown bottom left.  View options: legend, points, swap axes,
-// proportional axes, flip x / y, symmetric-log y (curvature).
+// proportional axes, flip x / y, symmetric-log y (curvature), log y (residuals).
 #pragma once
 
 #include <QColor>
@@ -27,6 +27,7 @@ struct Series
     bool legend = true;
     bool markers = false;      ///< draw point markers even when "show points" is off
     int marker_size = 3;
+    char marker_shape = 's';  ///< 's' square, 'o' circle, '^' triangle (hollow)
 };
 
 struct PointMarker
@@ -83,10 +84,13 @@ public:
     // view options
     bool showLegend = true, showPoints = false, swapAxes = false, proportional = false, flipX = false, flipY = false;
     bool symlogY = false;      ///< y' = sign(y) log10(1 + |y|) (linear below 1)
+    bool logY = false;         ///< y' = log10(y), decades on the axis; y <= 0 is not drawn (residuals)
     bool showBadge = true;     ///< status box (top left)
 
     void zoomFit();
     [[nodiscard]] QString csv() const;  ///< every series as name,x,y rows
+    [[nodiscard]] const QVector<PointMarker>& markers() const { return markers_; }  ///< for the self-tests
+    [[nodiscard]] const QVector<Series>& series() const { return series_; }          ///< for the self-tests
     [[nodiscard]] QImage image();
 
 signals:

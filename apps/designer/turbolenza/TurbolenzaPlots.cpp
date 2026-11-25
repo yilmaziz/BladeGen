@@ -374,7 +374,41 @@ void drawContours(PlotWidget* w, const T::SolutionData& s, ContourField f, int b
     w->commit(true);
 }
 
-void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title, const T::ViscousData* inviscid)
+namespace {
+// Dunavant (1955), measured blade loading of the NACA 65-(12A10)10 cascade (x/c, Mach number, S), as supplied
+// by the user; kept equal to tests/turbolenza/validation/dunavant1955/loading.csv
+struct DunavantPoint
+{
+    double x_c, mach, S;
+};
+const DunavantPoint kDunavant1955Suction[] = {
+    {0.0211, 0.6318, 1.0586},
+    {0.0518, 0.75, 1.3987},
+    {0.1025, 0.8204, 1.6047},
+    {0.1986, 0.8863, 1.7962},
+    {0.302, 0.8697, 1.7481},
+    {0.4019, 0.8531, 1.7},
+    {0.5035, 0.8185, 1.5991},
+    {0.6016, 0.7513, 1.4025},
+    {0.707, 0.6801, 1.1962},
+    {0.7996, 0.595, 0.9564},
+    {0.9049, 0.5561, 0.8508}};
+const DunavantPoint kDunavant1955Pressure[] = {
+    {0.0211, 0.6436, 1.0921},
+    {0.0593, 0.5762, 0.9051},
+    {0.1029, 0.5513, 0.838},
+    {0.1955, 0.5348, 0.7947},
+    {0.3025, 0.5256, 0.7705},
+    {0.4024, 0.5087, 0.7272},
+    {0.5022, 0.48, 0.6551},
+    {0.6002, 0.4522, 0.5878},
+    {0.7019, 0.4357, 0.5493},
+    {0.7999, 0.4189, 0.5108}};
+
+}  // namespace
+
+void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title, const T::ViscousData* inviscid,
+                 bool dunavant1955)
 {
     auto pts = [&](const T::SurfaceData& d) {
         QVector<QPointF> out;
@@ -389,6 +423,18 @@ void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, con
     if (both)
         series << line("suction side (inviscid, k = 0)", pts(inviscid->inviscid_suction), kSuction, 1.1, Qt::DashLine)
                << line("pressure side (inviscid, k = 0)", pts(inviscid->inviscid_pressure_side), kPressure, 1.1, Qt::DashLine);
+    if (dunavant1955 && q != LoadingQuantity::Pressure) {  // measured points only (no p in Pa)
+        auto measured = [&](const char* name, const auto& data, const QColor& c) {
+            QVector<QPointF> out;
+            for (const auto& d : data) out << QPointF(d.x_c, q == LoadingQuantity::Mach ? d.mach : d.S);
+            Series m = line(name, out, c, 1.4, Qt::NoPen);
+            m.markers = true;
+            m.marker_size = 4;
+            return m;
+        };
+        series << measured("suction side, Dunavant (1955) measured", kDunavant1955Suction, kSuction)
+               << measured("pressure side, Dunavant (1955) measured", kDunavant1955Pressure, kPressure);
+    }
     if (q == LoadingQuantity::Mach) series << line("M = 1", {QPointF(0.0, 1.0), QPointF(1.0, 1.0)}, QColor(85, 85, 85), 0.9, Qt::DashLine);
     const QString yl = q == LoadingQuantity::Mach       ? "surface relative Mach number"
                        : q == LoadingQuantity::Pressure ? "surface static pressure p [Pa]"

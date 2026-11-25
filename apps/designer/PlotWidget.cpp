@@ -376,6 +376,11 @@ void PlotWidget::paintEvent(QPaintEvent*)
         }
         flush();
         if (showPoints || s.markers) {
+            if (s.style == Qt::NoPen) {  // a markers-only series: draw its points in its colour
+                QPen mp(s.color, 1.4);
+                mp.setCosmetic(true);
+                p.setPen(mp);
+            }
             const double m = s.marker_size;
             for (const auto& q : s.pts) {
                 const QPointF t = toData(q);

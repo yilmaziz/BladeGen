@@ -846,10 +846,16 @@ void TurbolenzaWindow::showLoading()
         loading_inviscid_->setToolTip("a viscous run: the reported loading is the coupled one; this adds the inviscid "
                                       "solution's (dashed)");
         row->insertWidget(row->count() - 1, loading_inviscid_);
+        loading_dunavant_ = new QCheckBox("Dunavant (1955), measured", loading_win_);
+        loading_dunavant_->setChecked(false);
+        loading_dunavant_->setToolTip("the measured loading of the Dunavant cascade, NACA 65-(12A10)10 (Mach number and "
+                                      "S only; tests/turbolenza/validation/dunavant1955)");
+        row->insertWidget(row->count() - 1, loading_dunavant_);
         loading_plot_ = new PlotWidget(loading_win_);
         loading_win_->box->addWidget(loading_plot_, 1);
         connect(loading_q_, &QComboBox::currentIndexChanged, this, [this] { redrawLoading(); });
         connect(loading_inviscid_, &QCheckBox::toggled, this, [this] { redrawLoading(); });
+        connect(loading_dunavant_, &QCheckBox::toggled, this, [this] { redrawLoading(); });
     }
     redrawLoading();
     loading_win_->show();
@@ -872,7 +878,8 @@ void TurbolenzaWindow::redrawLoading()
     QString title = QString("%1: β_out %2°%3").arg(what).arg(r.solution->exit_angle * kDeg, 0, 'f', 3).arg(r.converged ? "" : "  [NOT CONVERGED]");
     if (coupled) title += QString("  (coupled; inviscid β_out %1°)").arg(r.viscous->inviscid_exit_angle * kDeg, 0, 'f', 3);
     Tl::drawLoading(loading_plot_, *r.solution, q == 0 ? Tl::LoadingQuantity::Mach : q == 1 ? Tl::LoadingQuantity::Pressure : Tl::LoadingQuantity::DunavantS,
-                    title, coupled && loading_inviscid_->isChecked() ? &*r.viscous : nullptr);
+                    title, coupled && loading_inviscid_->isChecked() ? &*r.viscous : nullptr, loading_dunavant_->isChecked());
+    loading_dunavant_->setEnabled(q != 1);
     loading_plot_->setBadge({});
 }
 
@@ -1111,6 +1118,22 @@ int TurbolenzaWindow::selfTest(const QString& dir, int passes)
     // 5. post-processing windows, saved results
     for (auto* w : {res_win_, contour_win_, loading_win_})
         if (!w || !w->isVisible()) return fail("a post-processing window did not open", 31);
+    {  // the Dunavant (1955) overlay: 11 + 10 measured points on the Mach loading, none without the option
+        auto count = [this] {
+            int n = 0;
+            for (const auto& x : loading_plot_->series())
+                if (x.name.contains("Dunavant (1955)")) n += static_cast<int>(x.pts.size());
+            return n;
+        };
+        const int q0 = loading_q_->currentIndex();
+        loading_q_->setCurrentIndex(0);
+        loading_dunavant_->setChecked(true);
+        const int on = count();
+        loading_dunavant_->setChecked(false);
+        const int off = count();
+        loading_q_->setCurrentIndex(q0);
+        if (on != 21 || off != 0) return fail("the Dunavant (1955) overlay is not 11 + 10 points on, 0 off", 47);
+    }
     QStringList files;
     try {
         files = saveResults(dir, true);

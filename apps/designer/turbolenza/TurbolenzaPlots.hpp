@@ -55,8 +55,10 @@ void drawContours(PlotWidget* w, const T::SolutionData& s, ContourField f, int b
 
 enum class LoadingQuantity { Mach, Pressure, DunavantS };
 /// inviscid: a viscous run's k = 0 loading, drawn dashed beside the reported (coupled) one.
+/// dunavant1955: Dunavant's (1955) measured points (Mach number and S only; there is no p in Pa), as
+/// markers (tests/turbolenza/validation/dunavant1955).
 void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title,
-                 const T::ViscousData* inviscid = nullptr);
+                 const T::ViscousData* inviscid = nullptr, bool dunavant1955 = false);
 
 /// The boundary layer (Aungier 2003 Sec. 5.6) of both surfaces against x/c or the blade-station fraction f,
 /// transition (o) and separation (x) marked; overlay (H only): Aungier (2003) Fig. 5-15, digitized

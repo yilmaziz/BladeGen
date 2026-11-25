@@ -404,12 +404,21 @@ const DunavantPoint kDunavant1955Pressure[] = {
     {0.6002, 0.4522, 0.5878},
     {0.7019, 0.4357, 0.5493},
     {0.7999, 0.4189, 0.5108}};
+// Aungier (2003) Figs. 5-6 and 5-7, the potential-flow curves (solid lines), digitized
+// (tools/turbolenza_reference/digitize_aungier_fig5_6_5_7.py; tests/turbolenza/validation/aungier2003_fig5_6_5_7)
+const QPointF kFig56Suction[] = {{0.0000, 0.7587}, {0.0435, 0.8692}, {0.0870, 0.9036}, {0.1304, 0.9145}, {0.1739, 0.9188}, {0.2174, 0.9176}, {0.2609, 0.9089}, {0.3043, 0.8983}, {0.3478, 0.8875}, {0.3913, 0.8744}, {0.4348, 0.8503}, {0.4783, 0.8191}, {0.5217, 0.7839}, {0.5652, 0.7502}, {0.6087, 0.7166}, {0.6522, 0.6872}, {0.6957, 0.6553}, {0.7391, 0.6268}, {0.7826, 0.5991}, {0.8261, 0.5694}, {0.8696, 0.5370}, {0.9130, 0.4981}, {0.9565, 0.4529}, {1.0000, 0.3979}};
+const QPointF kFig56Pressure[] = {{0.0000, 0.6580}, {0.0435, 0.5606}, {0.0870, 0.5341}, {0.1304, 0.5301}, {0.1739, 0.5211}, {0.2174, 0.5162}, {0.2609, 0.5088}, {0.3043, 0.5000}, {0.3478, 0.4930}, {0.3913, 0.4843}, {0.4348, 0.4737}, {0.4783, 0.4613}, {0.5217, 0.4492}, {0.5652, 0.4368}, {0.6087, 0.4244}, {0.6522, 0.4122}, {0.6957, 0.4015}, {0.7391, 0.3926}, {0.7826, 0.3820}, {0.8261, 0.3751}, {0.8696, 0.3678}, {0.9130, 0.3631}, {0.9565, 0.3676}, {1.0000, 0.3905}};
+const QPointF kFig56Separation{0.778, 0.587};  // the predicted separation point (filled triangle)
+const QPointF kFig57Suction[] = {{0.0000, 0.9001}, {0.0200, 0.9480}, {0.0400, 0.9959}, {0.0600, 1.0438}, {0.0800, 1.0725}, {0.1000, 1.0873}, {0.1200, 1.1039}, {0.1400, 1.1230}, {0.1600, 1.1283}, {0.1800, 1.1283}, {0.2000, 1.1300}, {0.2200, 1.1283}, {0.2400, 1.1204}, {0.2600, 1.1109}, {0.2800, 1.1013}, {0.3000, 1.0908}, {0.3200, 1.0821}, {0.3400, 1.0778}, {0.3600, 1.0586}, {0.3800, 1.0394}, {0.4000, 1.0203}, {0.4200, 1.0185}, {0.4400, 0.9994}, {0.4600, 0.9767}, {0.4800, 0.9523}, {0.5000, 0.9297}, {0.5200, 0.9071}, {0.5400, 0.8844}, {0.5600, 0.8635}, {0.5800, 0.8435}, {0.6000, 0.8243}, {0.6200, 0.8060}, {0.6400, 0.7869}, {0.6600, 0.7677}, {0.6800, 0.7503}, {0.7000, 0.7337}, {0.7200, 0.7172}, {0.7400, 0.6998}, {0.7600, 0.6841}, {0.7800, 0.6675}, {0.8000, 0.6519}, {0.8200, 0.6362}, {0.8400, 0.6188}, {0.8600, 0.6014}, {0.8800, 0.5822}, {0.9000, 0.5622}, {0.9200, 0.5413}, {0.9400, 0.5151}, {0.9600, 0.4908}, {0.9800, 0.4611}, {1.0000, 0.4368}};
+const QPointF kFig57Pressure[] = {{0.0000, 0.8008}, {0.0200, 0.7355}, {0.0400, 0.6702}, {0.0600, 0.6527}, {0.0800, 0.6379}, {0.1000, 0.6310}, {0.1200, 0.6249}, {0.1400, 0.6188}, {0.1600, 0.6118}, {0.1800, 0.6048}, {0.2000, 0.5996}, {0.2200, 0.5944}, {0.2400, 0.5883}, {0.2600, 0.5822}, {0.2800, 0.5770}, {0.3000, 0.5709}, {0.3200, 0.5657}, {0.3400, 0.5596}, {0.3600, 0.5543}, {0.3800, 0.5482}, {0.4000, 0.5430}, {0.4200, 0.5369}, {0.4400, 0.5299}, {0.4600, 0.5238}, {0.4800, 0.5160}, {0.5000, 0.5090}, {0.5200, 0.5003}, {0.5400, 0.4934}, {0.5600, 0.4873}, {0.5800, 0.4803}, {0.6000, 0.4742}, {0.6200, 0.4672}, {0.6400, 0.4611}, {0.6600, 0.4559}, {0.6800, 0.4498}, {0.7000, 0.4446}, {0.7200, 0.4394}, {0.7400, 0.4341}, {0.7600, 0.4307}, {0.7800, 0.4246}, {0.8000, 0.4211}, {0.8200, 0.4159}, {0.8400, 0.4141}, {0.8600, 0.4106}, {0.8800, 0.4071}, {0.9000, 0.4037}, {0.9200, 0.4037}, {0.9400, 0.4071}, {0.9600, 0.4106}, {0.9800, 0.4237}, {1.0000, 0.4368}};
+
 
 }  // namespace
 
-void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title, const T::ViscousData* inviscid,
-                 bool dunavant1955)
+void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title, const LoadingOverlays& o)
 {
+    const T::ViscousData* inviscid = o.inviscid;
+    const bool dunavant1955 = o.dunavant1955;
     auto pts = [&](const T::SurfaceData& d) {
         QVector<QPointF> out;
         const auto& val = q == LoadingQuantity::Mach ? d.mach : q == LoadingQuantity::Pressure ? d.pressure : d.dunavant_S;
@@ -424,16 +433,56 @@ void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, con
         series << line("suction side (inviscid, k = 0)", pts(inviscid->inviscid_suction), kSuction, 1.1, Qt::DashLine)
                << line("pressure side (inviscid, k = 0)", pts(inviscid->inviscid_pressure_side), kPressure, 1.1, Qt::DashLine);
     if (dunavant1955 && q != LoadingQuantity::Pressure) {  // measured points only (no p in Pa)
-        auto measured = [&](const char* name, const auto& data, const QColor& c) {
+        auto measured = [&](const char* name, const auto& data, const QColor& c, char shape) {
             QVector<QPointF> out;
             for (const auto& d : data) out << QPointF(d.x_c, q == LoadingQuantity::Mach ? d.mach : d.S);
             Series m = line(name, out, c, 1.4, Qt::NoPen);
             m.markers = true;
             m.marker_size = 4;
+            m.marker_shape = shape;
             return m;
         };
-        series << measured("suction side, Dunavant (1955) measured", kDunavant1955Suction, kSuction)
-               << measured("pressure side, Dunavant (1955) measured", kDunavant1955Pressure, kPressure);
+        series << measured("suction side, Dunavant (1955) measured", kDunavant1955Suction, Qt::black, 'o')
+               << measured("pressure side, Dunavant (1955) measured", kDunavant1955Pressure, Qt::black, '^');
+    }
+    QVector<PointMarker> marks;
+    if (q == LoadingQuantity::Mach) {
+        auto curve = [](const auto& data) {
+            QVector<QPointF> out;
+            for (const auto& pt : data) out << pt;
+            return out;
+        };
+        if (o.aungier_fig5_6) {
+            const QString n = "Aungier (2003) Fig. 5-6, potential flow (M_in 0.65)";
+            series << line(n, curve(kFig56Suction), Qt::black, 1.2) << line(n, curve(kFig56Pressure), Qt::black, 1.2);
+            marks << PointMarker{kFig56Separation, Qt::black, '^', "Fig. 5-6 separation", 6.0, 2.0};
+        }
+        if (o.aungier_fig5_7) {
+            const QString n = "Aungier (2003) Fig. 5-7, potential flow (M_in 0.757)";
+            series << line(n, curve(kFig57Suction), Qt::black, 1.2, Qt::DashDotLine)
+                   << line(n, curve(kFig57Pressure), Qt::black, 1.2, Qt::DashDotLine);
+        }
+    }
+    if (o.layers) {  // the boundary layer's separation points on the reported loading
+        auto at = [&](const T::SurfaceData& d, double xc) {
+            const auto& val = q == LoadingQuantity::Mach ? d.mach : q == LoadingQuantity::Pressure ? d.pressure : d.dunavant_S;
+            for (std::size_t k = 1; k < d.x_c.size() && k < val.size(); ++k)
+                if ((d.x_c[k - 1] - xc) * (d.x_c[k] - xc) <= 0.0 && d.x_c[k] != d.x_c[k - 1])
+                    return val[k - 1] + (val[k] - val[k - 1]) * (xc - d.x_c[k - 1]) / (d.x_c[k] - d.x_c[k - 1]);
+            return std::numeric_limits<double>::quiet_NaN();
+        };
+        const T::BoundaryLayerSurfaceData* layer[2] = {&o.layers->suction, &o.layers->pressure_side};
+        const T::SurfaceData* loading[2] = {&s.suction, &s.pressure_side};
+        for (int k = 0; k < 2; ++k) {
+            const QColor c = k == 0 ? kSuction : kPressure;
+            const double turbulent = layer[k]->separation_x_c, laminar = layer[k]->laminar_separation_x_c;
+            for (const double xc : {turbulent, laminar}) {
+                if (!std::isfinite(xc)) continue;
+                const double y = at(*loading[k], xc);
+                if (std::isfinite(y))
+                    marks << PointMarker{QPointF(xc, y), c, 'x', xc == turbulent ? "separation (BL)" : "laminar separation (BL)", 7.0, 2.0};
+            }
+        }
     }
     if (q == LoadingQuantity::Mach) series << line("M = 1", {QPointF(0.0, 1.0), QPointF(1.0, 1.0)}, QColor(85, 85, 85), 0.9, Qt::DashLine);
     const QString yl = q == LoadingQuantity::Mach       ? "surface relative Mach number"
@@ -443,7 +492,7 @@ void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, con
     w->setLabels("x / c", yl);
     w->proportional = false;
     w->setFills({});
-    w->setMarkers({});
+    w->setMarkers(marks);
     w->setSeries(series);
     w->commit(true);
 }

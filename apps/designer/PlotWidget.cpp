@@ -324,6 +324,16 @@ void PlotWidget::drawAxes(QPainter& p, const QRect& r)
     p.restore();
 }
 
+namespace {
+// a series' point marker, hollow: 's' square, 'o' circle, '^' triangle (half size m [px])
+void drawSeriesMarker(QPainter& p, const QPointF& c, char shape, double m)
+{
+    if (shape == 'o') p.drawEllipse(c, m, m);
+    else if (shape == '^') p.drawPolygon(QPolygonF({c + QPointF(0, -1.15 * m), c + QPointF(m, 0.8 * m), c + QPointF(-m, 0.8 * m)}));
+    else p.drawRect(QRectF(c.x() - m, c.y() - m, 2 * m, 2 * m));
+}
+}  // namespace
+
 void PlotWidget::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
@@ -385,8 +395,7 @@ void PlotWidget::paintEvent(QPaintEvent*)
             for (const auto& q : s.pts) {
                 const QPointF t = toData(q);
                 if (!std::isfinite(t.x()) || !std::isfinite(t.y())) continue;
-                const QPointF c = toScreen(t);
-                p.drawRect(QRectF(c.x() - m, c.y() - m, 2 * m, 2 * m));
+                drawSeriesMarker(p, toScreen(t), s.marker_shape, m);
             }
         }
     }
@@ -444,7 +453,15 @@ void PlotWidget::paintEvent(QPaintEvent*)
                 QPen pen(items[i]->color, items[i]->width, items[i]->style);
                 pen.setCosmetic(true);
                 p.setPen(pen);
-                p.drawLine(box.left() + 6, y, box.left() + 30, y);
+                if (items[i]->style == Qt::NoPen && items[i]->markers) {  // a markers-only series: its symbol
+                    QPen mp(items[i]->color, 1.4);
+                    mp.setCosmetic(true);
+                    p.setPen(mp);
+                    p.setBrush(Qt::NoBrush);
+                    drawSeriesMarker(p, QPointF(box.left() + 18, y), items[i]->marker_shape, items[i]->marker_size);
+                } else {
+                    p.drawLine(box.left() + 6, y, box.left() + 30, y);
+                }
                 p.setPen(Qt::black);
                 p.drawText(box.left() + 36, y + fm.ascent() / 2 - 1, names[i]);
             }

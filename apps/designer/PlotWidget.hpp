@@ -27,6 +27,7 @@ struct Series
     bool legend = true;
     bool markers = false;      ///< draw point markers even when "show points" is off
     int marker_size = 3;
+    char marker_shape = 's';  ///< 's' square, 'o' circle, '^' triangle (hollow)
 };
 
 struct PointMarker

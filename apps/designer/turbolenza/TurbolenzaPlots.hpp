@@ -54,11 +54,16 @@ enum class ContourField { Pressure, Mach };
 void drawContours(PlotWidget* w, const T::SolutionData& s, ContourField f, int bands, bool isolines, const QString& title);
 
 enum class LoadingQuantity { Mach, Pressure, DunavantS };
-/// inviscid: a viscous run's k = 0 loading, drawn dashed beside the reported (coupled) one.
-/// dunavant1955: Dunavant's (1955) measured points (Mach number and S only; there is no p in Pa), as
-/// markers (tests/turbolenza/validation/dunavant1955).
-void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title,
-                 const T::ViscousData* inviscid = nullptr, bool dunavant1955 = false);
+/// Optional overlays of the blade-loading plot.
+struct LoadingOverlays
+{
+    const T::ViscousData* inviscid = nullptr;  ///< a viscous run's k = 0 loading, drawn dashed beside the coupled one
+    const T::ViscousData* layers = nullptr;    ///< the boundary layer: its separation points marked (x) on the loading
+    bool dunavant1955 = false;                 ///< Dunavant's (1955) measured points, black (o SS, ^ PS); Mach and S
+    bool aungier_fig5_6 = false;               ///< Aungier (2003) Fig. 5-6 potential flow (M_in 0.65) + its separation; Mach
+    bool aungier_fig5_7 = false;               ///< Aungier (2003) Fig. 5-7 potential flow (M_in 0.757); Mach
+};
+void drawLoading(PlotWidget* w, const T::SolutionData& s, LoadingQuantity q, const QString& title, const LoadingOverlays& o = {});
 
 /// The boundary layer (Aungier 2003 Sec. 5.6) of both surfaces against x/c or the blade-station fraction f,
 /// transition (o) and separation (x) marked; overlay (H only): Aungier (2003) Fig. 5-15, digitized

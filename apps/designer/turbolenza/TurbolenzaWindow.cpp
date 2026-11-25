@@ -851,11 +851,21 @@ void TurbolenzaWindow::showLoading()
         loading_dunavant_->setToolTip("the measured loading of the Dunavant cascade, NACA 65-(12A10)10 (Mach number and "
                                       "S only; tests/turbolenza/validation/dunavant1955)");
         row->insertWidget(row->count() - 1, loading_dunavant_);
+        loading_fig56_ = new QCheckBox("Aungier Fig. 5-6 (M_in 0.65)", loading_win_);
+        loading_fig56_->setToolTip("Aungier (2003) Fig. 5-6: his potential-flow solution and predicted separation point, "
+                                   "digitized (Mach number only; tests/turbolenza/validation/aungier2003_fig5_6_5_7)");
+        loading_fig57_ = new QCheckBox("Aungier Fig. 5-7 (M_in 0.757)", loading_win_);
+        loading_fig57_->setToolTip("Aungier (2003) Fig. 5-7: his transonic potential-flow solution at M_in 0.757, digitized "
+                                   "(Mach number only)");
+        row->insertWidget(row->count() - 1, loading_fig56_);
+        row->insertWidget(row->count() - 1, loading_fig57_);
         loading_plot_ = new PlotWidget(loading_win_);
         loading_win_->box->addWidget(loading_plot_, 1);
         connect(loading_q_, &QComboBox::currentIndexChanged, this, [this] { redrawLoading(); });
         connect(loading_inviscid_, &QCheckBox::toggled, this, [this] { redrawLoading(); });
         connect(loading_dunavant_, &QCheckBox::toggled, this, [this] { redrawLoading(); });
+        connect(loading_fig56_, &QCheckBox::toggled, this, [this] { redrawLoading(); });
+        connect(loading_fig57_, &QCheckBox::toggled, this, [this] { redrawLoading(); });
     }
     redrawLoading();
     loading_win_->show();
@@ -877,9 +887,17 @@ void TurbolenzaWindow::redrawLoading()
     loading_inviscid_->setEnabled(coupled);
     QString title = QString("%1: β_out %2°%3").arg(what).arg(r.solution->exit_angle * kDeg, 0, 'f', 3).arg(r.converged ? "" : "  [NOT CONVERGED]");
     if (coupled) title += QString("  (coupled; inviscid β_out %1°)").arg(r.viscous->inviscid_exit_angle * kDeg, 0, 'f', 3);
+    Tl::LoadingOverlays ov;
+    ov.inviscid = coupled && loading_inviscid_->isChecked() ? &*r.viscous : nullptr;
+    ov.layers = r.viscous ? &*r.viscous : nullptr;
+    ov.dunavant1955 = loading_dunavant_->isChecked();
+    ov.aungier_fig5_6 = loading_fig56_->isChecked();
+    ov.aungier_fig5_7 = loading_fig57_->isChecked();
     Tl::drawLoading(loading_plot_, *r.solution, q == 0 ? Tl::LoadingQuantity::Mach : q == 1 ? Tl::LoadingQuantity::Pressure : Tl::LoadingQuantity::DunavantS,
-                    title, coupled && loading_inviscid_->isChecked() ? &*r.viscous : nullptr, loading_dunavant_->isChecked());
+                    title, ov);
     loading_dunavant_->setEnabled(q != 1);
+    loading_fig56_->setEnabled(q == 0);
+    loading_fig57_->setEnabled(q == 0);
     loading_plot_->setBadge({});
 }
 
@@ -1133,6 +1151,29 @@ int TurbolenzaWindow::selfTest(const QString& dir, int passes)
         const int off = count();
         loading_q_->setCurrentIndex(q0);
         if (on != 21 || off != 0) return fail("the Dunavant (1955) overlay is not 11 + 10 points on, 0 off", 47);
+        auto points = [this](const char* key) {
+            int n = 0;
+            for (const auto& x : loading_plot_->series())
+                if (x.name.contains(key)) n += static_cast<int>(x.pts.size());
+            return n;
+        };
+        loading_q_->setCurrentIndex(0);
+        loading_fig56_->setChecked(true);
+        loading_fig57_->setChecked(true);
+        const int n56 = points("Fig. 5-6"), n57 = points("Fig. 5-7");
+        bool sep56 = false;
+        for (const auto& m : loading_plot_->markers()) sep56 = sep56 || m.label == "Fig. 5-6 separation";
+        loading_fig56_->setChecked(false);
+        loading_fig57_->setChecked(false);
+        const int n56_off = points("Fig. 5-6");
+        bool has = false, marked = false;  // the boundary layer's separation on the loading, where the layer separates
+        if (result_->viscous)
+            for (const auto* d : {&result_->viscous->suction, &result_->viscous->pressure_side}) has = has || std::isfinite(d->separation_x_c);
+        for (const auto& m : loading_plot_->markers()) marked = marked || m.label == "separation (BL)";
+        loading_q_->setCurrentIndex(q0);
+        if (n56 != 48 || n57 != 102 || !sep56 || n56_off != 0)
+            return fail("the Aungier Fig. 5-6 / 5-7 overlays are not 24 + 24 / 51 + 51 points with the Fig. 5-6 separation", 48);
+        if (has != marked) return fail("the boundary layer's separation is not marked on the loading", 49);
     }
     QStringList files;
     try {
